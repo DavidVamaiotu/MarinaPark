@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ro">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jurnal activitate Marina Park</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&family=Trirong:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="activity.css" />
+  </head>
+  <body>
+    <main class="log-shell">
+      <header class="log-header">
+        <div>
+          <p class="eyebrow">Marina Park</p>
+          <h1>Jurnal activitate</h1>
+        </div>
+        <div class="log-actions">
+          <label class="search-box">
+            <span>Caută</span>
+            <input id="logSearch" type="search" placeholder="Client, sumă, card, șters..." />
+          </label>
+          <button type="button" id="refreshLog">Reîncarcă</button>
+          <button type="button" id="exportDatabase">Exportă baza de date</button>
+          <button class="danger-button" type="button" id="clearActivityLog">Șterge jurnalul</button>
+        </div>
+      </header>
+
+      <section class="summary-grid" id="summaryGrid" aria-label="Rezumat activitate"></section>
+      <section class="log-feed" id="logFeed" aria-live="polite"></section>
+    </main>
+    <script src="activity.js"></script>
+  </body>
+</html>

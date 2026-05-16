@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "start": "node --no-warnings server.js",
+    "open": "node MarinaPark"
+  },
+  "dependencies": {
+    "mysql2": "^3.22.3"
+  }
+}

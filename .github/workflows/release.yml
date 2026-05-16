@@ -1,0 +1,40 @@
+name: Release Marina Park
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build update package
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          .\scripts\New-MarinaParkRelease.ps1 -Version $version -Repository $env:GITHUB_REPOSITORY
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = $tag -replace '^v', ''
+          $zip = "dist\MarinaPark-$version.zip"
+          $manifest = "dist\latest.json"
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $zip $manifest --clobber
+          } else {
+            gh release create $tag $zip $manifest --title "Marina Park $version" --notes "Update automat Marina Park $version"
+          }

@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="ro">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Administrare clienți Marina Park</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&family=Trirong:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body data-mode="room">
+    <div class="app-shell" id="appShell">
+      <aside class="sidebar" aria-label="Navigație principală">
+        <div class="sidebar-head">
+          <a class="brand" href="#" aria-label="Operațiuni clienți Marina Park">
+            <span class="brand-mark">MP</span>
+            <span>
+              <strong>Marina Park</strong>
+              <small>operațiuni</small>
+            </span>
+          </a>
+          <button class="icon-button sidebar-toggle" type="button" id="sidebarToggle" title="Restrânge meniul" aria-label="Restrânge meniul">
+            <i data-lucide="panel-left-close" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <nav class="nav-list" aria-label="Spațiu de lucru">
+          <button class="nav-item is-active" type="button" data-page="calendar" onclick="window.setActivePage?.('calendar')">
+            <i data-lucide="calendar-days" aria-hidden="true"></i>
+            <span>Calendar</span>
+          </button>
+          <button class="nav-item" type="button" data-page="clients" onclick="window.setActivePage?.('clients')">
+            <i data-lucide="book-open-check" aria-hidden="true"></i>
+            <span>Clienți</span>
+          </button>
+          <button class="nav-item" type="button" data-page="stationing" onclick="window.setActivePage?.('stationing')">
+            <i data-lucide="caravan" aria-hidden="true"></i>
+            <span>Staționare</span>
+          </button>
+          <button class="nav-item" type="button" data-page="bar" onclick="window.setActivePage?.('bar')">
+            <i data-lucide="shopping-cart" aria-hidden="true"></i>
+            <span>Bar</span>
+          </button>
+          <button class="nav-item" type="button" data-page="statistics" onclick="window.setActivePage?.('statistics')">
+            <i data-lucide="chart-no-axes-column" aria-hidden="true"></i>
+            <span>Statistici</span>
+          </button>
+          <button class="nav-item" type="button" data-page="settings" onclick="window.setActivePage?.('settings')">
+            <i data-lucide="settings" aria-hidden="true"></i>
+            <span>Setări</span>
+          </button>
+        </nav>
+
+        <section class="side-summary" aria-label="Rezumat proprietate">
+          <p class="eyebrow">Vama Veche</p>
+          <h2>Camere, bungalouri, corturi și rulote</h2>
+          <dl>
+            <div>
+              <dt>Plajă</dt>
+              <dd>400 m</dd>
+            </div>
+            <div>
+              <dt>Rating Google</dt>
+              <dd>4.7</dd>
+            </div>
+            <div>
+              <dt>Contact</dt>
+              <dd>+40 723 690 941</dd>
+            </div>
+          </dl>
+        </section>
+      </aside>
+
+      <main class="workspace" id="dashboard">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Marina Park</p>
+            <h1>Administrare clienți</h1>
+          </div>
+          <div class="top-actions">
+            <label class="search-box" aria-label="Caută cazări și clienți">
+              <i data-lucide="search" aria-hidden="true"></i>
+              <input id="globalSearch" type="search" placeholder="Caută clienți, locuri, telefoane" />
+            </label>
+            <button class="icon-button" type="button" title="Deschide notificările" aria-label="Deschide notificările">
+              <i data-lucide="bell" aria-hidden="true"></i>
+              <span class="pulse-dot" aria-hidden="true"></span>
+            </button>
+            <button class="primary-button" type="button" id="jumpToForm" data-open-booking>
+              <i data-lucide="plus" aria-hidden="true"></i>
+              <span>Rezervare nouă</span>
+            </button>
+            <button class="ghost-button" type="button" id="openUnitModal" hidden>
+              <i data-lucide="building-2" aria-hidden="true"></i>
+              <span>Unitate nouă</span>
+            </button>
+          </div>
+        </header>
+
+        <section class="panel page-section stats-page" id="statistics-section" data-page-section="statistics" aria-labelledby="statisticsTitle" hidden>
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Rezumat operational</p>
+              <h2 id="statisticsTitle">Statistici</h2>
+            </div>
+          </div>
+          <div class="metric-grid" id="metricGrid" aria-label="Indicatori statistici"></div>
+          <section class="review-panel" aria-labelledby="reviewTitle">
+            <div class="section-header tight">
+              <div>
+                <p class="eyebrow">Google Reviews</p>
+                <h3 id="reviewTitle">Ultimele recenzii</h3>
+              </div>
+              <button class="ghost-button compact-text" type="button" id="checkGoogleReviews">
+                <i data-lucide="refresh-cw" aria-hidden="true"></i>
+                <span>Verifică recenzii</span>
+              </button>
+            </div>
+            <p class="review-status" id="reviewStatus"></p>
+            <div class="review-list" id="reviewList"></div>
+          </section>
+        </section>
+
+        <section class="panel page-section settings-page" id="settings-section" data-page-section="settings" aria-labelledby="settingsTitle" hidden>
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Configurare locală</p>
+              <h2 id="settingsTitle">Setări</h2>
+            </div>
+          </div>
+          <form class="settings-form" id="settingsForm">
+            <label>
+              Director bonuri
+              <span class="settings-path-row">
+                <input id="receiptDirectory" name="receiptDirectory" type="text" placeholder="C:\Bonuri" autocomplete="off" />
+                <button class="ghost-button compact-text" type="button" id="pickReceiptDirectory">
+                  <i data-lucide="folder-open" aria-hidden="true"></i>
+                  <span>Alege</span>
+                </button>
+              </span>
+            </label>
+            <div class="field-grid">
+              <label>
+                TVA bon (%)
+                <input id="receiptVat" name="receiptVat" type="number" min="0" max="100" step="1" value="19" />
+              </label>
+              <label>
+                Cod plată card
+                <input id="cardPaymentCode" name="cardPaymentCode" type="text" value="1" />
+              </label>
+            </div>
+            <label>
+              Cod plată numerar
+              <input id="cashPaymentCode" name="cashPaymentCode" type="text" value="0" />
+            </label>
+            <button class="primary-button" type="submit">
+              <i data-lucide="save" aria-hidden="true"></i>
+              <span>Salvează setările</span>
+            </button>
+            <p class="settings-note">Exemplu: <strong>C:\Users\Davidos\Desktop\Bonuri</strong>. Serverul local va scrie fișierul <strong>bon.inp</strong> în acest director.</p>
+          </form>
+          <section class="settings-block" aria-labelledby="unitsSettingsTitle">
+            <div class="section-header tight">
+              <div>
+                <p class="eyebrow">Unități</p>
+                <h3 id="unitsSettingsTitle">Toate unitățile</h3>
+              </div>
+              <div class="settings-unit-actions">
+                <button class="ghost-button compact-text" type="button" id="settingsCloneUnit">
+                  <i data-lucide="copy" aria-hidden="true"></i>
+                  <span>Clonează unitate</span>
+                </button>
+                <button class="ghost-button compact-text" type="button" id="settingsAddUnit">
+                  <i data-lucide="building-2" aria-hidden="true"></i>
+                  <span>Adaugă unitate</span>
+                </button>
+              </div>
+            </div>
+            <div class="unit-list" id="unitList"></div>
+          </section>
+          <section class="settings-block" aria-labelledby="facilitiesSettingsTitle">
+            <div class="section-header tight">
+              <div>
+                <p class="eyebrow">Facilități</p>
+                <h3 id="facilitiesSettingsTitle">Servicii suplimentare</h3>
+              </div>
+              <button class="ghost-button compact-text" type="button" id="settingsNewFacility">
+                <i data-lucide="plus" aria-hidden="true"></i>
+                <span>Facilitate nouă</span>
+              </button>
+            </div>
+            <form class="facility-settings-form" id="facilityCatalogForm">
+              <input name="key" type="hidden" />
+              <div class="field-grid three">
+                <label>
+                  Nume facilitate
+                  <input name="name" type="text" placeholder="Electricitate, pat suplimentar..." required />
+                </label>
+                <label>
+                  Categorie
+                  <select name="group">
+                    <option value="all">Ambele</option>
+                    <option value="room">Camere</option>
+                    <option value="camping">Camping</option>
+                  </select>
+                </label>
+                <label>
+                  Preț pe noapte
+                  <input name="pricePerNight" type="number" min="0" step="0.01" value="0.00" required />
+                </label>
+              </div>
+              <div class="facility-form-actions">
+                <button class="primary-button compact-text" type="submit">
+                  <i data-lucide="save" aria-hidden="true"></i>
+                  <span id="facilitySubmitLabel">Adaugă facilitatea</span>
+                </button>
+                <button class="ghost-button compact-text" type="button" id="cancelFacilityEdit">
+                  <i data-lucide="rotate-ccw" aria-hidden="true"></i>
+                  <span>Curăță formularul</span>
+                </button>
+              </div>
+            </form>
+            <div class="facility-list" id="facilityList"></div>
+          </section>
+        </section>
+
+        <section class="panel page-section stationing-page" id="stationing-section" data-page-section="stationing" aria-labelledby="stationingTitle" hidden>
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Rulote parcate</p>
+              <h2 id="stationingTitle">Staționare rulote</h2>
+            </div>
+            <button class="primary-button" type="button" id="openStationingModal">
+              <i data-lucide="plus" aria-hidden="true"></i>
+              <span>Staționare nouă</span>
+            </button>
+          </div>
+          <div class="metric-grid stationing-metrics" id="stationingMetricGrid" aria-label="Indicatori staționare"></div>
+          <div class="stationing-layout">
+            <section class="stationing-board" aria-labelledby="stationingBoardTitle">
+              <div class="section-header tight">
+                <div>
+                  <p class="eyebrow">Registru</p>
+                  <h3 id="stationingBoardTitle">Rulote în staționare</h3>
+                </div>
+              </div>
+              <div class="stationing-card-grid" id="stationingCards"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page-section bar-page" id="bar-section" data-page-section="bar" aria-labelledby="barTitle" hidden>
+          <div class="bar-shell">
+            <section class="panel bar-products-panel" aria-labelledby="barTitle">
+              <div class="section-header">
+                <div>
+                  <p class="eyebrow">Bar</p>
+                  <h2 id="barTitle">Articole</h2>
+                </div>
+                <div class="section-actions">
+                  <button class="ghost-button compact-text" type="button" id="openSagaExportModal">
+                    <i data-lucide="file-down" aria-hidden="true"></i>
+                    <span>Export SAGA</span>
+                  </button>
+                  <button class="primary-button" type="button" id="openBarArticleModal">
+                    <i data-lucide="plus" aria-hidden="true"></i>
+                    <span>Articol nou</span>
+                  </button>
+                </div>
+              </div>
+              <div class="bar-product-grid" id="barArticleGrid" aria-label="Articole bar"></div>
+            </section>
+
+            <aside class="panel bar-checkout-panel" aria-labelledby="barCheckoutTitle">
+              <div class="section-header tight">
+                <div>
+                  <p class="eyebrow">Checkout</p>
+                  <h2 id="barCheckoutTitle">Bon bar</h2>
+                </div>
+                <button class="icon-button compact" type="button" id="clearBarCheckout" title="Golește checkout" aria-label="Golește checkout">
+                  <i data-lucide="trash-2" aria-hidden="true"></i>
+                </button>
+              </div>
+              <div class="bar-checkout-list" id="barCheckoutList"></div>
+              <div class="bar-checkout-summary" id="barCheckoutSummary"></div>
+              <button class="ghost-button full" type="button" id="barAttachReservation">
+                <i data-lucide="link" aria-hidden="true"></i>
+                <span>Adaugă la rezervare</span>
+              </button>
+              <button class="primary-button full" type="button" id="barCheckoutPay">
+                <i data-lucide="receipt-text" aria-hidden="true"></i>
+                <span>Plătește</span>
+              </button>
+            </aside>
+          </div>
+        </section>
+
+        <section class="panel guest-timeline-panel page-section" id="guest-timeline-section" data-page-section="calendar" aria-labelledby="guestTimelineTitle">
+          <div class="section-header timeline-header">
+            <div>
+              <p class="eyebrow" id="guestTimelineMode">Vedere camere</p>
+              <h2 id="guestTimelineTitle">Calendar clienți</h2>
+            </div>
+            <div class="timeline-actions">
+              <div class="month-controls" aria-label="Schimbă luna">
+                <button class="icon-button compact" type="button" id="prevMonth" title="Luna anterioară" aria-label="Luna anterioară">
+                  <i data-lucide="chevron-left" aria-hidden="true"></i>
+                </button>
+                <strong id="monthLabel"></strong>
+                <button class="icon-button compact" type="button" id="nextMonth" title="Luna următoare" aria-label="Luna următoare">
+                  <i data-lucide="chevron-right" aria-hidden="true"></i>
+                </button>
+                <button class="ghost-button compact-text" type="button" id="currentMonth">Luna curentă</button>
+              </div>
+              <label class="mode-switch" for="modeSwitch">
+                <span>Camere</span>
+                <input id="modeSwitch" type="checkbox" />
+                <span class="switch-track" aria-hidden="true">
+                  <span class="switch-thumb"></span>
+                </span>
+                <span>Camping</span>
+              </label>
+            </div>
+          </div>
+          <div class="timeline-shell" aria-label="Calendar perioade de cazare">
+            <div class="timeline-scale" id="timelineScale"></div>
+            <div class="guest-timeline" id="guestTimeline"></div>
+          </div>
+        </section>
+
+        <section class="details-grid page-section" data-page-section="clients" hidden>
+          <section class="panel" id="reservations-section" aria-labelledby="reservationsTitle">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Registru clienți</p>
+                <h2 id="reservationsTitle">Clienți</h2>
+              </div>
+            </div>
+            <div class="client-card-grid" id="reservationCards"></div>
+          </section>
+        </section>
+
+          <section class="panel form-panel booking-modal" id="guest-form-section" aria-labelledby="guestFormTitle" aria-modal="true" role="dialog">
+            <div class="booking-modal-content">
+            <div class="section-header tight">
+              <div>
+                <p class="eyebrow">Formular client</p>
+                <h2 id="guestFormTitle">Rezervare nouă</h2>
+              </div>
+              <button class="icon-button compact" type="button" id="closeBooking" title="Închide formularul" aria-label="Închide formularul">
+                <i data-lucide="x" aria-hidden="true"></i>
+              </button>
+            </div>
+            <div class="booking-reservation-tabs" id="linkedReservationsSection" hidden>
+              <div class="linked-reservations-count" id="linkedReservationsCount"></div>
+              <div class="linked-reservations-track" id="linkedReservationsTrack" role="tablist" aria-label="Rezervări pentru același client"></div>
+            </div>
+            <form id="bookingForm">
+              <div class="booking-form-column booking-import-column">
+                <section class="form-section source-record-section booking-import-zone" aria-labelledby="sourceRecordsTitle">
+                  <div class="form-section-head">
+                    <div>
+                      <p class="eyebrow">Baza de date</p>
+                      <h3 id="sourceRecordsTitle">Rezervări importate</h3>
+                    </div>
+                    <div class="source-record-actions">
+                      <label class="mode-switch compact" for="sourceModeSwitch">
+                        <span>Camere</span>
+                        <input id="sourceModeSwitch" type="checkbox" />
+                        <span class="switch-track" aria-hidden="true">
+                          <span class="switch-thumb"></span>
+                        </span>
+                        <span>Camping</span>
+                      </label>
+                      <button class="ghost-button compact-text" type="button" id="loadSourceBookings">
+                        <i data-lucide="database" aria-hidden="true"></i>
+                        <span>Reîncarcă</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="source-record-status" id="sourceRecordStatus">Se încarcă ultimele 300 rezervări.</div>
+                  <div class="source-record-table-wrap">
+                    <table class="source-record-table" aria-label="Rezervări din baza de date">
+                      <thead>
+                        <tr>
+                          <th>Nume</th>
+                          <th>Perioadă</th>
+                          <th>Pers.</th>
+                          <th>Total plată</th>
+                        </tr>
+                      </thead>
+                      <tbody id="sourceRecordRows">
+                        <tr>
+                          <td colspan="4">Nu sunt date încărcate.</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </div>
+
+              <div class="booking-form-column booking-main-column">
+                <section class="form-section booking-client-section">
+                  <div class="form-section-head">
+                    <div>
+                      <p class="eyebrow">Client</p>
+                      <h3>Contact și persoane</h3>
+                    </div>
+                  </div>
+                  <div class="field-grid">
+                    <label>
+                      Nume client
+                      <input name="guest" type="text" placeholder="Nume complet client" required />
+                    </label>
+                    <label>
+                      Telefon
+                      <input name="phone" type="tel" placeholder="+40 ..." required />
+                    </label>
+                  </div>
+                  <div class="field-grid three">
+                    <label>
+                      Adulți
+                      <input name="adults" type="number" min="0" max="12" value="2" />
+                    </label>
+                    <label>
+                      Copii
+                      <input name="children" type="number" min="0" max="12" value="0" />
+                    </label>
+                    <label>
+                      Persoane
+                      <input name="party" type="number" min="1" max="24" value="2" required readonly />
+                    </label>
+                  </div>
+                  <label>
+                    Mașină
+                    <input name="car" type="text" placeholder="Număr auto, dacă există" />
+                  </label>
+                </section>
+
+                <section class="form-section booking-stay-section">
+                  <div class="form-section-head">
+                    <div>
+                      <p class="eyebrow">Cazare</p>
+                      <h3>Unitate și perioadă</h3>
+                    </div>
+                  </div>
+                  <div class="field-grid">
+                    <label>
+                      Unitate
+                      <select name="unitId" required></select>
+                    </label>
+                    <label>
+                      Tip
+                      <select name="kind">
+                        <option value="room">Camere</option>
+                        <option value="camping">Camping</option>
+                      </select>
+                    </label>
+                    <label>
+                      Nopți
+                      <input name="nights" type="number" min="1" max="365" value="2" required />
+                    </label>
+                  </div>
+                  <input name="arrival" type="hidden" value="2026-05-04" required />
+                  <input name="departure" type="hidden" value="2026-05-06" required />
+                  <div class="booking-calendar-panel">
+                    <div class="mini-calendar-toolbar">
+                      <div>
+                        <p class="eyebrow">Calendar tarifar</p>
+                        <h4>Perioada clientului</h4>
+                      </div>
+                      <div class="mini-calendar-controls">
+                        <button class="icon-button compact" type="button" id="bookingCalendarPrev" title="Luna anterioară" aria-label="Luna anterioară">
+                          <i data-lucide="chevron-left" aria-hidden="true"></i>
+                        </button>
+                        <strong id="bookingCalendarMonthLabel"></strong>
+                        <button class="icon-button compact" type="button" id="bookingCalendarNext" title="Luna următoare" aria-label="Luna următoare">
+                          <i data-lucide="chevron-right" aria-hidden="true"></i>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="price-calendar range-calendar" id="bookingRangeCalendar" aria-label="Calendar pentru alegerea perioadei"></div>
+                    <p class="calendar-summary" id="bookingRangeSummary"></p>
+                  </div>
+                </section>
+              </div>
+
+              <div class="booking-form-column booking-side-column">
+                <section class="form-section booking-extras-section">
+                  <div class="form-section-head">
+                    <div>
+                      <p class="eyebrow">Facilități</p>
+                      <h3>Servicii suplimentare</h3>
+                    </div>
+                  </div>
+                  <div class="facility-toggle-list" id="bookingFacilities"></div>
+                </section>
+
+                <section class="form-section booking-payment-section">
+                  <div class="form-section-head">
+                    <div>
+                      <p class="eyebrow">Plată</p>
+                      <h3>Sume</h3>
+                    </div>
+                  </div>
+                  <div class="field-grid payment-amount-grid">
+                    <label>
+                      Total plată
+                      <input name="price" type="number" min="0" step="0.01" value="600.00" required />
+                    </label>
+                    <input name="basePrice" type="hidden" value="600.00" />
+                    <input name="paymentMethod" type="hidden" value="" />
+                    <input name="deposit" type="hidden" value="0.00" />
+                    <input name="balance" type="hidden" value="600.00" />
+                  </div>
+                </section>
+
+                <section class="form-section booking-bar-section booking-payment-section" id="bookingBarSection" hidden>
+                  <div class="form-section-head">
+                    <div>
+                      <p class="eyebrow">Bar</p>
+                      <h3>Articole pe rezervare</h3>
+                    </div>
+                  </div>
+                  <div class="reservation-bar-list" id="bookingBarItems"></div>
+                </section>
+
+                <section class="form-section booking-notes-section">
+                  <div class="form-section-head">
+                    <div>
+                      <p class="eyebrow">Observații</p>
+                      <h3>Detalii interne</h3>
+                    </div>
+                  </div>
+                  <label>
+                    Observații
+                    <textarea name="note" rows="3" placeholder="Preferințe, limbă, detalii plată"></textarea>
+                  </label>
+                </section>
+
+                <div class="form-actions booking-actions">
+                  <button class="primary-button full" type="submit">
+                    <i data-lucide="calendar-plus" aria-hidden="true"></i>
+                    <span id="bookingSubmitLabel">Adaugă rezervarea</span>
+                  </button>
+                  <button class="ghost-button danger-button full" type="button" id="deleteBooking" hidden>
+                    <i data-lucide="trash-2" aria-hidden="true"></i>
+                    <span>Șterge clientul</span>
+                  </button>
+                  <button class="ghost-button full" type="button" id="receiptFromBooking" hidden>
+                    <i data-lucide="receipt-text" aria-hidden="true"></i>
+                    <span>Generează bon</span>
+                  </button>
+                  <button class="ghost-button full linked-reservation-action" type="button" id="addLinkedReservation" hidden>
+                    <i data-lucide="calendar-plus" aria-hidden="true"></i>
+                    <span>Adaugă rezervare pentru același client</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+            </div>
+          </section>
+
+      </main>
+    </div>
+
+    <section class="panel form-panel booking-modal" id="receipt-modal" aria-labelledby="receiptModalTitle" aria-modal="true" role="dialog">
+      <div class="section-header tight">
+        <div>
+          <p class="eyebrow">Bon fiscal</p>
+          <h2 id="receiptModalTitle">Generează bon</h2>
+        </div>
+        <button class="icon-button compact" type="button" id="closeReceiptModal" title="Închide bonul" aria-label="Închide bonul">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <form id="receiptForm">
+        <div class="receipt-summary" id="receiptSummary"></div>
+        <label>
+          Sumă de încasat
+          <input id="receiptAmount" name="receiptAmount" type="number" min="0" step="0.01" value="0.00" />
+        </label>
+        <div class="receipt-method-actions" aria-label="Plata cu numerar, card sau voucher">
+          <button class="primary-button full" type="button" data-receipt-method="card">
+            <i data-lucide="credit-card" aria-hidden="true"></i>
+            <span>Card</span>
+          </button>
+          <button class="ghost-button full" type="button" data-receipt-method="numerar">
+            <i data-lucide="banknote" aria-hidden="true"></i>
+            <span>Numerar</span>
+          </button>
+          <button class="ghost-button full" type="button" data-receipt-method="voucher">
+            <i data-lucide="ticket-check" aria-hidden="true"></i>
+            <span>Voucher</span>
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel form-panel booking-modal" id="bar-attach-modal" aria-labelledby="barAttachModalTitle" aria-modal="true" role="dialog">
+      <div class="section-header tight">
+        <div>
+          <p class="eyebrow">Rezervare</p>
+          <h2 id="barAttachModalTitle">Adaugă articolele la client</h2>
+        </div>
+        <button class="icon-button" type="button" id="closeBarAttachModal" aria-label="Închide">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="bar-attach-body">
+        <div class="receipt-summary bar-attach-summary" id="barAttachSummary"></div>
+        <label>
+          Caută client
+          <input id="barAttachSearch" type="search" placeholder="Nume, unitate, telefon" autocomplete="off" />
+        </label>
+        <div class="bar-reservation-choice-list" id="barReservationChoices"></div>
+      </div>
+    </section>
+
+    <section class="panel form-panel booking-modal" id="bar-article-modal" aria-labelledby="barArticleModalTitle" aria-modal="true" role="dialog">
+      <div class="section-header tight">
+        <div>
+          <p class="eyebrow">Articol bar</p>
+          <h2 id="barArticleModalTitle">Articol nou</h2>
+        </div>
+        <button class="icon-button compact" type="button" id="closeBarArticleModal" title="Închide articolul" aria-label="Închide articolul">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <form id="barArticleForm">
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Detalii</p>
+              <h3>Nume, preț și stoc</h3>
+            </div>
+          </div>
+          <label>
+            Nume articol
+            <input name="name" type="text" placeholder="Apă 0.5" required />
+          </label>
+          <div class="field-grid">
+            <label>
+              Preț
+              <input name="price" type="number" min="0" step="0.01" value="0.00" required />
+            </label>
+            <label>
+              Stoc
+              <input name="stock" type="number" min="0" step="1" value="0" required />
+            </label>
+          </div>
+          <div class="field-grid">
+            <label>
+              TVA
+              <select name="vatRate">
+                <option value="21">21%</option>
+                <option value="11">11%</option>
+              </select>
+            </label>
+            <label class="bar-sgr-toggle">
+              Ambalaj SGR
+              <span class="checkbox-row">
+                <input name="hasSgr" type="checkbox" />
+                <span>Adaugă 0.50 lei / bucată</span>
+              </span>
+            </label>
+          </div>
+        </section>
+        <div class="form-actions">
+          <button class="primary-button full" type="submit">
+            <i data-lucide="save" aria-hidden="true"></i>
+            <span id="barArticleSubmitLabel">Adaugă articolul</span>
+          </button>
+          <button class="ghost-button danger-button full" type="button" id="deleteBarArticle" hidden>
+            <i data-lucide="trash-2" aria-hidden="true"></i>
+            <span>Șterge articolul</span>
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel form-panel booking-modal" id="bar-payment-modal" aria-labelledby="barPaymentModalTitle" aria-modal="true" role="dialog">
+      <div class="section-header tight">
+        <div>
+          <p class="eyebrow">Plată bar</p>
+          <h2 id="barPaymentModalTitle">Finalizează bonul</h2>
+        </div>
+        <button class="icon-button compact" type="button" id="closeBarPaymentModal" title="Închide plata" aria-label="Închide plata">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <form id="barPaymentForm">
+        <div class="receipt-summary bar-payment-summary" id="barPaymentSummary"></div>
+        <div class="receipt-method-actions" aria-label="Plata cu numerar, card sau voucher">
+          <button class="primary-button full" type="button" data-bar-payment-method="card">
+            <i data-lucide="credit-card" aria-hidden="true"></i>
+            <span>Card</span>
+          </button>
+          <button class="ghost-button full" type="button" data-bar-payment-method="numerar">
+            <i data-lucide="banknote" aria-hidden="true"></i>
+            <span>Numerar</span>
+          </button>
+          <button class="ghost-button full" type="button" data-bar-payment-method="voucher">
+            <i data-lucide="ticket-check" aria-hidden="true"></i>
+            <span>Voucher</span>
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel form-panel booking-modal" id="saga-export-modal" aria-labelledby="sagaExportModalTitle" aria-modal="true" role="dialog">
+      <div class="section-header tight">
+        <div>
+          <p class="eyebrow">SAGA</p>
+          <h2 id="sagaExportModalTitle">Export vânzări bar</h2>
+        </div>
+        <button class="icon-button compact" type="button" id="closeSagaExportModal" title="Închide exportul" aria-label="Închide exportul">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <form id="sagaExportForm">
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Perioadă</p>
+              <h3>Vânzări incluse</h3>
+            </div>
+          </div>
+          <label class="bar-sgr-toggle">
+            Toate vânzările
+            <span class="checkbox-row">
+              <input name="allSales" type="checkbox" />
+              <span>Ignoră intervalul de date</span>
+            </span>
+          </label>
+          <div class="field-grid">
+            <label>
+              De la
+              <input name="fromDate" type="date" />
+            </label>
+            <label>
+              Până la
+              <input name="toDate" type="date" />
+            </label>
+          </div>
+        </section>
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Filtre</p>
+              <h3>Produs și TVA</h3>
+            </div>
+          </div>
+          <label>
+            Nume produs
+            <input name="productName" type="search" placeholder="Lasă gol pentru toate produsele" />
+          </label>
+          <label>
+            TVA
+            <select name="vatRate">
+              <option value="">Toate cotele TVA</option>
+              <option value="21">21%</option>
+              <option value="11">11%</option>
+              <option value="0">0% - AMBALAJ SGR</option>
+            </select>
+          </label>
+        </section>
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Firmă</p>
+              <h3>Date pentru import SAGA</h3>
+            </div>
+          </div>
+          <label>
+            Cod fiscal firmă
+            <input name="companyCif" type="text" placeholder="RO12345678" required />
+          </label>
+          <label>
+            Nume firmă
+            <input name="companyName" type="text" value="Marina Park" required />
+          </label>
+          <label>
+            Client generic
+            <input name="clientName" type="text" value="Client generic bar" required />
+          </label>
+        </section>
+        <button class="primary-button full" type="submit">
+          <i data-lucide="file-down" aria-hidden="true"></i>
+          <span>Generează XML SAGA</span>
+        </button>
+        <p class="settings-note">Fișierul se importă în SAGA la Import Date / Facturi și intră în Ieșiri când codul fiscal al firmei este același cu cel din SAGA. Articolele sunt linii de bon, iar AMBALAJ SGR este linie separată cu TVA 0%.</p>
+      </form>
+    </section>
+
+    <section class="panel form-panel booking-modal" id="unit-modal" aria-labelledby="unitModalTitle" aria-modal="true" role="dialog">
+      <div class="section-header tight">
+        <div>
+          <p class="eyebrow">Unitate</p>
+          <h2 id="unitModalTitle">Unitate nouă</h2>
+        </div>
+        <button class="icon-button compact" type="button" id="closeUnitModal" title="Închide unitatea" aria-label="Închide unitatea">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <form id="unitForm">
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Detalii</p>
+              <h3>Unitate și categorie</h3>
+            </div>
+          </div>
+          <label>
+            Nume unitate
+            <input name="id" type="text" placeholder="Camera Bungalow 2" required />
+          </label>
+          <div class="field-grid">
+            <label>
+              Tip unitate
+              <input name="kind" type="text" placeholder="Bungalou, Cameră dublă, Campare cort" required />
+            </label>
+            <label>
+              Zonă
+              <select name="group">
+                <option value="room">Camere</option>
+                <option value="camping">Camping</option>
+              </select>
+            </label>
+          </div>
+        </section>
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Tarif</p>
+              <h3>Regulă de preț</h3>
+            </div>
+          </div>
+          <label>
+            Mod calcul
+            <select name="pricingMode">
+              <option value="per-night">Preț pe noapte</option>
+              <option value="per-person-night">Preț pe persoană pe noapte</option>
+            </select>
+          </label>
+          <input name="adultPrice" type="hidden" value="0.00" />
+          <input name="childPrice" type="hidden" value="0.00" />
+        </section>
+        <section class="form-section unit-pricing-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Calendar tarifar</p>
+              <h3>Preț pe fiecare zi</h3>
+            </div>
+          </div>
+          <div class="mini-calendar-toolbar">
+            <div>
+              <h4>Tarife zilnice</h4>
+              <p>Selectează una sau mai multe zile și aplică un tarif special.</p>
+            </div>
+            <div class="mini-calendar-controls">
+              <button class="icon-button compact" type="button" id="unitPricingPrev" title="Luna anterioară" aria-label="Luna anterioară">
+                <i data-lucide="chevron-left" aria-hidden="true"></i>
+              </button>
+              <strong id="unitPricingMonthLabel"></strong>
+              <button class="icon-button compact" type="button" id="unitPricingNext" title="Luna următoare" aria-label="Luna următoare">
+                <i data-lucide="chevron-right" aria-hidden="true"></i>
+              </button>
+            </div>
+          </div>
+          <div class="unit-price-tools">
+            <label>
+              Preț pentru zile selectate
+              <input id="unitDayPrice" type="number" min="0" step="0.01" value="0.00" />
+            </label>
+            <button class="ghost-button compact-text" type="button" id="applyUnitDayPrice">
+              <i data-lucide="check" aria-hidden="true"></i>
+              <span>Aplică</span>
+            </button>
+            <button class="ghost-button compact-text" type="button" id="clearUnitDayPrice">
+              <i data-lucide="eraser" aria-hidden="true"></i>
+              <span>Șterge tarif special</span>
+            </button>
+          </div>
+          <div class="price-calendar unit-price-calendar" id="unitPricingCalendar" aria-label="Calendar tarife unitate"></div>
+          <p class="calendar-summary" id="unitPricingSummary"></p>
+        </section>
+        <button class="primary-button full" type="submit">
+          <i data-lucide="save" aria-hidden="true"></i>
+          <span>Adaugă unitatea</span>
+        </button>
+      </form>
+    </section>
+
+    <section class="panel form-panel booking-modal" id="clone-unit-modal" aria-labelledby="cloneUnitModalTitle" aria-modal="true" role="dialog">
+      <div class="section-header tight">
+        <div>
+          <p class="eyebrow">Unitate</p>
+          <h2 id="cloneUnitModalTitle">Clonează unitate</h2>
+        </div>
+        <button class="icon-button compact" type="button" id="closeCloneUnitModal" title="Închide clonarea" aria-label="Închide clonarea">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <form id="cloneUnitForm">
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Copiere</p>
+              <h3>Alege sursa și numele nou</h3>
+            </div>
+          </div>
+          <label>
+            Unitate de clonat
+            <select name="sourceUnitId" id="cloneUnitSource" required></select>
+          </label>
+          <label>
+            Nume unitate nouă
+            <input name="newUnitId" type="text" placeholder="Camera Bungalow 3" required />
+          </label>
+          <p class="clone-unit-preview" id="cloneUnitPreview"></p>
+        </section>
+        <button class="primary-button full" type="submit">
+          <i data-lucide="copy" aria-hidden="true"></i>
+          <span>Clonează unitatea</span>
+        </button>
+      </form>
+    </section>
+
+    <section class="panel form-panel booking-modal stationing-modal" id="stationing-modal" aria-labelledby="stationingModalTitle" aria-modal="true" role="dialog">
+      <div class="section-header tight">
+        <div>
+          <p class="eyebrow">Staționare</p>
+          <h2 id="stationingModalTitle">Staționare nouă</h2>
+        </div>
+        <button class="icon-button compact" type="button" id="closeStationingModal" title="Închide staționarea" aria-label="Închide staționarea">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <form id="stationingForm">
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Proprietar</p>
+              <h3>Contact și rulotă</h3>
+            </div>
+          </div>
+          <div class="field-grid">
+            <label>
+              Nume proprietar
+              <input name="owner" type="text" placeholder="Nume complet" required />
+            </label>
+            <label>
+              Telefon
+              <input name="phone" type="tel" placeholder="+40 ..." required />
+            </label>
+          </div>
+          <label>
+            Rulotă / număr
+            <input name="caravan" type="text" placeholder="Adria, Hobby, număr auto" required />
+          </label>
+        </section>
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Perioadă</p>
+              <h3>Nopți preplătite</h3>
+            </div>
+          </div>
+          <div class="field-grid three">
+            <label>
+              Data început
+              <input name="startDate" type="date" required />
+            </label>
+            <label>
+              Nopți
+              <input name="prepaidNights" type="number" min="1" max="1095" value="30" required />
+            </label>
+            <label>
+              Final estimat
+              <input name="endDate" type="text" readonly />
+            </label>
+          </div>
+          <p class="calendar-summary" id="stationingRangeSummary"></p>
+        </section>
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Plată</p>
+              <h3>Tarif staționare</h3>
+            </div>
+          </div>
+          <div class="field-grid">
+            <label>
+              Preț pe noapte
+              <input name="nightlyPrice" type="number" min="0" step="0.01" value="0.00" required />
+            </label>
+            <label>
+              Total
+              <input name="totalPrice" type="number" min="0" step="0.01" value="0.00" readonly />
+            </label>
+          </div>
+          <div class="field-grid">
+            <label>
+              Plătit
+              <input name="paidAmount" type="number" min="0" step="0.01" value="0.00" />
+            </label>
+            <label>
+              Rest de plată
+              <input name="balance" type="number" min="0" step="0.01" value="0.00" readonly />
+            </label>
+          </div>
+        </section>
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
+              <p class="eyebrow">Observații</p>
+              <h3>Detalii interne</h3>
+            </div>
+          </div>
+          <label>
+            Observații
+            <textarea name="note" rows="3" placeholder="Chei, stare rulotă, acces, instrucțiuni"></textarea>
+          </label>
+        </section>
+        <div class="form-actions">
+          <button class="primary-button full" type="submit">
+            <i data-lucide="save" aria-hidden="true"></i>
+            <span id="stationingSubmitLabel">Adaugă staționarea</span>
+          </button>
+          <button class="ghost-button danger-button full" type="button" id="deleteStationing" hidden>
+            <i data-lucide="trash-2" aria-hidden="true"></i>
+            <span>Șterge staționarea</span>
+          </button>
+          <button class="ghost-button full" type="button" id="receiptFromStationing" hidden>
+            <i data-lucide="receipt-text" aria-hidden="true"></i>
+            <span>Încasează cu bon</span>
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <div class="context-menu" id="timelineContextMenu" hidden>
+      <button type="button" data-context-action="edit">
+        <i data-lucide="pencil" aria-hidden="true"></i>
+        <span>Editează clientul</span>
+      </button>
+      <button type="button" class="is-danger" data-context-action="delete">
+        <i data-lucide="trash-2" aria-hidden="true"></i>
+        <span>Șterge clientul</span>
+      </button>
+    </div>
+
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script src="app.js?v=facility-days-20260511"></script>
+  </body>
+</html>

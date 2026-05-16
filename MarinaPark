@@ -1,0 +1,154 @@
+#!/usr/bin/env node
+
+const { spawn, spawnSync } = require("child_process");
+const fs = require("fs");
+const http = require("http");
+const net = require("net");
+const path = require("path");
+
+const rootDir = __dirname;
+const preferredPort = Number(process.env.PORT || 4173);
+
+function npmCommand() {
+  return process.platform === "win32" ? "npm.cmd" : "npm";
+}
+
+function dependenciesAreInstalled() {
+  try {
+    require.resolve("mysql2", { paths: [rootDir] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ensureDependencies() {
+  if (dependenciesAreInstalled()) {
+    return;
+  }
+
+  if (!fs.existsSync(path.join(rootDir, "package.json"))) {
+    throw new Error("Nu găsesc package.json lângă launcher.");
+  }
+
+  console.log("Se instalează dependențele aplicației...");
+  const install = spawnSync(npmCommand(), ["install"], {
+    cwd: rootDir,
+    stdio: "inherit",
+    shell: false
+  });
+
+  if (install.status !== 0) {
+    throw new Error("Instalarea dependențelor a eșuat. Verifică conexiunea la internet și rulează din nou launcherul.");
+  }
+}
+
+function findFreePort(startPort) {
+  return new Promise((resolve, reject) => {
+    const tryPort = (port) => {
+      if (port > 65535) {
+        reject(new Error("Nu am găsit un port liber pentru aplicație."));
+        return;
+      }
+      const server = net.createServer();
+      server.once("error", (error) => {
+        if (error.code === "EADDRINUSE") {
+          tryPort(port + 1);
+          return;
+        }
+        reject(error);
+      });
+      server.once("listening", () => {
+        server.close(() => resolve(port));
+      });
+      server.listen(port, "127.0.0.1");
+    };
+
+    tryPort(startPort);
+  });
+}
+
+function waitForServer(url, attempts = 80) {
+  return new Promise((resolve, reject) => {
+    const check = (remaining) => {
+      const request = http.get(url, (response) => {
+        response.resume();
+        resolve();
+      });
+
+      request.on("error", () => {
+        if (remaining <= 0) {
+          reject(new Error(`Serverul nu a pornit la ${url}`));
+          return;
+        }
+        setTimeout(() => check(remaining - 1), 250);
+      });
+
+      request.setTimeout(1000, () => {
+        request.destroy();
+      });
+    };
+
+    check(attempts);
+  });
+}
+
+function openBrowser(url) {
+  if (process.env.MARINA_NO_BROWSER === "1") {
+    return;
+  }
+
+  const platform = process.platform;
+  const command =
+    platform === "win32"
+      ? "cmd"
+      : platform === "darwin"
+        ? "open"
+        : "xdg-open";
+  const args = platform === "win32" ? ["/c", "start", "", url] : [url];
+  const opener = spawn(command, args, {
+    detached: true,
+    stdio: "ignore"
+  });
+  opener.on("error", () => {
+    console.log(`Deschide manual în browser: ${url}`);
+  });
+  opener.unref();
+}
+
+async function main() {
+  ensureDependencies();
+  const port = await findFreePort(preferredPort);
+  const url = `http://localhost:${port}`;
+  const server = spawn(process.execPath, ["--no-warnings", "server.js"], {
+    cwd: rootDir,
+    env: {
+      ...process.env,
+      PORT: String(port)
+    },
+    stdio: "inherit"
+  });
+
+  const stopServer = () => {
+    if (!server.killed) {
+      server.kill();
+    }
+  };
+
+  process.on("SIGINT", stopServer);
+  process.on("SIGTERM", stopServer);
+  process.on("exit", stopServer);
+
+  server.on("exit", (code) => {
+    process.exit(code || 0);
+  });
+
+  await waitForServer(url);
+  console.log(`Se deschide Marina Park: ${url}`);
+  openBrowser(url);
+}
+
+main().catch((error) => {
+  console.error(error.message || error);
+  process.exit(1);
+});

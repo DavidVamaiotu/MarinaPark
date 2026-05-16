@@ -1,0 +1,15 @@
+node_modules/
+data/
+dist/
+bin/
+.codex/
+.agents/
+
+*.log
+*.tmp
+*.bak
+
+bon.inp
+seed-stress-test.js
+server.log
+.marina-update.lock
