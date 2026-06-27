@@ -74,6 +74,16 @@ try {
     Copy-ReleaseFile $relativePath
   }
 
+  $fileManifest = @(
+    foreach ($relativePath in $ReleaseFiles) {
+      $packageFile = Join-Path $PackageDir $relativePath
+      [ordered]@{
+        path = $relativePath.Replace("\", "/")
+        sha256 = (Get-FileHash -LiteralPath $packageFile -Algorithm SHA256).Hash.ToLowerInvariant()
+      }
+    }
+  )
+
   if (Test-Path -LiteralPath $ZipPath) {
     Remove-Item -LiteralPath $ZipPath -Force
   }
@@ -86,6 +96,7 @@ try {
     zipUrl = $ZipUrl
     sha256 = $sha256
     createdAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    files = $fileManifest
   }
 
   $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8

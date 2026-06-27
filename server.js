@@ -16,9 +16,12 @@ const weeklyBackupPath = path.join(backupDir, "marina-park-weekly.sqlite");
 const backupMetaPath = path.join(backupDir, "backup-meta.json");
 const activityLogJsonPath = path.join(dataDir, "activity-log.json");
 const activityLogJsonlPath = path.join(dataDir, "activity-log.jsonl");
+const instancePath = path.join(dataDir, "server-instance.json");
 const legacyReservationsIndexPath = path.join(dataDir, "reservations", "index.json");
 const legacyConfigPath = path.join(dataDir, "config.json");
 const port = Number(process.env.PORT || 4173);
+const instanceToken = String(process.env.MARINA_INSTANCE_TOKEN || "");
+const serverStartedAt = new Date().toISOString();
 const mysqlHost = process.env.MARINA_MYSQL_HOST || "81.181.112.114";
 const mysqlUser = process.env.MARINA_MYSQL_USER || "david";
 const mysqlPassword = process.env.MARINA_MYSQL_PASSWORD || "DavidG2023";
@@ -36,6 +39,44 @@ const contentTypes = {
 
 fsSync.mkdirSync(dataDir, { recursive: true });
 fsSync.mkdirSync(backupDir, { recursive: true });
+function currentAppVersion() {
+  try {
+    return String(JSON.parse(fsSync.readFileSync(path.join(rootDir, "version.json"), "utf8")).version || "unknown");
+  } catch {
+    return "unknown";
+  }
+}
+
+function instanceInfo() {
+  return {
+    ok: true,
+    pid: process.pid,
+    port,
+    token: instanceToken,
+    version: currentAppVersion(),
+    installDirectory: rootDir,
+    startedAt: serverStartedAt
+  };
+}
+
+function saveInstanceInfo() {
+  const temporaryPath = `${instancePath}.tmp`;
+  fsSync.writeFileSync(temporaryPath, JSON.stringify(instanceInfo(), null, 2));
+  fsSync.rmSync(instancePath, { force: true });
+  fsSync.renameSync(temporaryPath, instancePath);
+}
+
+function removeInstanceInfo() {
+  try {
+    const saved = JSON.parse(fsSync.readFileSync(instancePath, "utf8"));
+    if (Number(saved.pid) === process.pid && saved.token === instanceToken) {
+      fsSync.rmSync(instancePath, { force: true });
+    }
+  } catch {
+    // A missing or stale instance file does not require recovery here.
+  }
+}
+
 const db = new DatabaseSync(databasePath);
 db.exec(`
   PRAGMA journal_mode = WAL;
@@ -1226,6 +1267,16 @@ async function serveStatic(request, response) {
 
 const server = http.createServer(async (request, response) => {
   try {
+    if (request.url.startsWith("/api/instance") && request.method === "GET") {
+      send(response, 200, JSON.stringify(instanceInfo()));
+      return;
+    }
+
+    if (request.url.startsWith("/api/version") && request.method === "GET") {
+      send(response, 200, JSON.stringify({ ok: true, version: currentAppVersion() }));
+      return;
+    }
+
     if (request.url.startsWith("/api/data") && request.method === "GET") {
       send(response, 200, JSON.stringify(await readData()));
       return;
@@ -1317,9 +1368,28 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, () => {
-  console.log(`Marina Park app: http://localhost:${port}`);
+  try {
+    saveInstanceInfo();
+  } catch (error) {
+    console.warn(`Nu am putut salva identitatea instanței: ${error.message}`);
+  }
+  console.log(`Marina Park ${currentAppVersion()}: http://localhost:${port}`);
+  console.log(`Instalare: ${rootDir}`);
   console.log("Database: data/marina-park.sqlite");
 });
+
+let shuttingDown = false;
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  removeInstanceInfo();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("exit", removeInstanceInfo);
 
 enqueueDatabaseBackup({ reason: "startup" });
 const backupInterval = setInterval(() => enqueueDatabaseBackup({ reason: "interval" }), 60 * 60 * 1000);

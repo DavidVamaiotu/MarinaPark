@@ -7002,3 +7002,11 @@ setActivePage(activePage);
 setVisibleMonth(today);
 syncLocalActivityLog();
 warmHiddenPages();
+
+fetch("/api/version", { cache: "no-store" })
+  .then((response) => response.json())
+  .then((result) => {
+    const label = document.querySelector("#appVersionLabel");
+    if (label && result.version) label.textContent = `· v${result.version}`;
+  })
+  .catch(() => {});
