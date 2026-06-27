@@ -35,6 +35,10 @@ Fluxul este:
 3. `MarinaPark.ps1` citeste `version.json`, verifica manifestul `latest.json` din GitHub si descarca update-ul daca versiunea este mai noua.
 4. Sunt inlocuite doar fisierele aplicatiei. Datele locale din `data/`, `node_modules/`, logurile si bonurile nu sunt incluse in update si raman pe PC.
 
+Updaterul verifica atat versiunea, cat si hash-ul pachetului si hash-urile fisierelor. Un pachet corectat sub aceeasi versiune este reaplicat automat. Fisierele sunt validate si salvate in backup inainte de instalare, iar un update partial este anulat prin rollback.
+
+Diagnosticul persistent se gaseste in `data/update.log`. Versiunea servita de instanta activa poate fi verificata la `http://localhost:PORT/api/version`.
+
 Pentru a pregati un release nou:
 
 ```powershell
