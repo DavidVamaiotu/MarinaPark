@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 Set-Location -LiteralPath $PSScriptRoot
 $BackgroundMode = $args -contains "--background"
+$LauncherMode = $args -contains "--launcher"
 $SkipUpdate = $args -contains "--no-update" -or $env:MARINA_SKIP_UPDATE -eq "1"
 
 $UpdateFileList = @(
@@ -77,6 +78,18 @@ function Compare-AppVersion($RemoteVersion, $LocalVersion) {
   }
 }
 
+function Convert-ManifestResponse($Response) {
+  if ($Response -is [string]) {
+    $jsonText = $Response.Trim()
+    $jsonText = $jsonText.TrimStart([char]0xFEFF)
+    if ($jsonText.StartsWith("ï»¿")) {
+      $jsonText = $jsonText.Substring(3)
+    }
+    return $jsonText | ConvertFrom-Json
+  }
+  return $Response
+}
+
 function Get-UpdateSourceDirectory($ExtractDir) {
   if (Test-Path -LiteralPath (Join-Path $ExtractDir "app.js")) {
     return $ExtractDir
@@ -117,14 +130,47 @@ function Copy-UpdateFile($SourceRoot, $RelativePath, $BackupDir) {
   Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Recurse -Force
 }
 
+function Start-MarinaParkBackground {
+  $scriptPath = Join-Path $PSScriptRoot "MarinaPark.ps1"
+  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" --background --no-update"
+  Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WindowStyle Hidden | Out-Null
+}
+
+function Invoke-DownloadWithSpinner($Uri, $OutFile, $Message) {
+  $job = Start-Job -ScriptBlock {
+    param($DownloadUri, $DownloadPath)
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $DownloadUri -OutFile $DownloadPath -UseBasicParsing -TimeoutSec 60
+  } -ArgumentList $Uri, $OutFile
+
+  $frames = @("|", "/", "-", "\")
+  $index = 0
+  try {
+    while ($job.State -eq "Running") {
+      Write-Host -NoNewline ("`r{0} {1}" -f $Message, $frames[$index % $frames.Count])
+      Start-Sleep -Milliseconds 140
+      $index++
+    }
+    Receive-Job -Job $job -ErrorAction Stop | Out-Null
+    Write-Host ("`r{0} gata.   " -f $Message)
+  } finally {
+    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Invoke-MarinaParkUpdate {
+  param(
+    [switch]$InteractiveProgress
+  )
+
+  $updateStarted = $false
   if ($SkipUpdate) {
-    return
+    return [pscustomobject]@{ status = "skipped" }
   }
 
   $local = Get-LocalVersionInfo
   if (-not $local.manifestUrl) {
-    return
+    return [pscustomobject]@{ status = "no-manifest"; localVersion = $local.version }
   }
 
   $lockPath = Join-Path $PSScriptRoot ".marina-update.lock"
@@ -133,29 +179,42 @@ function Invoke-MarinaParkUpdate {
     $lockStream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
   } catch {
     Write-Host "Alt update Marina Park ruleaza deja. Continui cu versiunea locala..."
-    return
+    return [pscustomobject]@{ status = "locked"; localVersion = $local.version }
   }
 
   $tempDir = $null
   try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $remote = Invoke-RestMethod -Uri $local.manifestUrl -UseBasicParsing -TimeoutSec 8
+    $remote = Convert-ManifestResponse (Invoke-RestMethod -Uri $local.manifestUrl -UseBasicParsing -TimeoutSec 8)
     if (-not $remote.version -or -not $remote.zipUrl) {
-      return
+      return [pscustomobject]@{ status = "invalid-manifest"; localVersion = $local.version }
     }
 
     if ((Compare-AppVersion $remote.version $local.version) -le 0) {
-      return
+      return [pscustomobject]@{ status = "current"; localVersion = $local.version; remoteVersion = $remote.version }
     }
 
-    Write-Host "Update Marina Park: $($local.version) -> $($remote.version)"
+    $updateStarted = $true
+    if ($InteractiveProgress) {
+      Clear-Host
+      Write-Host "Marina Park"
+      Write-Host "Versiune curenta: $($local.version)"
+      Write-Host "Versiune noua:    $($remote.version)"
+      Write-Host ""
+    } else {
+      Write-Host "Update Marina Park: $($local.version) -> $($remote.version)"
+    }
     $tempDir = Join-Path $env:TEMP ("MarinaParkUpdate-" + [guid]::NewGuid().ToString("N"))
     $extractDir = Join-Path $tempDir "extract"
     $zipPath = Join-Path $tempDir "update.zip"
     $backupDir = Join-Path $PSScriptRoot ("data\update-backups\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
     New-Item -ItemType Directory -Force -Path $tempDir, $extractDir, $backupDir | Out-Null
 
-    Invoke-WebRequest -Uri $remote.zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 60
+    if ($InteractiveProgress) {
+      Invoke-DownloadWithSpinner $remote.zipUrl $zipPath "Se descarca update-ul"
+    } else {
+      Invoke-WebRequest -Uri $remote.zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 60
+    }
 
     if ($remote.sha256) {
       $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -170,6 +229,9 @@ function Invoke-MarinaParkUpdate {
       $oldPackageHash = (Get-FileHash -LiteralPath $packageLockPath -Algorithm SHA256).Hash
     }
 
+    if ($InteractiveProgress) {
+      Write-Host "Se instaleaza update-ul..."
+    }
     Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
     $sourceRoot = Get-UpdateSourceDirectory $extractDir
 
@@ -190,8 +252,12 @@ function Invoke-MarinaParkUpdate {
     }
 
     Write-Host "Update Marina Park finalizat."
+    return [pscustomobject]@{ status = "updated"; localVersion = $local.version; remoteVersion = $remote.version }
   } catch {
-    Write-Host "Update Marina Park sarit: $($_.Exception.Message)"
+    if (-not $InteractiveProgress -or $updateStarted) {
+      Write-Host "Update Marina Park sarit: $($_.Exception.Message)"
+    }
+    return [pscustomobject]@{ status = "failed"; localVersion = $local.version; error = $_.Exception.Message }
   } finally {
     if ($lockStream) {
       $lockStream.Close()
@@ -213,13 +279,27 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
   Write-Host "Node.js nu s-a putut instala automat."
   Write-Host "Instaleaza Node.js manual de pe https://nodejs.org/ si porneste din nou MarinaPark.bat."
-  if (-not $BackgroundMode) {
+  if (-not $BackgroundMode -and -not $LauncherMode) {
     Read-Host "Apasa Enter pentru inchidere"
   }
   exit 1
 }
 
-Invoke-MarinaParkUpdate
+if ($LauncherMode) {
+  $updateResult = Invoke-MarinaParkUpdate -InteractiveProgress
+  if ($updateResult.status -eq "updated") {
+    Write-Host ""
+    Write-Host "Update instalat. Pornesc Marina Park in fundal in 3 secunde..."
+    Start-Sleep -Seconds 3
+    Start-MarinaParkBackground
+    Start-Sleep -Seconds 2
+  } else {
+    Start-MarinaParkBackground
+  }
+  exit 0
+}
+
+Invoke-MarinaParkUpdate | Out-Null
 
 node "$PSScriptRoot\MarinaPark"
 if (-not $BackgroundMode) {

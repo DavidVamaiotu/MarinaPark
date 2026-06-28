@@ -4,12 +4,6 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Administrare clienți Marina Park</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&family=Trirong:wght@400;600&display=swap"
-      rel="stylesheet"
-    />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body data-mode="room">
@@ -73,6 +67,7 @@
             </div>
           </dl>
         </section>
+        <p class="app-version" id="appVersion">Versiune</p>
       </aside>
 
       <main class="workspace" id="dashboard">
@@ -205,7 +200,7 @@
                   <select name="group">
                     <option value="all">Ambele</option>
                     <option value="room">Camere</option>
-                    <option value="camping">Camping</option>
+                    <option value="camping">Cort/Rulote</option>
                   </select>
                 </label>
                 <label>
@@ -316,14 +311,11 @@
                 </button>
                 <button class="ghost-button compact-text" type="button" id="currentMonth">Luna curentă</button>
               </div>
-              <label class="mode-switch" for="modeSwitch">
-                <span>Camere</span>
-                <input id="modeSwitch" type="checkbox" />
-                <span class="switch-track" aria-hidden="true">
-                  <span class="switch-thumb"></span>
-                </span>
-                <span>Camping</span>
-              </label>
+              <div class="mode-segmented" id="modeSwitch" role="radiogroup" aria-label="Tip calendar">
+                <button class="is-active" type="button" data-mode-option="room" role="radio" aria-checked="true">Camere</button>
+                <button type="button" data-mode-option="tent" role="radio" aria-checked="false">Cort</button>
+                <button type="button" data-mode-option="rv" role="radio" aria-checked="false">Rulote</button>
+              </div>
             </div>
           </div>
           <div class="timeline-shell" aria-label="Calendar perioade de cazare">
@@ -344,8 +336,8 @@
           </section>
         </section>
 
-          <section class="panel form-panel booking-modal" id="guest-form-section" aria-labelledby="guestFormTitle" aria-modal="true" role="dialog">
-            <div class="booking-modal-content">
+        <section class="panel form-panel booking-modal" id="guest-form-section" aria-labelledby="guestFormTitle" aria-modal="true" role="dialog">
+          <div class="booking-modal-content">
             <div class="section-header tight">
               <div>
                 <p class="eyebrow">Formular client</p>
@@ -368,14 +360,11 @@
                       <h3 id="sourceRecordsTitle">Rezervări importate</h3>
                     </div>
                     <div class="source-record-actions">
-                      <label class="mode-switch compact" for="sourceModeSwitch">
-                        <span>Camere</span>
-                        <input id="sourceModeSwitch" type="checkbox" />
-                        <span class="switch-track" aria-hidden="true">
-                          <span class="switch-thumb"></span>
-                        </span>
-                        <span>Camping</span>
-                      </label>
+                      <div class="mode-segmented compact" id="sourceModeSwitch" role="radiogroup" aria-label="Tip rezervări importate">
+                        <button class="is-active" type="button" data-source-mode-option="room" role="radio" aria-checked="true">Camere</button>
+                        <button type="button" data-source-mode-option="tent" role="radio" aria-checked="false">Cort</button>
+                        <button type="button" data-source-mode-option="rv" role="radio" aria-checked="false">Rulote</button>
+                      </div>
                       <button class="ghost-button compact-text" type="button" id="loadSourceBookings">
                         <i data-lucide="database" aria-hidden="true"></i>
                         <span>Reîncarcă</span>
@@ -411,7 +400,7 @@
                       <h3>Contact și persoane</h3>
                     </div>
                   </div>
-                  <div class="field-grid">
+                  <div class="field-grid booking-contact-grid">
                     <label>
                       Nume client
                       <input name="guest" type="text" placeholder="Nume complet client" required />
@@ -421,7 +410,7 @@
                       <input name="phone" type="tel" placeholder="+40 ..." required />
                     </label>
                   </div>
-                  <div class="field-grid three">
+                  <div class="field-grid three booking-party-grid">
                     <label>
                       Adulți
                       <input name="adults" type="number" min="0" max="12" value="2" />
@@ -435,7 +424,7 @@
                       <input name="party" type="number" min="1" max="24" value="2" required readonly />
                     </label>
                   </div>
-                  <label>
+                  <label class="booking-car-field">
                     Mașină
                     <input name="car" type="text" placeholder="Număr auto, dacă există" />
                   </label>
@@ -448,7 +437,7 @@
                       <h3>Unitate și perioadă</h3>
                     </div>
                   </div>
-                  <div class="field-grid">
+                  <div class="field-grid booking-unit-grid">
                     <label>
                       Unitate
                       <select name="unitId" required></select>
@@ -457,7 +446,8 @@
                       Tip
                       <select name="kind">
                         <option value="room">Camere</option>
-                        <option value="camping">Camping</option>
+                        <option value="tent">Cort</option>
+                        <option value="rv">Rulote</option>
                       </select>
                     </label>
                     <label>
@@ -486,6 +476,17 @@
                     <div class="price-calendar range-calendar" id="bookingRangeCalendar" aria-label="Calendar pentru alegerea perioadei"></div>
                     <p class="calendar-summary" id="bookingRangeSummary"></p>
                   </div>
+                </section>
+
+                <section class="form-section booking-stationing-link-section" id="bookingStationingLinkSection" hidden>
+                  <div class="form-section-head">
+                    <div>
+                      <p class="eyebrow">Stationare</p>
+                      <h3>Rulota din parc</h3>
+                    </div>
+                  </div>
+                  <div class="stationing-link-status" id="bookingStationingLinkStatus"></div>
+                  <div class="stationing-link-results" id="bookingStationingLinkResults"></div>
                 </section>
               </div>
 
@@ -562,8 +563,8 @@
                 </div>
               </div>
             </form>
-            </div>
-          </section>
+          </div>
+        </section>
 
       </main>
     </div>
@@ -822,13 +823,14 @@
           <div class="field-grid">
             <label>
               Tip unitate
-              <input name="kind" type="text" placeholder="Bungalou, Cameră dublă, Campare cort" required />
+              <input name="kind" type="text" placeholder="Bungalou, Cameră dublă, Campare cort, Campare rulotă" required />
             </label>
             <label>
-              Zonă
+              Categorie
               <select name="group">
                 <option value="room">Camere</option>
-                <option value="camping">Camping</option>
+                <option value="tent">Cort</option>
+                <option value="rv">Rulote</option>
               </select>
             </label>
           </div>
@@ -1057,6 +1059,6 @@
     </div>
 
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=facility-days-20260511"></script>
+    <script src="app.js?v=unit-type-segments-20260518"></script>
   </body>
 </html>

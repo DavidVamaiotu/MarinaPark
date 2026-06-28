@@ -5,13 +5,13 @@ cd /d "%~dp0"
 if /I "%~1"=="--background" goto background
 if /I "%~1"=="--foreground" goto foreground
 
-wscript.exe "%~dp0MarinaPark.vbs"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0MarinaPark.ps1" --launcher
 exit /b
 
 :background
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0MarinaPark.ps1" --background
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0MarinaPark.ps1" %*
 exit /b %errorlevel%
 
 :foreground
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0MarinaPark.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0MarinaPark.ps1" --foreground
 pause

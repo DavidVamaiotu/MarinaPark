@@ -314,6 +314,7 @@ const sourceRecordRows = document.querySelector("#sourceRecordRows");
 const closeBooking = document.querySelector("#closeBooking");
 const appShell = document.querySelector("#appShell");
 const sidebarToggle = document.querySelector("#sidebarToggle");
+const appVersion = document.querySelector("#appVersion");
 const timelineContextMenu = document.querySelector("#timelineContextMenu");
 const toast = document.querySelector("#toast");
 const settingsForm = document.querySelector("#settingsForm");
@@ -341,6 +342,9 @@ const bookingCalendarPrevButton = document.querySelector("#bookingCalendarPrev")
 const bookingCalendarNextButton = document.querySelector("#bookingCalendarNext");
 const bookingRangeSummary = document.querySelector("#bookingRangeSummary");
 const bookingFacilities = document.querySelector("#bookingFacilities");
+const bookingStationingLinkSection = document.querySelector("#bookingStationingLinkSection");
+const bookingStationingLinkStatus = document.querySelector("#bookingStationingLinkStatus");
+const bookingStationingLinkResults = document.querySelector("#bookingStationingLinkResults");
 const stationingMetricGrid = document.querySelector("#stationingMetricGrid");
 const stationingCards = document.querySelector("#stationingCards");
 const openStationingModalButton = document.querySelector("#openStationingModal");
@@ -418,6 +422,8 @@ let suppressBookingCalendarClick = false;
 let editingStationingKey = null;
 let bookingEditSession = null;
 let stationingEditSession = null;
+let bookingStationingDeductionDraft = null;
+let openLinkedDraftAfterSave = false;
 let editingBarArticleKey = null;
 let barPaymentInProgress = false;
 let barAttachInProgress = false;
@@ -645,12 +651,21 @@ function normalizeDailyPrices(dailyPrices = {}) {
 }
 
 function formatStayDates(startText, endText) {
-  const start = dateFromISO(startText);
-  const end = dateFromISO(endText);
-  const sameMonth = start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
-  const startLabel = start.toLocaleDateString("ro-RO", sameMonth ? { day: "numeric" } : { day: "numeric", month: "short" });
-  const endLabel = end.toLocaleDateString("ro-RO", { day: "numeric", month: "short" });
-  return `${startLabel}-${endLabel}`;
+  return formatDateRangeLabel(startText, endText);
+}
+
+function formatShortDateLabel(dateText) {
+  if (!dateText) return "";
+  const date = dateFromISO(dateText);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleDateString("ro-RO", { day: "numeric", month: "short" }).replace(/\s+/g, " ").trim();
+}
+
+function formatDateRangeLabel(startText, endText) {
+  const startLabel = formatShortDateLabel(startText);
+  const endLabel = formatShortDateLabel(endText);
+  if (startLabel && endLabel) return `${startLabel} - ${endLabel}`;
+  return [startText, endText].filter(Boolean).join(" - ") || "-";
 }
 
 function stayOverlapsVisibleMonth(stay) {
@@ -749,9 +764,85 @@ function buildUnitCatalogFromStays() {
   return [...catalog.values()].sort((first, second) => first.id.localeCompare(second.id, "ro-RO", { numeric: true }));
 }
 
-function activeUnitOptions(group = activeMode) {
+function normalizedModeText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function normalizeTimelineMode(mode) {
+  const value = normalizedModeText(mode);
+  if (value === "rv" || value === "rulote" || value === "rulota" || value.includes("rulot")) return "rv";
+  if (value === "camping" || value === "cort" || value === "tent" || value.includes("cort") || value.includes("campare")) return "tent";
+  return "room";
+}
+
+function groupForMode(mode = activeMode) {
+  return normalizeTimelineMode(mode) === "room" ? "room" : "camping";
+}
+
+function timelineModeLabel(mode = activeMode) {
+  const normalized = normalizeTimelineMode(mode);
+  if (normalized === "tent") return "cort";
+  if (normalized === "rv") return "rulote";
+  return "camere";
+}
+
+function unitTypeLabel(mode = activeMode) {
+  const normalized = normalizeTimelineMode(mode);
+  if (normalized === "tent") return "Cort";
+  if (normalized === "rv") return "Rulote";
+  return "Camere";
+}
+
+function defaultKindForMode(mode = activeMode) {
+  const normalized = normalizeTimelineMode(mode);
+  if (normalized === "tent") return "Campare cort";
+  if (normalized === "rv") return "Campare rulotă";
+  return "Cameră dublă";
+}
+
+function campingModeForUnit(unit) {
+  const value = normalizedModeText(`${unit?.id || ""} ${unit?.kind || ""}`);
+  if (value.includes("rulot") || /\brv\b/.test(value)) return "rv";
+  return "tent";
+}
+
+function unitMatchesTimelineMode(unit, mode = activeMode) {
+  const normalized = normalizeTimelineMode(mode);
+  if (normalized === "room") return unit.group === "room";
+  return unit.group === "camping" && campingModeForUnit(unit) === normalized;
+}
+
+function unitTypeOptionForUnit(unit) {
+  return unit?.group === "camping" ? campingModeForUnit(unit) : "room";
+}
+
+function updateModeSwitchUi() {
+  if (!modeSwitch) return;
+  const normalized = normalizeTimelineMode(activeMode);
+  modeSwitch.querySelectorAll("[data-mode-option]").forEach((button) => {
+    const isActive = button.dataset.modeOption === normalized;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-checked", String(isActive));
+  });
+}
+
+function updateSourceModeSwitchUi() {
+  if (!sourceModeSwitch) return;
+  const normalized = normalizeTimelineMode(sourceRecordsMode);
+  sourceModeSwitch.querySelectorAll("[data-source-mode-option]").forEach((button) => {
+    const isActive = button.dataset.sourceModeOption === normalized;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-checked", String(isActive));
+  });
+}
+
+function activeUnitOptions(group = groupForMode(activeMode)) {
+  const normalizedGroup = group === "camping" || group === "room" ? group : groupForMode(group);
   return unitOptions()
-    .filter((unit) => unit.group === group)
+    .filter((unit) => unit.group === normalizedGroup)
     .sort((first, second) => first.id.localeCompare(second.id, "ro-RO", { numeric: true }));
 }
 
@@ -863,7 +954,7 @@ function activeFacilitiesForGroup(group) {
 
 function facilityGroupLabel(group) {
   if (group === "room") return "Camere";
-  if (group === "camping") return "Camping";
+  if (group === "camping") return "Cort/Rulote";
   return "Ambele";
 }
 
@@ -1255,9 +1346,9 @@ function rebuildStaysByUnitIndex() {
 
 function timelineUnitRows() {
   return unitOptions()
-    .filter((unit) => unit.group === activeMode)
+    .filter((unit) => unitMatchesTimelineMode(unit))
     .map((unit) => {
-      const unitStays = staysByUnitIndex.get(`${activeMode}:${unit.id}`) || [];
+      const unitStays = staysByUnitIndex.get(`${unit.group}:${unit.id}`) || [];
       return {
         ...unit,
         stays: unitStays.filter((stay) => stayOverlapsTimelineWindow(stay) && matchesSearch(stay)),
@@ -1290,11 +1381,37 @@ function stationingEndDate(record) {
   return toISODate(addDays(start, prepaidNights));
 }
 
+function normalizeStationingDeductions(deductions = []) {
+  if (!Array.isArray(deductions)) return [];
+  return deductions
+    .map((deduction, index) => ({
+      key: String(deduction.key || `stationing-deduction-${Date.now()}-${index}`),
+      stayKey: String(deduction.stayKey || ""),
+      guest: String(deduction.guest || "").trim(),
+      unitId: String(deduction.unitId || "").trim(),
+      start: String(deduction.start || ""),
+      end: String(deduction.end || ""),
+      nights: Math.max(1, Math.round(Number(deduction.nights || 1))),
+      amount: normalizeMoneyValue(deduction.amount),
+      appliedAt: deduction.appliedAt || new Date().toISOString()
+    }))
+    .filter((deduction) => deduction.stayKey && deduction.nights > 0);
+}
+
+function stationingDeductedNights(record = {}) {
+  const prepaidNights = Math.max(1, Number(record.prepaidNights || 1));
+  const total = normalizeStationingDeductions(record.deductions).reduce((sum, deduction) => sum + Number(deduction.nights || 0), 0);
+  return Math.min(prepaidNights, total);
+}
+
 function normalizeStationingRecord(record = {}, index = 0) {
   const startDate = validDateFromISO(record.startDate) ? record.startDate : toISODate(today);
   const prepaidNights = Math.max(1, Math.min(1095, Math.round(Number(record.prepaidNights || 30))));
   const nightlyPrice = normalizeMoneyValue(record.nightlyPrice);
-  const totalPrice = normalizeMoneyValue(record.totalPrice || nightlyPrice * prepaidNights);
+  const deductions = normalizeStationingDeductions(record.deductions);
+  const deductedNights = Math.min(prepaidNights, deductions.reduce((sum, deduction) => sum + Number(deduction.nights || 0), 0));
+  const billableNights = Math.max(0, prepaidNights - deductedNights);
+  const totalPrice = normalizeMoneyValue(deductions.length ? nightlyPrice * billableNights : record.totalPrice || nightlyPrice * prepaidNights);
   const paidAmount = Math.min(totalPrice, normalizeMoneyValue(record.paidAmount));
   const balance = Math.max(0, normalizeMoneyValue(totalPrice - paidAmount));
 
@@ -1309,6 +1426,7 @@ function normalizeStationingRecord(record = {}, index = 0) {
     totalPrice,
     paidAmount,
     balance,
+    deductions,
     note: String(record.note || "").trim()
   };
 }
@@ -1317,18 +1435,21 @@ function stationingDetails(record) {
   const start = validDateFromISO(record.startDate) || today;
   const prepaidNights = Math.max(1, Number(record.prepaidNights || 1));
   const nightlyPrice = normalizeMoneyValue(record.nightlyPrice);
-  const totalPrice = normalizeMoneyValue(record.totalPrice || prepaidNights * nightlyPrice);
+  const deductedNights = stationingDeductedNights(record);
+  const billableNights = Math.max(0, prepaidNights - deductedNights);
+  const totalPrice = normalizeMoneyValue(record.totalPrice || billableNights * nightlyPrice);
   const paidAmount = Math.min(totalPrice, normalizeMoneyValue(record.paidAmount));
   const paidNights =
     nightlyPrice > 0
-      ? Math.min(prepaidNights, Math.floor(paidAmount / nightlyPrice))
+      ? Math.min(billableNights, Math.floor(paidAmount / nightlyPrice))
       : paidAmount >= totalPrice && totalPrice > 0
-        ? prepaidNights
+        ? billableNights
         : 0;
   const usedNights = Math.min(prepaidNights, Math.max(0, daysBetween(start, today)));
-  const remainingNights = Math.max(0, prepaidNights - usedNights);
+  const billableUsedNights = Math.max(0, usedNights - deductedNights);
+  const remainingNights = Math.max(0, billableNights - billableUsedNights);
   const progress = Math.round((usedNights / prepaidNights) * 100);
-  const paidProgress = Math.round((paidNights / prepaidNights) * 100);
+  const paidProgress = billableNights > 0 ? Math.round((paidNights / billableNights) * 100) : 100;
   const unpaidProgress = Math.max(0, 100 - paidProgress);
   const endDate = stationingEndDate(record);
   const status =
@@ -1343,6 +1464,8 @@ function stationingDetails(record) {
     remainingNights,
     paidNights,
     prepaidNights,
+    deductedNights,
+    billableNights,
     progress,
     paidProgress,
     unpaidProgress,
@@ -1671,6 +1794,14 @@ function stayChangeList(previous, next) {
     changes.push(`facilități: ${previousFacilities || "fără"} -> ${nextFacilities || "fără"}`);
   }
 
+  const previousDeduction = normalizeStayStationingDeduction(previous?.stationingDeduction);
+  const nextDeduction = normalizeStayStationingDeduction(next?.stationingDeduction);
+  if (String(previousDeduction?.recordKey || "") !== String(nextDeduction?.recordKey || "")) {
+    changes.push(`stationare: ${previousDeduction?.recordLabel || "fara"} -> ${nextDeduction?.recordLabel || "fara"}`);
+  } else if (String(previousDeduction?.appliedAt || "") !== String(nextDeduction?.appliedAt || "")) {
+    changes.push(`stationare: deducere aplicata ${nextDeduction?.appliedNights || 0} nopti`);
+  }
+
   return changes;
 }
 
@@ -1715,6 +1846,22 @@ function barArticleChangeList(previous, next) {
   });
 
   return changes;
+}
+
+function normalizeStayStationingDeduction(deduction = {}) {
+  if (!deduction || typeof deduction !== "object") return null;
+  const recordKey = String(deduction.recordKey || "").trim();
+  if (!recordKey) return null;
+  const nights = Math.max(1, Math.round(Number(deduction.nights || 1)));
+  return {
+    recordKey,
+    recordLabel: String(deduction.recordLabel || "").trim(),
+    selectedAt: deduction.selectedAt || new Date().toISOString(),
+    appliedAt: String(deduction.appliedAt || ""),
+    appliedNights: Math.max(0, Math.round(Number(deduction.appliedNights || 0))),
+    appliedAmount: normalizeMoneyValue(deduction.appliedAmount || 0),
+    nights
+  };
 }
 
 function normalizeStay(stay, index) {
@@ -1765,6 +1912,7 @@ function normalizeStay(stay, index) {
     settledPrice: hasPaymentEvidence ? (paid && settledPrice <= 0 ? normalizeMoneyValue(price) : settledPrice) : 0,
     actualPaidAmount: hasPaymentEvidence ? actualPaidAmountForStay(stay) : 0,
     paymentMethod: String(stay.paymentMethod || ""),
+    stationingDeduction: normalizeStayStationingDeduction(stay.stationingDeduction),
     note: String(stay.note || "")
   };
 }
@@ -1840,6 +1988,12 @@ async function loadFileBackedData() {
       sidebarCollapsed = data.config.sidebarCollapsed;
       localStorage.setItem("marinaParkSidebarCollapsed", String(sidebarCollapsed));
       applySidebarState();
+    }
+
+    if (data.config?.activeMode) {
+      activeMode = normalizeTimelineMode(data.config.activeMode);
+      document.body.dataset.mode = groupForMode(activeMode);
+      updateModeSwitchUi();
     }
 
     receiptConfig = {
@@ -2035,7 +2189,7 @@ function receiptDraftFromBookingForm(stay) {
   }
 
   const selectedUnit = unitById(bookingForm.elements.unitId.value);
-  const kind = selectedUnit?.kind || bookingForm.elements.kind.value || stay.kind;
+  const kind = selectedUnit?.kind || defaultKindForMode(bookingForm.elements.kind.value || stay.kind);
   const group = selectedUnit?.group || groupFromKind(kind);
   const price = normalizeMoneyValue(bookingForm.elements.price.value || stay.price);
   const formBalance = normalizeMoneyValue(bookingForm.elements.balance.value || stay.balance || price);
@@ -2065,6 +2219,7 @@ function receiptDraftFromBookingForm(stay) {
       balance: formBalance,
       deposit: Math.max(0, price - formBalance),
       paymentMethod: bookingForm.elements.paymentMethod.value || stay.paymentMethod || "",
+      stationingDeduction: stationingDeductionFromDraft() || normalizeStayStationingDeduction(stay.stationingDeduction),
       note: String(bookingForm.elements.note.value || stay.note || "").trim()
     },
     source: "form"
@@ -2133,10 +2288,15 @@ function openReceiptModal(stayKey) {
     showToast("Rezervarea este deja marcată ca achitată.");
     return;
   }
+  const stationingDeduction = normalizeStayStationingDeduction(receiptDraft.stay.stationingDeduction);
+  const stationingDeductionLine = stationingDeduction && !stationingDeduction.appliedAt
+    ? `<span>Deducere stationare pregatita: ${stationingDeduction.nights} ${stationingDeduction.nights === 1 ? "noapte" : "nopti"}.</span>`
+    : "";
   receiptSummary.innerHTML = `
     <strong>Plata cu numerar, card sau voucher</strong>
     <span>${receiptDraft.stay.guest}</span>
     <span>${receiptDraft.stay.id} - ${receiptDraft.stay.kind}</span>
+    ${stationingDeductionLine}
     <span>Sumă bon: ${formatCurrency(amount)}</span>
   `;
   receiptAmountInput.value = amount.toFixed(2);
@@ -2235,8 +2395,8 @@ function unitDraftFromForm() {
   const adultPrice = firstUnitCalendarPrice(unitPricingDraft);
   return normalizeUnit({
     id: editingUnitId || unitForm.elements.id.value || "Unitate nouă",
-    kind: unitForm.elements.kind.value || (activeMode === "camping" ? "Campare cort" : "Cameră dublă"),
-    group: unitForm.elements.group.value || activeMode,
+    kind: unitForm.elements.kind.value || defaultKindForMode(activeMode),
+    group: unitForm.elements.group.value || groupForMode(activeMode),
     pricingMode: unitForm.elements.pricingMode.value,
     adultPrice,
     childPrice: adultPrice / 2,
@@ -2367,8 +2527,8 @@ function openUnitModal(unitId = null) {
   unitForm.querySelector("[type='submit'] span").textContent = editingUnitId ? "Salvează unitatea" : "Adaugă unitatea";
   unitForm.elements.id.value = unit?.id || "";
   unitForm.elements.id.disabled = Boolean(editingUnitId);
-  unitForm.elements.group.value = unit?.group || (activeMode === "camping" ? "camping" : "room");
-  unitForm.elements.kind.value = unit?.kind || (activeMode === "camping" ? "Campare cort" : "Cameră dublă");
+  unitForm.elements.group.value = unit ? unitTypeOptionForUnit(unit) : normalizeTimelineMode(activeMode);
+  unitForm.elements.kind.value = unit?.kind || defaultKindForMode(activeMode);
   unitForm.elements.pricingMode.value = unit?.pricingMode || "per-night";
   const calendarBasePrice = firstUnitCalendarPrice(unitPricingDraft);
   setUnitMoneyField("adultPrice", calendarBasePrice);
@@ -2410,7 +2570,7 @@ function syncCloneUnitPreview() {
   }
 
   const modeLabel = sourceUnit.pricingMode === "per-person-night" ? "pe persoană/noapte" : "pe noapte";
-  const groupLabel = sourceUnit.group === "camping" ? "Camping" : "Camere";
+  const groupLabel = unitTypeLabel(unitTypeOptionForUnit(sourceUnit));
   const customCount = Object.keys(normalizeDailyPrices(sourceUnit.dailyPrices)).length;
   cloneUnitPreview.textContent = `Se copiază: ${sourceUnit.kind} · ${groupLabel} · ${modeLabel} · ${customCount} tarife calendar.`;
 }
@@ -2538,12 +2698,13 @@ function renderUnitList() {
           : "tarif pe zi/noapte";
       const escapedId = escapeHtml(unit.id);
       const escapedKind = escapeHtml(unit.kind);
+      const escapedTypeLabel = escapeHtml(unitTypeLabel(unitTypeOptionForUnit(unit)));
 
       return `
         <article class="unit-list-card">
           <div>
             <strong>${escapedId}</strong>
-            <span>${escapedKind} · ${unit.group === "camping" ? "Camping" : "Camere"}</span>
+            <span>${escapedKind} · ${escapedTypeLabel}</span>
             <small>${modeLabel} · ${pricingLabel} · ${customCount} tarife calendar</small>
           </div>
           <div class="unit-list-actions">
@@ -2589,6 +2750,83 @@ function deleteUnit(unitId) {
     data: { unit: deletedUnit }
   });
   showToast(`Unitate ștearsă: ${unitId}`);
+}
+
+function stationingDeductionAlreadyApplied(record, stayKey) {
+  return normalizeStationingDeductions(record?.deductions).some((deduction) => deduction.stayKey === stayKey);
+}
+
+function stationingDeductionEntryForStay(stay, record) {
+  const remainingDeductibleNights = Math.max(0, Math.max(1, Number(record?.prepaidNights || 1)) - stationingDeductedNights(record));
+  const nights = Math.min(
+    Math.max(1, Number(stay?.stationingDeduction?.nights || stayDetails(stay).nights || 1)),
+    Math.max(1, remainingDeductibleNights)
+  );
+  const amount = normalizeMoneyValue(nights * Number(record?.nightlyPrice || 0));
+  return {
+    key: `stationing-deduction-${stay.key}-${Date.now()}`,
+    stayKey: stay.key,
+    guest: stay.guest,
+    unitId: stay.id,
+    start: stay.start,
+    end: stay.end,
+    nights,
+    amount,
+    appliedAt: new Date().toISOString()
+  };
+}
+
+async function applyStationingDeductionForStay(stay, options = {}) {
+  const deduction = normalizeStayStationingDeduction(stay?.stationingDeduction);
+  if (!stay || !deduction || deduction.appliedAt) return null;
+  const recordIndex = stationing.findIndex((item) => item.key === deduction.recordKey);
+  if (recordIndex < 0) return null;
+  const record = stationing[recordIndex];
+  if (stationingDeductionAlreadyApplied(record, stay.key)) return null;
+  const remainingDeductibleNights = Math.max(0, Math.max(1, Number(record.prepaidNights || 1)) - stationingDeductedNights(record));
+  if (remainingDeductibleNights <= 0) return null;
+
+  const nights = Math.min(remainingDeductibleNights, Math.max(1, Number(deduction.nights || stayDetails(stay).nights || 1)));
+  if (options.ask !== false) {
+    const confirmed = window.confirm(
+      `Deduci ${nights} ${nights === 1 ? "noapte" : "nopti"} din stationarea pentru ${stationingRecordLabel(record)} inainte de plata?`
+    );
+    if (!confirmed) return null;
+  }
+
+  const previousRecord = { ...record, deductions: normalizeStationingDeductions(record.deductions) };
+  const entry = stationingDeductionEntryForStay(stay, record);
+  const nextRecord = normalizeStationingRecord({
+    ...record,
+    deductions: [...normalizeStationingDeductions(record.deductions), entry]
+  });
+  stationing[recordIndex] = nextRecord;
+
+  const updatedDeduction = normalizeStayStationingDeduction({
+    ...deduction,
+    appliedAt: entry.appliedAt,
+    appliedNights: entry.nights,
+    appliedAmount: entry.amount
+  });
+  stay.stationingDeduction = updatedDeduction;
+
+  await logActivity({
+    eventType: "update",
+    entityType: "stationing",
+    entityKey: nextRecord.key,
+    entityLabel: activityStationingLabel(nextRecord),
+    amount: entry.amount,
+    method: "client-rv-deduction",
+    message: `${entry.nights} ${entry.nights === 1 ? "noapte" : "nopti"} au fost deduse din stationarea ${stationingRecordLabel(nextRecord)} pentru clientul ${stay.guest}.`,
+    data: {
+      previous: previousRecord,
+      current: nextRecord,
+      deduction: entry,
+      stayKey: stay.key
+    }
+  });
+
+  return { record: nextRecord, deduction: updatedDeduction };
 }
 
 async function generateReceipt(stayKey, method) {
@@ -2663,6 +2901,16 @@ async function generateReceipt(stayKey, method) {
       });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || "Nu am putut genera bonul");
+    }
+
+    if (targetType === "stay") {
+      const deductionTargets =
+        draft.isLinkedTotal && Array.isArray(draft.linkedKeys)
+          ? draft.linkedKeys.map((key) => stays.find((item) => item.key === key)).filter(Boolean)
+          : [draft.source === "form" ? draft.stay : stay];
+      for (const deductionStay of deductionTargets) {
+        await applyStationingDeductionForStay(deductionStay, { ask: true });
+      }
     }
 
     if (targetType === "stationing") {
@@ -2982,7 +3230,9 @@ function timelineLaneItems(unit) {
   const items = sorted.map((stay) => {
     const start = stayStartDate(stay) || timelineWindowStart;
     const end = stayEndDate(stay) || addDays(start, 1);
-    let laneIndex = laneEnds.findIndex((laneEnd) => start >= laneEnd);
+    // Touching reservation bars need separate lanes because their full labels
+    // can extend beyond short bars and otherwise overlap each other.
+    let laneIndex = laneEnds.findIndex((laneEnd) => start > laneEnd);
 
     if (laneIndex === -1) {
       laneIndex = laneEnds.length;
@@ -3012,19 +3262,21 @@ function timelineBarHtml(stay, lane, dayCount) {
   const start = stayStartDate(stay);
   const end = stayEndDate(stay);
   const duration = start && end ? daysBetween(start, end) : 0;
-  const compactClass = duration <= 1 ? "is-compact" : duration <= 2 ? "is-tight" : "";
+  const compactClass = duration <= 2 ? "is-compact" : duration <= 4 ? "is-tight" : "";
   const paymentClass = isStayFullyPaid(stay) ? "is-paid" : "is-unpaid";
   const typeClass = stay.group === "camping" ? "is-camping-stay" : "is-room-stay";
 
   return `
-    <div class="timeline-bar ${compactClass} ${typeClass} ${paymentClass}" data-stay-key="${escapeHtml(stay.key)}" data-guest="${escapeHtml(stay.guest)}" style="grid-column: ${startColumn} / ${endColumn}; grid-row: ${lane};" title="Trage mijlocul pentru mutare sau marginile pentru redimensionare">
+    <div class="timeline-bar ${compactClass} ${typeClass} ${paymentClass}" data-stay-key="${escapeHtml(stay.key)}" style="grid-column: ${startColumn} / ${endColumn}; grid-row: ${lane};" title="Trage mijlocul pentru mutare sau marginile pentru redimensionare">
       <button class="timeline-handle" type="button" data-drag-mode="resize-start" aria-label="Mută începutul"></button>
       <div class="timeline-bar-content" data-drag-mode="move">
-        <div>
-          <strong>${escapeHtml(stay.guest)}</strong>
-          <span>${escapeHtml(stay.dates)}</span>
+        <div class="timeline-bar-label">
+          <strong class="timeline-bar-guest">${escapeHtml(stay.guest)}</strong>
+          <span class="timeline-bar-meta">
+            <span class="timeline-bar-dates">${escapeHtml(stay.dates)}</span>
+            <span class="timeline-bar-party">${escapeHtml(stay.party)} pers.</span>
+          </span>
         </div>
-        <span>${escapeHtml(stay.party)} pers.</span>
       </div>
       <button class="timeline-handle" type="button" data-drag-mode="resize-end" aria-label="Mută finalul"></button>
     </div>
@@ -3182,7 +3434,7 @@ function renderGuestTimeline(options = {}) {
     `;
   });
 
-  guestTimelineMode.textContent = activeMode === "room" ? "Vedere camere" : "Vedere camping";
+  guestTimelineMode.textContent = `Vedere ${timelineModeLabel(activeMode)}`;
   updateTimelineMonthLabel();
   timelineShell.style.setProperty("--timeline-days", dayCount);
   timelineScale.innerHTML = `<span class="timeline-corner">Loc</span>${days.join("")}`;
@@ -3200,7 +3452,7 @@ function renderGuestTimeline(options = {}) {
     };
     guestTimeline.classList.remove("is-virtualized");
     guestTimeline.style.height = "";
-    guestTimeline.innerHTML = `<p class="empty-state">Nu există locuri ${activeMode === "room" ? "pentru camere" : "pentru camping"} potrivite.</p>`;
+    guestTimeline.innerHTML = `<p class="empty-state">Nu există locuri pentru ${timelineModeLabel(activeMode)} potrivite.</p>`;
     if (options.preserveScroll) timelineShell.scrollLeft = previousScrollLeft;
     return;
   }
@@ -3248,16 +3500,16 @@ function renderGuestTimeline(options = {}) {
 }
 
 function setMode(mode) {
-  activeMode = mode;
-  document.body.dataset.mode = mode;
-  modeSwitch.checked = mode === "camping";
+  activeMode = normalizeTimelineMode(mode);
+  document.body.dataset.mode = groupForMode(activeMode);
+  updateModeSwitchUi();
   markPagesDirty("calendar", "clients", "statistics");
   renderMetrics();
   renderGuestTimeline();
   dirtyPages.delete("calendar");
   refreshIcons();
   queueFileSave();
-  showToast(mode === "camping" ? "Calendar camping activ" : "Calendar camere activ");
+  showToast(`Calendar ${timelineModeLabel(activeMode)} activ`);
 }
 
 function renderMetrics() {
@@ -3618,6 +3870,10 @@ function renderStationing() {
             <div>
               <dt>Rest</dt>
               <dd>${formatCurrency(record.balance)}</dd>
+            </div>
+            <div>
+              <dt>Deduse</dt>
+              <dd>${details.deductedNights} nopti</dd>
             </div>
           </dl>
           <div class="payment-row">
@@ -4508,11 +4764,14 @@ function syncStationingTotals() {
   const startDate = stationingForm.elements.startDate.value || toISODate(today);
   const prepaidNights = Math.max(1, Number(stationingForm.elements.prepaidNights.value || 1));
   const nightlyPrice = normalizeMoneyValue(stationingForm.elements.nightlyPrice.value);
-  const totalPrice = normalizeMoneyValue(prepaidNights * nightlyPrice);
+  const existingRecord = editingStationingKey ? stationing.find((item) => item.key === editingStationingKey) : null;
+  const deductedNights = stationingDeductedNights({ prepaidNights, deductions: existingRecord?.deductions || [] });
+  const billableNights = Math.max(0, prepaidNights - deductedNights);
+  const totalPrice = normalizeMoneyValue(billableNights * nightlyPrice);
   const paidAmount = Math.min(totalPrice, normalizeMoneyValue(stationingForm.elements.paidAmount.value));
   const balance = Math.max(0, totalPrice - paidAmount);
   const endDate = stationingEndDate({ startDate, prepaidNights });
-  const details = stationingDetails({ startDate, prepaidNights, nightlyPrice, totalPrice, paidAmount });
+  const details = stationingDetails({ startDate, prepaidNights, nightlyPrice, totalPrice, paidAmount, deductions: existingRecord?.deductions || [] });
 
   stationingForm.elements.totalPrice.value = totalPrice.toFixed(2);
   if (normalizeMoneyValue(stationingForm.elements.paidAmount.value) > totalPrice) {
@@ -4716,13 +4975,15 @@ function openTimelineContextMenu(event) {
 
   event.preventDefault();
   contextStayKey = bar.dataset.stayKey;
-  const menuWidth = 190;
-  const menuHeight = 92;
-  const left = Math.min(event.clientX, window.innerWidth - menuWidth - 12);
-  const top = Math.min(event.clientY, window.innerHeight - menuHeight - 12);
-  timelineContextMenu.style.left = `${Math.max(12, left)}px`;
-  timelineContextMenu.style.top = `${Math.max(12, top)}px`;
+  timelineContextMenu.style.left = "0px";
+  timelineContextMenu.style.top = "0px";
   timelineContextMenu.hidden = false;
+  const rect = timelineContextMenu.getBoundingClientRect();
+  const gutter = 12;
+  const maxLeft = Math.max(gutter, window.innerWidth - rect.width - gutter);
+  const maxTop = Math.max(gutter, window.innerHeight - rect.height - gutter);
+  timelineContextMenu.style.left = `${Math.min(Math.max(gutter, event.clientX), maxLeft)}px`;
+  timelineContextMenu.style.top = `${Math.min(Math.max(gutter, event.clientY), maxTop)}px`;
   refreshIcons();
 }
 
@@ -4742,16 +5003,36 @@ function toggleSidebar() {
   queueFileSave();
 }
 
+async function loadAppVersion() {
+  if (!appVersion) return;
+  try {
+    const response = await fetch("/version.json", { cache: "no-store" });
+    const versionInfo = await response.json();
+    const version = String(versionInfo.version || "").trim();
+    appVersion.textContent = version ? `Versiune ${version}` : "";
+  } catch {
+    appVersion.textContent = "";
+  }
+}
+
 function groupFromKind(kind) {
   const value = String(kind || "").toLowerCase();
-  if (value === "camping" || value.includes("camping") || value.includes("campare") || value.includes("rulot")) {
+  if (
+    value === "camping" ||
+    value === "tent" ||
+    value === "cort" ||
+    value === "rv" ||
+    value.includes("camping") ||
+    value.includes("campare") ||
+    value.includes("rulot")
+  ) {
     return "camping";
   }
   return "room";
 }
 
 function kindOptionForGroup(group) {
-  return group === "camping" ? "camping" : "room";
+  return normalizeTimelineMode(group);
 }
 
 function prefixFromKind(kind) {
@@ -4766,8 +5047,10 @@ function prefixFromKind(kind) {
 
 function renderUnitSelect(selectedUnitId = "") {
   const currentKind = bookingForm.elements.kind.value || kindOptionForGroup(activeMode);
-  const group = groupFromKind(currentKind);
-  const options = activeUnitOptions(group);
+  const mode = normalizeTimelineMode(currentKind);
+  const options = unitOptions()
+    .filter((unit) => unitMatchesTimelineMode(unit, mode))
+    .sort((first, second) => first.id.localeCompare(second.id, "ro-RO", { numeric: true }));
   const selectedExists = options.some((unit) => unit.id === selectedUnitId);
   const fallbackId = selectedExists ? selectedUnitId : options[0]?.id || "";
 
@@ -4779,19 +5062,20 @@ function renderUnitSelect(selectedUnitId = "") {
 }
 
 function ensureKindOption(kind) {
-  const value = kindOptionForGroup(groupFromKind(kind));
+  const value = normalizeTimelineMode(kind);
   if (!value) return;
   if (![...bookingForm.elements.kind.options].some((option) => option.value === value)) {
-    bookingForm.elements.kind.add(new Option(value === "camping" ? "Camping" : "Camere", value));
+    bookingForm.elements.kind.add(new Option(unitTypeLabel(value), value));
   }
 }
 
 function syncKindFromSelectedUnit() {
   const unit = unitById(bookingForm.elements.unitId.value);
   if (!unit) return;
-  bookingForm.elements.kind.value = kindOptionForGroup(unit.group);
+  bookingForm.elements.kind.value = unitTypeOptionForUnit(unit);
   syncBookingPaymentFields();
   renderBookingRangeCalendar();
+  renderBookingStationingLink();
 }
 
 let lastPricingSnapshot = { arrival: "", departure: "", nights: 0, adults: 0, children: 0 };
@@ -4942,6 +5226,7 @@ function syncNightsFromDates() {
   if (nights > 0) {
     bookingForm.elements.nights.value = nights;
   }
+  renderBookingStationingLink();
 }
 
 function syncDepartureFromNights() {
@@ -4950,6 +5235,7 @@ function syncDepartureFromNights() {
   if (!arrival || nights < 1) return;
 
   bookingForm.elements.departure.value = toISODate(addDays(dateFromISO(arrival), nights));
+  renderBookingStationingLink();
 }
 
 function syncBalanceFromPrice() {
@@ -4971,12 +5257,13 @@ function openBookingModal(defaults = {}) {
   const defaultArrival = defaults.arrival ? dateFromISO(defaults.arrival) : defaultArrivalDate();
   const defaultDeparture = defaults.departure || defaults.end || toISODate(addDays(defaultArrival, 2));
   const nights = Math.max(1, daysBetween(defaultArrival, dateFromISO(defaultDeparture)));
-  const kind = kindOptionForGroup(defaults.group || groupFromKind(defaults.kind || activeMode));
+  const kind = normalizeTimelineMode(defaults.kind || defaults.group || activeMode);
   const price = Number(defaults.price ?? 600);
   const balance = normalizeMoneyValue(defaults.balance ?? price);
   const deposit = 0;
   const defaultStayContext = { start: toISODate(defaultArrival), end: defaultDeparture };
   bookingFacilityDraft = normalizeStayFacilities(defaults.facilities, defaultStayContext);
+  bookingStationingDeductionDraft = normalizeStayStationingDeduction(defaults.stationingDeduction);
   const barTotal = reservationBarTotal(defaults.barItems);
   const basePrice = normalizeMoneyValue(defaults.basePrice ?? Math.max(0, price - manualFacilityTotal(bookingFacilityDraft) - barTotal));
 
@@ -4988,7 +5275,7 @@ function openBookingModal(defaults = {}) {
   bookingSubmitLabel.textContent = editingStayKey ? "Salvează clientul" : "Adaugă rezervarea";
   deleteBookingButton.hidden = !editingStayKey;
   receiptFromBookingButton.hidden = !editingStayKey;
-  if (addLinkedReservationButton) addLinkedReservationButton.hidden = !editingStayKey;
+  if (addLinkedReservationButton) addLinkedReservationButton.hidden = false;
   bookingEditSession = editingStayKey
     ? {
         key: editingStayKey,
@@ -5056,6 +5343,7 @@ function openBookingModal(defaults = {}) {
     renderBookingBarItems();
     renderBookingRangeCalendar();
   }
+  renderBookingStationingLink();
   renderLinkedReservations();
   savePricingSnapshot();
   bookingModal.classList.add("is-open");
@@ -5074,6 +5362,7 @@ function closeBookingModal() {
   bookingUnitId = null;
   bookingRangeAnchorDate = null;
   bookingFacilityDraft = [];
+  bookingStationingDeductionDraft = null;
   if (linkedReservationsSection) linkedReservationsSection.hidden = true;
   if (linkedReservationsTrack) linkedReservationsTrack.innerHTML = "";
   if (linkedReservationsCount) linkedReservationsCount.textContent = "";
@@ -5082,6 +5371,9 @@ function closeBookingModal() {
   _lastLinkedTabKeys = [];
   if (bookingBarSection) bookingBarSection.hidden = true;
   if (bookingBarItems) bookingBarItems.innerHTML = "";
+  if (bookingStationingLinkSection) bookingStationingLinkSection.hidden = true;
+  if (bookingStationingLinkResults) bookingStationingLinkResults.innerHTML = "";
+  if (bookingStationingLinkStatus) bookingStationingLinkStatus.innerHTML = "";
   clearImportedPricing();
   deleteBookingButton.hidden = true;
   receiptFromBookingButton.hidden = true;
@@ -5099,6 +5391,126 @@ function setBookingBasePrice(value) {
 function currentBookingGroup() {
   const selectedUnit = unitById(bookingForm.elements.unitId.value);
   return selectedUnit?.group || groupFromKind(bookingForm.elements.kind.value);
+}
+
+function currentBookingMode() {
+  const selectedUnit = unitById(bookingForm.elements.unitId.value);
+  return selectedUnit ? unitTypeOptionForUnit(selectedUnit) : normalizeTimelineMode(bookingForm.elements.kind.value);
+}
+
+function currentBookingIsRv() {
+  return currentBookingMode() === "rv";
+}
+
+function stationingRecordLabel(record) {
+  if (!record) return "";
+  return `${record.owner || "Client"} - ${record.caravan || "rulota"}`;
+}
+
+function bookingDeductionNights() {
+  return stayNightCount(bookingForm.elements.arrival.value, bookingForm.elements.departure.value);
+}
+
+function stationingMatchesBooking(record, query) {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return true;
+  return Number.isFinite(
+    Math.min(
+      fuzzyMatchScore(normalizedQuery, record.owner),
+      fuzzyMatchScore(normalizedQuery, record.caravan),
+      fuzzyMatchScore(normalizedQuery, record.phone),
+      fuzzyMatchScore(normalizedQuery, record.note)
+    )
+  );
+}
+
+function stationingDeductionFromDraft() {
+  const record = stationing.find((item) => item.key === bookingStationingDeductionDraft?.recordKey);
+  if (!record) return null;
+  return normalizeStayStationingDeduction({
+    ...bookingStationingDeductionDraft,
+    recordLabel: stationingRecordLabel(record),
+    nights: bookingStationingDeductionDraft.appliedAt ? bookingStationingDeductionDraft.nights : bookingDeductionNights()
+  });
+}
+
+function renderBookingStationingLink() {
+  if (!bookingStationingLinkSection || !bookingStationingLinkStatus || !bookingStationingLinkResults) return;
+  const isRv = currentBookingIsRv();
+  bookingStationingLinkSection.hidden = !isRv;
+  if (!isRv) {
+    bookingStationingDeductionDraft = null;
+    bookingStationingLinkStatus.innerHTML = "";
+    bookingStationingLinkResults.innerHTML = "";
+    return;
+  }
+
+  const query = bookingForm.elements.guest.value.trim();
+  const nights = bookingDeductionNights();
+  const selectedRecord = stationing.find((item) => item.key === bookingStationingDeductionDraft?.recordKey);
+  const selectedDeduction = selectedRecord ? stationingDeductionFromDraft() : null;
+  if (bookingStationingDeductionDraft && !selectedRecord) {
+    bookingStationingDeductionDraft = null;
+  }
+
+  const selectedAlreadyApplied = Boolean(selectedDeduction?.appliedAt);
+  bookingStationingLinkStatus.innerHTML = selectedRecord
+    ? `
+      <div class="stationing-link-selected">
+        <span><strong>${escapeHtml(stationingRecordLabel(selectedRecord))}</strong> ${selectedAlreadyApplied ? "are deducerea aplicata" : "selectata pentru deducere"}</span>
+        <span>${selectedDeduction.nights} ${selectedDeduction.nights === 1 ? "noapte" : "nopti"} ${selectedAlreadyApplied ? "au fost scazute din stationare." : "se vor scadea la plata."}</span>
+        ${selectedAlreadyApplied ? "" : `<button class="ghost-button compact-text" type="button" data-clear-stationing-deduction>
+          <i data-lucide="x" aria-hidden="true"></i>
+          <span>Elimina</span>
+        </button>`}
+      </div>
+    `
+    : `<p class="empty-state">Scrie numele clientului ca sa gasesti rulota din stationare.</p>`;
+
+  const matches = stationing
+    .filter((record) => stationingMatchesBooking(record, query))
+    .sort((first, second) => {
+      if (first.key === selectedDeduction?.recordKey) return -1;
+      if (second.key === selectedDeduction?.recordKey) return 1;
+      return stationingRecordLabel(first).localeCompare(stationingRecordLabel(second), "ro-RO", { numeric: true });
+    })
+    .slice(0, 6);
+
+  bookingStationingLinkResults.innerHTML = matches.length
+    ? matches
+        .map((record) => {
+          const details = stationingDetails(record);
+          const selected = record.key === selectedDeduction?.recordKey;
+          return `
+            <button class="stationing-link-card ${selected ? "is-selected" : ""}" type="button" data-stationing-deduction="${escapeHtml(record.key)}">
+              <span>
+                <strong>${escapeHtml(stationingRecordLabel(record))}</strong>
+                <small>${details.remainingNights} nopti ramase · rest ${formatCurrency(record.balance)}</small>
+              </span>
+              <em>${selected ? "selectata" : "alege"}</em>
+            </button>
+          `;
+        })
+        .join("")
+    : `<p class="empty-state">Nu am gasit rulote in stationare pentru cautarea curenta.</p>`;
+  refreshIcons(bookingStationingLinkSection);
+}
+
+function selectBookingStationingDeduction(recordKey) {
+  const record = stationing.find((item) => item.key === recordKey);
+  if (!record) return;
+  const nights = bookingDeductionNights();
+  const confirmed = window.confirm(
+    `Folosesti ${stationingRecordLabel(record)} pentru deducere stationare (${nights} ${nights === 1 ? "noapte" : "nopti"}) la plata?`
+  );
+  if (!confirmed) return;
+  bookingStationingDeductionDraft = normalizeStayStationingDeduction({
+    recordKey: record.key,
+    recordLabel: stationingRecordLabel(record),
+    selectedAt: new Date().toISOString(),
+    nights
+  });
+  renderBookingStationingLink();
 }
 
 function syncBookingFacilityTotals() {
@@ -5255,6 +5667,20 @@ function renderLinkedReservations() {
   }
 }
 
+function linkedReservationDraftDefaultsFromStay(source) {
+  return {
+    personId: source.personId,
+    group: source.group,
+    kind: unitTypeOptionForUnit(unitById(source.id) || source),
+    guest: source.guest,
+    phone: source.phone,
+    adults: source.adults,
+    children: source.children,
+    car: source.car,
+    note: source.note
+  };
+}
+
 function openLinkedReservationDraft() {
   const source = editingStayKey ? stays.find((stay) => stay.key === editingStayKey) : null;
   if (!source || source.guest === "Disponibil") return;
@@ -5263,18 +5689,29 @@ function openLinkedReservationDraft() {
     saveStays();
   }
 
-  openBookingModal({
-    personId: source.personId,
-    group: source.group,
-    kind: kindOptionForGroup(source.group),
-    guest: source.guest,
-    phone: source.phone,
-    adults: source.adults,
-    children: source.children,
-    car: source.car,
-    note: source.note
-  });
+  openBookingModal(linkedReservationDraftDefaultsFromStay(source));
   showToast("Alege unitatea și perioada pentru aceeași persoană.");
+}
+
+function handleAddLinkedReservation() {
+  if (editingStayKey) {
+    openLinkedReservationDraft();
+    return;
+  }
+  if (typeof bookingForm.reportValidity === "function" && !bookingForm.reportValidity()) {
+    openLinkedDraftAfterSave = false;
+    return;
+  }
+  if (typeof bookingForm.checkValidity === "function" && !bookingForm.checkValidity()) {
+    openLinkedDraftAfterSave = false;
+    return;
+  }
+  openLinkedDraftAfterSave = true;
+  if (typeof bookingForm.requestSubmit === "function") {
+    bookingForm.requestSubmit();
+  } else {
+    bookingForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  }
 }
 
 function reservationBarItemsMarkup(stay, options = {}) {
@@ -5511,6 +5948,7 @@ function setBookingRangeFromCalendar(startText, endText = startText) {
   syncNightsFromDates();
   syncBookingCalendarMonthToArrival();
   recalculateBookingPriceAfterUserChange();
+  renderBookingStationingLink();
 }
 
 function selectBookingRangeDate(dateText) {
@@ -5576,20 +6014,25 @@ function renderSourceBookings() {
   const orderedBookings = orderedSourceBookings(todayText);
   const todayBookings = orderedBookings.filter((booking) => booking.start === todayText);
   const otherBookings = orderedBookings.filter((booking) => booking.start !== todayText);
-  const rowForBooking = (booking, index) => `
-    <tr data-source-index="${index}">
-      <td>
-        <strong>${booking.guest}</strong>
-        <span>${booking.phone || "fără telefon"}</span>
+  const rowForBooking = (booking, index) => {
+    const dateLabel = formatDateRangeLabel(booking.start, booking.end);
+    const unitLabel = [booking.kind, booking.unitHint].filter(Boolean).join(" · ");
+    const partyLabel = `${Number(booking.party || 0)} pers.`;
+    return `
+    <tr class="source-record-row" data-source-index="${index}">
+      <td class="source-record-client" data-label="Nume">
+        <strong>${escapeHtml(booking.guest)}</strong>
+        <span>${escapeHtml(booking.phone || "fără telefon")}</span>
       </td>
-      <td>
-        <strong>${booking.start} - ${booking.end}</strong>
-        <span>${booking.kind}${booking.unitHint ? ` · ${booking.unitHint}` : ""}</span>
+      <td class="source-record-period" data-label="Perioadă">
+        <strong>${escapeHtml(dateLabel)}</strong>
+        <span>${escapeHtml(unitLabel || booking.source || "")}</span>
       </td>
-      <td>${booking.party}</td>
-      <td>${formatCurrency(Number(booking.price || 0))}</td>
+      <td class="source-record-party" data-label="Pers.">${escapeHtml(partyLabel)}</td>
+      <td class="source-record-price" data-label="Total plată">${formatCurrency(Number(booking.price || 0))}</td>
     </tr>
   `;
+  };
   const todayRows = todayBookings.map((booking) => rowForBooking(booking, sourceBookings.indexOf(booking)));
   const separator =
     todayBookings.length && otherBookings.length
@@ -5606,7 +6049,7 @@ function renderSourceBookings() {
       ? [
           `
           <tr class="source-record-separator source-record-empty-today">
-            <td colspan="4"><span>Nu există rezervări pentru azi (${todayText})</span></td>
+            <td colspan="4"><span>Nu există rezervări pentru azi (${formatShortDateLabel(todayText) || todayText})</span></td>
           </tr>
         `
         ]
@@ -5649,20 +6092,19 @@ function sourceTodayArrivalCount() {
 }
 
 function setSourceRecordsMode(mode) {
-  sourceRecordsMode = mode === "camping" ? "camping" : "room";
-  sourceModeSwitch.checked = sourceRecordsMode === "camping";
+  sourceRecordsMode = normalizeTimelineMode(mode);
+  updateSourceModeSwitchUi();
 }
 
 function syncSourceModeFromKind() {
-  setSourceRecordsMode(groupFromKind(bookingForm.elements.kind.value));
+  setSourceRecordsMode(bookingForm.elements.kind.value);
 }
 
 function applySourceBooking(booking) {
   if (!booking) return;
 
   const hintedUnit = booking.unitHint ? unitById(booking.unitHint) : null;
-  const bookingGroup = hintedUnit?.group || booking.group || groupFromKind(booking.kind || sourceRecordsMode);
-  const bookingKind = kindOptionForGroup(bookingGroup);
+  const bookingKind = hintedUnit ? unitTypeOptionForUnit(hintedUnit) : normalizeTimelineMode(sourceRecordsMode || booking.kind || booking.group);
   ensureKindOption(bookingKind);
   bookingForm.elements.kind.value = bookingKind;
   bookingUnitId = hintedUnit?.id || bookingUnitId;
@@ -5691,14 +6133,15 @@ function applySourceBooking(booking) {
   setMoneyField("balance", booking.price);
   renderBookingFacilities();
   renderBookingRangeCalendar();
+  renderBookingStationingLink();
   savePricingSnapshot();
   showToast(`Date preluate pentru ${booking.guest}`);
 }
 
 async function loadSourceBookings() {
-  const mode = sourceRecordsMode;
+  const mode = groupForMode(sourceRecordsMode);
   loadSourceBookingsButton.disabled = true;
-  sourceRecordStatus.textContent = `Se încarcă ultimele 300 rezervări pentru ${mode === "camping" ? "camping" : "camere"}...`;
+  sourceRecordStatus.textContent = `Se încarcă ultimele 300 rezervări pentru ${timelineModeLabel(sourceRecordsMode)}...`;
 
   try {
     const response = await fetch(`/api/source-bookings?mode=${mode}`, { cache: "no-store" });
@@ -5849,15 +6292,14 @@ function updateDraggedTimelineBar() {
   const duration = start && end ? daysBetween(start, end) : 0;
 
   bar.style.gridColumn = `${startColumn} / ${endColumn}`;
-  bar.dataset.guest = stay.guest || "";
-  bar.classList.toggle("is-compact", duration <= 1);
-  bar.classList.toggle("is-tight", duration > 1 && duration <= 2);
+  bar.classList.toggle("is-compact", duration <= 2);
+  bar.classList.toggle("is-tight", duration > 2 && duration <= 4);
   bar.classList.toggle("is-paid", isStayFullyPaid(dragState.stay));
   bar.classList.toggle("is-unpaid", !isStayFullyPaid(dragState.stay));
 
-  const guestLabel = bar.querySelector(".timeline-bar-content strong");
-  const dateLabel = bar.querySelector(".timeline-bar-content div span");
-  const partyLabel = bar.querySelector(".timeline-bar-content > span");
+  const guestLabel = bar.querySelector(".timeline-bar-guest");
+  const dateLabel = bar.querySelector(".timeline-bar-dates");
+  const partyLabel = bar.querySelector(".timeline-bar-party");
   if (guestLabel) guestLabel.textContent = stay.guest || "";
   if (dateLabel) dateLabel.textContent = stay.dates || "";
   if (partyLabel) partyLabel.textContent = `${stay.party || 0} pers.`;
@@ -6152,8 +6594,10 @@ function setActivePage(page) {
 
 window.setActivePage = setActivePage;
 
-modeSwitch.addEventListener("change", () => {
-  setMode(modeSwitch.checked ? "camping" : "room");
+modeSwitch?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-mode-option]");
+  if (!button) return;
+  setMode(button.dataset.modeOption);
 });
 
 function setVisibleMonth(month) {
@@ -6318,7 +6762,7 @@ closeBarAttachModalButton?.addEventListener("click", closeBarAttachModal);
 closeBarPaymentModalButton.addEventListener("click", () => closeBarPaymentModal());
 openSagaExportModalButton.addEventListener("click", openSagaExportModal);
 closeSagaExportModalButton.addEventListener("click", closeSagaExportModal);
-addLinkedReservationButton?.addEventListener("click", openLinkedReservationDraft);
+addLinkedReservationButton?.addEventListener("click", handleAddLinkedReservation);
 linkedReservationsTrack?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-linked-reservation]");
   if (!button) return;
@@ -6405,6 +6849,7 @@ bookingForm.elements.kind.addEventListener("change", () => {
   syncKindFromSelectedUnit();
   syncBookingPaymentFields();
   recalculateBookingPrice({ unlockImported: true });
+  renderBookingStationingLink();
   sourceBookings = [];
   syncSourceModeFromKind();
   renderSourceBookings();
@@ -6413,6 +6858,7 @@ bookingForm.elements.kind.addEventListener("change", () => {
 bookingForm.elements.unitId.addEventListener("change", () => {
   syncKindFromSelectedUnit();
   recalculateBookingPrice({ unlockImported: true });
+  renderBookingStationingLink();
 });
 const syncDepartureAndPricing = () => {
   syncDepartureFromNights();
@@ -6430,6 +6876,7 @@ bookingForm.elements.arrival.addEventListener("change", syncDepartureAndPricing)
 bookingForm.elements.nights.addEventListener("input", syncDepartureAndPricing);
 bookingForm.elements.nights.addEventListener("change", syncDepartureAndPricing);
 bookingForm.elements.departure.addEventListener("change", syncNightsAndPricing);
+bookingForm.elements.guest.addEventListener("input", renderBookingStationingLink);
 bookingForm.elements.price.addEventListener("input", syncBasePriceFromTotalInput);
 bookingForm.elements.adults.addEventListener("input", recalculateBookingPriceAfterUserChange);
 bookingForm.elements.adults.addEventListener("change", recalculateBookingPriceAfterUserChange);
@@ -6445,9 +6892,22 @@ bookingFacilities?.addEventListener("change", (event) => {
   if (!checkbox) return;
   setBookingFacilityEnabled(checkbox.dataset.facilityKey, checkbox.checked);
 });
+bookingStationingLinkSection?.addEventListener("click", (event) => {
+  const clearButton = event.target.closest("[data-clear-stationing-deduction]");
+  if (clearButton) {
+    bookingStationingDeductionDraft = null;
+    renderBookingStationingLink();
+    return;
+  }
+  const card = event.target.closest("[data-stationing-deduction]");
+  if (!card) return;
+  selectBookingStationingDeduction(card.dataset.stationingDeduction);
+});
 loadSourceBookingsButton.addEventListener("click", loadSourceBookings);
-sourceModeSwitch.addEventListener("change", () => {
-  setSourceRecordsMode(sourceModeSwitch.checked ? "camping" : "room");
+sourceModeSwitch.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-source-mode-option]");
+  if (!button) return;
+  setSourceRecordsMode(button.dataset.sourceModeOption);
   sourceBookings = [];
   renderSourceBookings();
   loadSourceBookings();
@@ -6639,6 +7099,7 @@ stationingForm.addEventListener("submit", (event) => {
     totalPrice: Number(data.get("totalPrice") || 0),
     paidAmount: Number(data.get("paidAmount") || 0),
     balance: Number(data.get("balance") || 0),
+    deductions: stationing.find((item) => item.key === key)?.deductions || [],
     note: String(data.get("note") || "").trim()
   });
 
@@ -6760,7 +7221,13 @@ window.addEventListener("blur", finishCalendarDrags);
 
 unitForm.elements.pricingMode.addEventListener("change", renderUnitPricingCalendar);
 unitForm.elements.kind.addEventListener("input", renderUnitPricingCalendar);
-unitForm.elements.group.addEventListener("change", renderUnitPricingCalendar);
+unitForm.elements.group.addEventListener("change", () => {
+  const selectedMode = normalizeTimelineMode(unitForm.elements.group.value);
+  if (!editingUnitId || !unitForm.elements.kind.value.trim()) {
+    unitForm.elements.kind.value = defaultKindForMode(selectedMode);
+  }
+  renderUnitPricingCalendar();
+});
 
 unitForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -6854,9 +7321,11 @@ timelineContextMenu.addEventListener("click", (event) => {
 
 bookingForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  const shouldOpenLinkedDraftAfterSave = openLinkedDraftAfterSave;
+  openLinkedDraftAfterSave = false;
   const data = new FormData(bookingForm);
   const selectedUnit = unitById(String(data.get("unitId") || ""));
-  const kind = selectedUnit?.kind || data.get("kind");
+  const kind = selectedUnit?.kind || defaultKindForMode(data.get("kind"));
   const group = selectedUnit?.group || groupFromKind(kind);
   const arrival = dateFromISO(data.get("arrival"));
   const departure = dateFromISO(data.get("departure"));
@@ -6884,6 +7353,9 @@ bookingForm.addEventListener("submit", (event) => {
   const dates = formatStayDates(data.get("arrival"), data.get("departure"));
   const personId = existingStay?.personId || bookingPersonId || createPersonId(data.get("guest") || id);
   const paymentMethod = String(data.get("paymentMethod") || existingStay?.paymentMethod || "");
+  const stationingDeduction = currentBookingIsRv()
+    ? stationingDeductionFromDraft() || normalizeStayStationingDeduction(existingStay?.stationingDeduction)
+    : null;
 
   const nextStay = {
     id,
@@ -6911,6 +7383,7 @@ bookingForm.addEventListener("submit", (event) => {
     settledPrice,
     actualPaidAmount: existingStay ? actualPaidAmountForStay(existingStay) : 0,
     paymentMethod,
+    stationingDeduction,
     note: String(data.get("note") || "").trim()
   };
 
@@ -6957,9 +7430,9 @@ bookingForm.addEventListener("submit", (event) => {
     }
   });
   visibleMonth = monthStart(arrival);
-  activeMode = group;
-  document.body.dataset.mode = group;
-  modeSwitch.checked = group === "camping";
+  activeMode = group === "camping" ? campingModeForUnit(unitById(id) || { id, kind }) : "room";
+  document.body.dataset.mode = groupForMode(activeMode);
+  updateModeSwitchUi();
   bookingForm.reset();
   bookingForm.elements.adults.value = 2;
   bookingForm.elements.children.value = 0;
@@ -6976,13 +7449,20 @@ bookingForm.addEventListener("submit", (event) => {
   bookingForm.elements.note.value = "";
   renderUnitSelect();
   bookingFacilityDraft = [];
+  bookingStationingDeductionDraft = null;
   renderBookingFacilities();
+  renderBookingStationingLink();
   syncBookingCalendarMonthToArrival();
   applySelectedUnitPricing();
   editingStayKey = null;
   bookingUnitId = null;
 
-  if (linkedAfterSave.length >= 2) {
+  if (shouldOpenLinkedDraftAfterSave) {
+    renderAll();
+    setVisibleMonth(arrival);
+    openBookingModal(linkedReservationDraftDefaultsFromStay(nextStay));
+    showToast(`Rezervarea ${id} a fost salvatÄƒ. Alege urmÄƒtoarea unitate pentru acelaÈ™i client.`);
+  } else if (linkedAfterSave.length >= 2) {
     renderAll();
     setVisibleMonth(arrival);
     openEditClient(nextStay.key);
@@ -7002,3 +7482,4 @@ setActivePage(activePage);
 setVisibleMonth(today);
 syncLocalActivityLog();
 warmHiddenPages();
+loadAppVersion();

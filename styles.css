@@ -1,6 +1,6 @@
 :root {
-  --ink: #1f2928;
-  --muted: #6e746f;
+  --ink: #17211f;
+  --muted: #505b57;
   --stone: #f1ede3;
   --paper: #fffdf8;
   --line: #ddd4c5;
@@ -15,6 +15,8 @@
   --danger: #b74b43;
   --shadow: 0 20px 60px rgba(47, 34, 22, 0.12);
   --radius: 8px;
+  --font-body: Arial, "Helvetica Neue", Helvetica, sans-serif;
+  --font-display: Arial, "Helvetica Neue", Helvetica, sans-serif;
 }
 
 body[data-mode="camping"] {
@@ -53,8 +55,12 @@ body {
     var(--stone);
   background-size: 32px 32px;
   color: var(--ink);
-  font-family: "Heebo", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-body);
   font-size: 16px;
+  font-weight: 500;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -74,7 +80,7 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   min-height: 100vh;
   transition: grid-template-columns 180ms ease;
 }
@@ -86,9 +92,9 @@ button {
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 16px;
   min-height: 100vh;
-  padding: 28px 20px;
+  padding: 18px 14px;
   background: rgba(31, 41, 40, 0.96);
   color: #fffdf8;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
@@ -109,7 +115,7 @@ button {
 
 .brand {
   display: grid;
-  grid-template-columns: 54px 1fr;
+  grid-template-columns: 44px 1fr;
   align-items: center;
   gap: 12px;
   color: inherit;
@@ -127,12 +133,13 @@ button {
 }
 
 .app-shell.is-sidebar-collapsed .brand {
-  grid-template-columns: 54px;
+  grid-template-columns: 44px;
 }
 
 .app-shell.is-sidebar-collapsed .brand span:not(.brand-mark),
 .app-shell.is-sidebar-collapsed .nav-item span,
-.app-shell.is-sidebar-collapsed .side-summary {
+.app-shell.is-sidebar-collapsed .side-summary,
+.app-shell.is-sidebar-collapsed .app-version {
   display: none;
 }
 
@@ -142,41 +149,41 @@ button {
 
 .app-shell.is-sidebar-collapsed .nav-item {
   justify-content: center;
-  width: 54px;
-  min-height: 46px;
+  width: 58px;
+  min-height: 48px;
 }
 
 .brand-mark {
   display: grid;
-  width: 54px;
-  height: 54px;
+  width: 44px;
+  height: 44px;
   place-items: center;
   border: 1px solid rgba(190, 153, 57, 0.78);
   background: rgba(190, 153, 57, 0.14);
   color: var(--sand);
-  font-family: "Trirong", Georgia, serif;
-  font-size: 20px;
+  font-family: var(--font-display);
+  font-size: 18px;
   line-height: 1;
 }
 
 .brand strong {
   display: block;
-  font-family: "Trirong", Georgia, serif;
-  font-size: 20px;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
   line-height: 1.1;
 }
 
 .brand small {
-  color: rgba(255, 253, 248, 0.62);
-  font-size: 12px;
+  color: rgba(255, 253, 248, 0.78);
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0;
 }
 
 .nav-list {
   display: grid;
-  gap: 8px;
+  gap: 5px;
 }
 
 .nav-item,
@@ -192,9 +199,12 @@ button {
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 12px;
+  min-height: 50px;
+  padding: 11px 14px;
   background: transparent;
-  color: rgba(255, 253, 248, 0.76);
+  color: rgba(255, 253, 248, 0.9);
+  font-size: 15px;
+  font-weight: 600;
   text-align: left;
 }
 
@@ -208,6 +218,11 @@ button {
   stroke-width: 1.9;
 }
 
+.nav-item svg {
+  width: 20px;
+  height: 20px;
+}
+
 .nav-item:hover,
 .nav-item.is-active {
   background: rgba(255, 253, 248, 0.1);
@@ -216,7 +231,7 @@ button {
 
 .side-summary {
   margin-top: auto;
-  padding: 18px;
+  padding: 12px;
   background:
     linear-gradient(rgba(31, 41, 40, 0.2), rgba(31, 41, 40, 0.86)),
     url("https://www.marinapark.ro/wp-content/uploads/2022/12/hamace-1.jpg") center / cover;
@@ -226,16 +241,16 @@ button {
 }
 
 .side-summary h2 {
-  margin: 5px 0 18px;
+  margin: 3px 0 10px;
   color: #fffdf8;
-  font-family: "Trirong", Georgia, serif;
-  font-size: 21px;
+  font-family: var(--font-display);
+  font-size: 17px;
   line-height: 1.25;
 }
 
 .side-summary dl {
   display: grid;
-  gap: 10px;
+  gap: 6px;
   margin: 0;
 }
 
@@ -244,13 +259,13 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding-top: 10px;
+  padding-top: 6px;
   border-top: 1px solid rgba(255, 253, 248, 0.18);
 }
 
 .side-summary dt {
-  color: rgba(255, 253, 248, 0.66);
-  font-size: 13px;
+  color: rgba(255, 253, 248, 0.82);
+  font-size: 12px;
 }
 
 .side-summary dd {
@@ -259,11 +274,22 @@ button {
   font-weight: 700;
 }
 
+.app-version {
+  margin: -8px 2px 0;
+  color: rgba(255, 253, 248, 0.72);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-align: center;
+}
+
 .workspace {
   display: grid;
-  gap: 22px;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+  gap: 12px;
   min-width: 0;
-  padding: 28px;
+  padding: 16px;
 }
 
 .page-section[hidden] {
@@ -276,6 +302,8 @@ button {
 
 .page-section.is-active-page {
   display: block;
+  align-self: start;
+  width: 100%;
 }
 
 .details-grid.page-section.is-active-page {
@@ -315,7 +343,7 @@ p {
 h1,
 h2 {
   margin: 0;
-  font-family: "Trirong", Georgia, serif;
+  font-family: var(--font-display);
   line-height: 1.12;
 }
 
@@ -432,14 +460,14 @@ h3 {
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 10px;
 }
 
 .metric-card {
   justify-content: space-between;
-  gap: 14px;
-  min-height: 116px;
-  padding: 18px;
+  gap: 10px;
+  min-height: 100px;
+  padding: 14px;
   background: var(--paper);
   border: 1px solid var(--line);
   border-left: 4px solid var(--gold);
@@ -449,7 +477,7 @@ h3 {
 .metric-card strong {
   display: block;
   margin-top: 4px;
-  font-family: "Trirong", Georgia, serif;
+  font-family: var(--font-display);
   font-size: 30px;
   line-height: 1;
 }
@@ -475,8 +503,8 @@ h3 {
 }
 
 .review-panel {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--line);
 }
 
@@ -489,14 +517,14 @@ h3 {
 .review-list {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .review-card {
   display: grid;
-  gap: 8px;
-  min-height: 132px;
-  padding: 14px;
+  gap: 6px;
+  min-height: 116px;
+  padding: 12px;
   background: var(--paper);
   border: 1px solid var(--line);
   border-left: 4px solid var(--sea);
@@ -517,13 +545,13 @@ h3 {
 .details-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 18px;
+  gap: 12px;
   align-items: start;
 }
 
 .panel {
   min-width: 0;
-  padding: 18px;
+  padding: 14px;
   background: rgba(255, 253, 248, 0.88);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -532,8 +560,8 @@ h3 {
 
 .section-header {
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .section-actions {
@@ -544,7 +572,7 @@ h3 {
 }
 
 .section-header.tight {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .section-header > svg {
@@ -583,6 +611,47 @@ h3 {
   min-width: 126px;
   text-align: center;
   text-transform: capitalize;
+}
+
+.mode-segmented {
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(74px, 1fr));
+  gap: 2px;
+  min-height: 38px;
+  padding: 3px;
+  background: #fffdf8;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.mode-segmented button {
+  min-height: 30px;
+  padding: 0 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.mode-segmented button.is-active {
+  color: var(--ink);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px rgba(47, 34, 22, 0.08);
+}
+
+.mode-segmented.compact {
+  grid-template-columns: repeat(3, minmax(58px, 1fr));
+  min-height: 34px;
+}
+
+.mode-segmented.compact button {
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .ghost-button.compact-text {
@@ -682,7 +751,7 @@ h3 {
 
 .timeline-scale small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .timeline-scale .timeline-corner,
@@ -830,67 +899,60 @@ h3 {
   --timeline-bar-shadow: rgba(47, 92, 75, 0.16);
 }
 
-.timeline-bar::after {
-  content: attr(data-guest);
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  z-index: 4;
-  max-width: none;
-  color: var(--timeline-bar-text);
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.15;
-  white-space: nowrap;
-  text-shadow: none;
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-}
-
 .timeline-bar span {
   color: var(--timeline-bar-muted);
-}
-
-.timeline-bar-content > div {
-  display: grid;
-  gap: 3px;
-  min-width: max-content;
-}
-
-.timeline-bar-content span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.timeline-bar-content strong {
-  position: relative;
-  z-index: 2;
-  overflow: visible;
-  text-overflow: clip;
-  white-space: nowrap;
-  visibility: hidden;
 }
 
 .timeline-bar-content {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 0 10px;
+  padding: 0 8px;
   cursor: grab;
 }
 
-.timeline-bar-content > span {
-  flex: 0 0 auto;
+.timeline-bar-label {
+  position: sticky;
+  left: calc(var(--timeline-unit-width) + 14px);
+  z-index: 4;
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  width: max-content;
+  max-width: none;
+  white-space: nowrap;
 }
 
-.timeline-bar.is-tight .timeline-bar-content > span,
-.timeline-bar.is-compact .timeline-bar-content span,
-.timeline-bar.is-compact .timeline-bar-content > span {
-  display: none;
+.timeline-bar-guest {
+  color: var(--timeline-bar-text);
+  line-height: 1.05;
+}
+
+.timeline-bar .timeline-bar-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.timeline-bar .timeline-bar-meta span {
+  font-size: 10px;
+}
+
+.timeline-bar-party::before {
+  content: "·";
+  margin-right: 5px;
+}
+
+.timeline-bar.is-tight .timeline-bar-label,
+.timeline-bar.is-compact .timeline-bar-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  justify-items: center;
+  transform: translate(-50%, -50%);
 }
 
 .timeline-bar.is-compact {
@@ -905,8 +967,6 @@ h3 {
 }
 
 .timeline-bar.is-compact .timeline-bar-content {
-  justify-content: center;
-  gap: 0;
   padding: 0 2px;
   text-align: center;
 }
@@ -917,8 +977,9 @@ h3 {
   bottom: 0;
   width: 12px;
   border: 0;
-  background: rgba(255, 253, 248, 0.28);
+  background: transparent;
   cursor: ew-resize;
+  opacity: 0;
   z-index: 3;
 }
 
@@ -931,7 +992,7 @@ h3 {
 }
 
 .timeline-handle:hover {
-  background: rgba(255, 253, 248, 0.46);
+  background: transparent;
 }
 
 .timeline-bar.is-dragging {
@@ -1001,17 +1062,17 @@ h3 {
 
 .client-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 10px;
 }
 
 .client-card {
   --card-accent: var(--gold);
   --card-bg: #fffdf8;
   display: grid;
-  gap: 14px;
-  min-height: 176px;
-  padding: 16px;
+  gap: 10px;
+  min-height: 160px;
+  padding: 14px;
   background: var(--card-bg);
   border: 1px solid var(--line);
   border-left: 4px solid var(--card-accent);
@@ -1092,7 +1153,7 @@ h3 {
 }
 
 .client-price {
-  font-family: "Trirong", Georgia, serif;
+  font-family: var(--font-display);
   font-size: 22px;
   font-weight: 600;
   line-height: 1;
@@ -1146,12 +1207,39 @@ h3 {
   gap: 7px;
 }
 
+#bookingForm .reservation-bar-items {
+  gap: 5px;
+}
+
 .reservation-bar-item {
   grid-template-columns: minmax(0, 1fr) auto auto;
   padding: 8px 9px;
   background: rgba(255, 253, 248, 0.78);
   border: 1px solid rgba(99, 63, 45, 0.1);
   border-radius: 8px;
+}
+
+#bookingForm .reservation-bar-item {
+  padding: 6px 7px;
+  border-radius: 6px;
+}
+
+#bookingForm .reservation-bar-item strong,
+#bookingForm .reservation-bar-item > span {
+  font-size: 12px;
+}
+
+#bookingForm .reservation-bar-item small {
+  font-size: 10px;
+}
+
+#bookingForm .reservation-bar-actions {
+  gap: 3px;
+}
+
+#bookingForm .reservation-bar-actions .icon-button.compact {
+  width: 28px;
+  min-height: 28px;
 }
 
 .reservation-bar-panel.is-compact .reservation-bar-item {
@@ -1265,7 +1353,7 @@ h3 {
 
 .stationing-page {
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
 .stationing-page[hidden] {
@@ -1279,22 +1367,22 @@ h3 {
 .stationing-layout,
 .stationing-board {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .stationing-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 10px;
 }
 
 .stationing-card {
   --card-accent: var(--leaf);
   --card-bg: #fffdf8;
   display: grid;
-  gap: 14px;
-  min-height: 240px;
-  padding: 16px;
+  gap: 10px;
+  min-height: 210px;
+  padding: 14px;
   background:
     linear-gradient(135deg, rgba(47, 92, 75, 0.07), transparent 38%),
     var(--card-bg);
@@ -1361,25 +1449,25 @@ h3 {
 .bar-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(330px, 380px);
-  gap: 18px;
+  gap: 12px;
   align-items: start;
 }
 
 .bar-products-panel {
-  min-height: calc(100vh - 170px);
+  min-height: 0;
 }
 
 .bar-product-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 14px;
+  gap: 10px;
 }
 
 .bar-product-card {
   display: grid;
-  gap: 12px;
-  min-height: 156px;
-  padding: 14px;
+  gap: 10px;
+  min-height: 144px;
+  padding: 12px;
   background:
     linear-gradient(135deg, rgba(15, 110, 122, 0.08), transparent 44%),
     #fffdf8;
@@ -1472,8 +1560,8 @@ h3 {
   position: sticky;
   top: 18px;
   display: grid;
-  gap: 14px;
-  min-height: calc(100vh - 170px);
+  gap: 10px;
+  min-height: 0;
   border-top: 4px solid var(--leaf);
 }
 
@@ -1481,7 +1569,7 @@ h3 {
   display: grid;
   align-content: start;
   gap: 10px;
-  min-height: 300px;
+  min-height: 180px;
 }
 
 .bar-checkout-item {
@@ -1648,6 +1736,10 @@ h3 {
   gap: 10px;
 }
 
+#bookingForm .facility-toggle-list {
+  gap: 5px;
+}
+
 .facility-toggle {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -1658,6 +1750,42 @@ h3 {
   background: #fffdf8;
   border: 1px solid var(--line);
   border-radius: var(--radius);
+}
+
+#bookingForm .facility-toggle {
+  min-height: 34px;
+  gap: 6px;
+  padding: 6px 7px;
+}
+
+#bookingForm .facility-toggle-main {
+  gap: 7px;
+}
+
+#bookingForm .facility-toggle input[type="checkbox"] {
+  width: 16px;
+  min-height: 16px;
+}
+
+#bookingForm .facility-toggle strong {
+  font-size: 12px;
+}
+
+#bookingForm .facility-toggle span,
+#bookingForm .facility-toggle small {
+  font-size: 11px;
+  line-height: 1.12;
+}
+
+#bookingForm .facility-days-control {
+  min-width: 56px;
+  font-size: 10px;
+}
+
+#bookingForm .facility-days-control input {
+  width: 52px;
+  min-height: 28px;
+  padding: 4px 6px;
 }
 
 .facility-toggle-main {
@@ -1706,6 +1834,78 @@ h3 {
 
 .facility-toggle.is-included {
   background: #f3f0e8;
+}
+
+.booking-stationing-link-section {
+  --booking-accent: #2f6f68;
+  --booking-tint: #eef8f6;
+}
+
+.booking-stationing-link-section .form-section-head::before {
+  content: "RV";
+}
+
+.stationing-link-status,
+.stationing-link-results {
+  display: grid;
+  gap: 8px;
+}
+
+.stationing-link-selected {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 10px;
+  color: #1f4c47;
+  background: #dff2ee;
+  border: 1px solid #9bcfc6;
+  border-radius: 8px;
+}
+
+.stationing-link-selected .ghost-button {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+}
+
+.stationing-link-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  color: var(--ink);
+  text-align: left;
+  background: #fffaf0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.stationing-link-card:hover,
+.stationing-link-card.is-selected {
+  background: #e8f5f2;
+  border-color: #6daaa0;
+}
+
+.stationing-link-card span,
+.stationing-link-card small {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stationing-link-card small,
+.stationing-link-card em {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.stationing-link-card em {
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .bar-payment-summary {
@@ -1929,7 +2129,7 @@ h3 {
 
 .source-record-section {
   align-self: stretch;
-  min-height: calc(100vh - 190px);
+  min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
@@ -1940,6 +2140,24 @@ h3 {
   justify-content: flex-end;
   margin-left: auto;
   gap: 8px;
+}
+
+#bookingForm .source-record-actions {
+  gap: 6px;
+}
+
+#bookingForm .source-record-actions .mode-segmented.compact {
+  min-height: 32px;
+}
+
+#bookingForm .source-record-actions .mode-segmented.compact button {
+  min-height: 30px;
+  padding-inline: 8px;
+}
+
+#bookingForm .source-record-actions .ghost-button {
+  min-height: 32px;
+  padding-inline: 9px;
 }
 
 .mode-switch.compact {
@@ -1967,11 +2185,17 @@ h3 {
   font-size: 13px;
 }
 
+#bookingForm .source-record-status {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
 .source-record-table-wrap {
-  min-height: 520px;
+  min-height: 360px;
   height: 100%;
-  max-height: none;
+  max-height: min(58vh, 640px);
   overflow: auto;
+  scrollbar-gutter: stable;
   border: 1px solid var(--line);
   border-radius: var(--radius);
 }
@@ -1979,14 +2203,45 @@ h3 {
 .source-record-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 13px;
+}
+
+.source-record-table th:nth-child(1),
+.source-record-table td:nth-child(1) {
+  width: 31%;
+}
+
+.source-record-table th:nth-child(2),
+.source-record-table td:nth-child(2) {
+  width: 26%;
+}
+
+.source-record-table th:nth-child(3),
+.source-record-table td:nth-child(3) {
+  width: 18%;
+}
+
+.source-record-table th:nth-child(4),
+.source-record-table td:nth-child(4) {
+  width: 25%;
 }
 
 .source-record-table th,
 .source-record-table td {
   padding: 9px 10px;
   text-align: left;
+  vertical-align: top;
   border-bottom: 1px solid rgba(221, 212, 197, 0.7);
+}
+
+#bookingForm .source-record-table {
+  font-size: 13px;
+}
+
+#bookingForm .source-record-table th,
+#bookingForm .source-record-table td {
+  padding: 8px 9px;
 }
 
 .source-record-table th {
@@ -2001,6 +2256,55 @@ h3 {
 
 .source-record-table tr {
   cursor: pointer;
+}
+
+.source-record-row {
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.source-record-client strong,
+.source-record-period strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.source-record-period strong {
+  color: #214f52;
+}
+
+.source-record-party,
+.source-record-price {
+  color: #36413e;
+  font-weight: 800;
+}
+
+.source-record-party {
+  white-space: nowrap;
+}
+
+.source-record-price {
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bookingForm .source-record-table th:nth-child(3),
+#bookingForm .source-record-table td:nth-child(3),
+#bookingForm .source-record-table th:nth-child(4),
+#bookingForm .source-record-table td:nth-child(4) {
+  padding-right: 5px;
+  padding-left: 9px;
+  border-left: 1px solid rgba(221, 212, 197, 0.55);
+}
+
+.source-record-table th:nth-child(4) {
+  font-size: 9px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .source-record-table tbody tr:hover,
@@ -2036,13 +2340,13 @@ h3 {
 .settings-form {
   display: grid;
   max-width: none;
-  gap: 14px;
+  gap: 10px;
 }
 
 .settings-page {
   display: grid;
   grid-template-columns: minmax(0, 0.58fr) minmax(360px, 0.42fr);
-  gap: 18px 22px;
+  gap: 12px;
   align-items: start;
 }
 
@@ -2071,8 +2375,12 @@ h3 {
 
 .settings-block {
   display: grid;
-  gap: 14px;
-  margin-top: 18px;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.settings-page > .settings-block {
+  margin-top: 0;
 }
 
 .settings-unit-actions {
@@ -2084,13 +2392,13 @@ h3 {
 
 .unit-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .facility-settings-form {
   display: grid;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px;
   background: rgba(255, 250, 240, 0.7);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -2108,7 +2416,7 @@ h3 {
 
 .facility-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .unit-list-card,
@@ -2116,8 +2424,8 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px;
   background: #fffaf0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -2196,7 +2504,7 @@ h3 {
 }
 
 .receipt-summary strong {
-  font-family: "Trirong", Georgia, serif;
+  font-family: var(--font-display);
   font-size: 20px;
 }
 
@@ -2217,10 +2525,12 @@ h3 {
   inset: 0;
   z-index: 20;
   display: none;
-  align-content: center;
+  align-content: safe center;
   justify-content: center;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding: 24px;
+  overscroll-behavior: contain;
+  padding: clamp(6px, 1.4vh, 14px);
   background: rgba(31, 41, 40, 0.42);
   border: 0;
   border-radius: 0;
@@ -2241,7 +2551,15 @@ h3 {
 
 .booking-modal-content {
   position: relative;
-  width: min(1540px, calc(100vw - 36px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1500px, calc(100vw - 16px));
+  max-height: calc(100dvh - clamp(12px, 2.8vh, 28px));
+  overflow: hidden;
+  background: rgba(255, 253, 248, 0.98);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
 }
 
 .booking-modal > .section-header,
@@ -2249,29 +2567,34 @@ h3 {
   position: relative;
   z-index: 2;
   margin-bottom: 0;
-  padding: 18px 18px 0;
-  border: 1px solid var(--line);
-  border-bottom: 0;
-  border-radius: var(--radius) var(--radius) 0 0;
+  min-height: 52px;
+  padding: 9px 12px 7px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
 }
 
 .booking-modal > form,
 .booking-modal-content > form {
   position: relative;
   z-index: 2;
-  grid-template-columns: minmax(330px, 0.82fr) minmax(500px, 1.12fr) minmax(330px, 0.76fr);
-  align-items: start;
-  max-height: calc(100vh - 150px);
+  grid-template-columns: minmax(260px, 0.64fr) minmax(430px, 1.25fr) minmax(288px, 0.72fr);
+  align-items: stretch;
+  min-height: 0;
+  height: min(780px, calc(100dvh - clamp(78px, 11vh, 104px)));
+  max-height: none;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-top: 0;
-  border-radius: 0 0 var(--radius) var(--radius);
-  box-shadow: var(--shadow);
+  padding: 10px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .booking-modal.has-reservation-tabs .booking-modal-content {
-  width: min(1480px, calc(100vw - 36px));
+  width: min(1380px, calc(100vw - 220px));
+  margin-right: clamp(96px, 12vw, 168px);
+  overflow: visible;
 }
 
 .booking-modal > .bar-attach-body {
@@ -2286,14 +2609,39 @@ h3 {
 }
 
 #bookingForm {
-  gap: 10px 12px;
+  gap: 9px;
 }
 
 #bookingForm > .booking-form-column {
   display: grid;
-  align-content: start;
-  gap: 10px;
+  align-content: stretch;
+  gap: 9px;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+#bookingForm > .booking-import-column,
+#bookingForm > .booking-main-column,
+#bookingForm > .booking-side-column {
+  grid-auto-rows: minmax(0, auto);
+}
+
+#bookingForm > .booking-import-column {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+#bookingForm > .booking-main-column {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+#bookingForm > .booking-side-column {
+  display: flex;
+  flex-direction: column;
+  align-content: stretch;
 }
 
 #bookingForm > .booking-import-column {
@@ -2308,15 +2656,116 @@ h3 {
   grid-column: 3;
 }
 
+#bookingForm > .booking-form-column > .form-section {
+  min-height: 0;
+  align-content: start;
+  gap: 7px;
+  padding: 9px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(255, 252, 246, 0.92)),
+    color-mix(in srgb, var(--booking-tint) 62%, #fffdf8);
+  box-shadow: 0 8px 18px rgba(31, 46, 50, 0.045);
+}
+
+#bookingForm .booking-stay-section {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-content: stretch;
+  padding-block: 7px;
+}
+
+#bookingForm .form-section-head {
+  gap: 8px;
+}
+
+#bookingForm .form-section-head::before {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+#bookingForm .form-section-head h3 {
+  font-size: 15px;
+  line-height: 1.16;
+}
+
+#bookingForm .eyebrow {
+  font-size: 11px;
+}
+
+#bookingForm > .booking-import-column > .form-section {
+  height: 100%;
+}
+
+#bookingForm .booking-client-section {
+  grid-template-columns: minmax(0, 1fr) minmax(112px, 0.48fr);
+  align-items: end;
+}
+
+#bookingForm .booking-client-section .form-section-head,
+#bookingForm .booking-contact-grid {
+  grid-column: 1 / -1;
+}
+
+#bookingForm .booking-party-grid {
+  grid-column: 1;
+}
+
+#bookingForm .booking-car-field {
+  grid-column: 2;
+}
+
+#bookingForm > .booking-main-column > .form-section,
+#bookingForm > .booking-side-column > .form-section {
+  overflow: visible;
+  flex: 0 0 auto;
+}
+
+#bookingForm .source-record-section {
+  align-content: stretch;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 252, 246, 0.9)),
+    #fbf5ea;
+}
+
+#bookingForm .source-record-table-wrap {
+  min-height: 0;
+  max-height: none;
+  background: rgba(255, 253, 248, 0.62);
+  border-color: rgba(111, 90, 60, 0.18);
+}
+
+#bookingForm label {
+  gap: 4px;
+  font-size: 13px;
+}
+
+#bookingForm input,
+#bookingForm select,
+#bookingForm textarea {
+  min-height: 38px;
+  padding: 7px 10px;
+}
+
+#bookingForm textarea {
+  min-height: 44px;
+}
+
 #bookingForm .booking-actions {
   position: sticky;
   bottom: 0;
   z-index: 2;
-  padding: 12px;
-  background: rgba(255, 253, 248, 0.96);
-  border: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 7px;
+  padding: 8px;
+  margin-top: auto;
+  background: rgba(255, 253, 248, 0.72);
+  border: 1px solid rgba(215, 169, 38, 0.26);
   border-radius: var(--radius);
-  box-shadow: 0 -12px 24px rgba(31, 46, 50, 0.08);
+  box-shadow: 0 -8px 18px rgba(31, 46, 50, 0.055);
 }
 
 #bookingForm .booking-extras-section,
@@ -2326,6 +2775,74 @@ h3 {
   margin-bottom: 0;
 }
 
+#bookingForm > .booking-side-column > .booking-extras-section {
+  min-height: 132px;
+}
+
+#bookingForm > .booking-side-column > .booking-notes-section {
+  flex: 1 1 auto;
+  min-height: 122px;
+  align-content: stretch;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+#bookingForm .booking-notes-section label {
+  grid-template-rows: auto minmax(52px, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+#bookingForm .booking-notes-section textarea {
+  height: 100%;
+  resize: none;
+}
+
+#bookingForm .field-grid {
+  gap: 7px;
+}
+
+#bookingForm .primary-button.full,
+#bookingForm .ghost-button.full {
+  width: auto;
+  min-height: 40px;
+  margin-top: 0;
+}
+
+#bookingForm .booking-actions .primary-button {
+  flex: 1 1 100%;
+  min-width: min(100%, 150px);
+}
+
+#bookingForm .booking-actions .ghost-button {
+  flex: 1 1 calc(50% - 4px);
+  justify-content: center;
+  min-width: 0;
+  padding-inline: 9px;
+}
+
+#bookingForm .booking-actions .ghost-button span {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: hidden;
+  clip-path: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bookingForm .booking-actions .linked-reservation-action {
+  flex-basis: 100%;
+}
+
+#bookingForm .booking-actions .ghost-button[hidden] {
+  display: none;
+}
+
+#bookingForm .booking-actions svg {
+  width: 16px;
+  height: 16px;
+}
+
 #receipt-modal > .section-header,
 #receipt-modal > form {
   width: min(560px, calc(100vw - 48px));
@@ -2333,7 +2850,11 @@ h3 {
 
 #receipt-modal > form {
   grid-template-columns: 1fr;
+  align-content: start;
+  height: auto;
+  max-height: calc(100dvh - 116px);
   overflow-x: hidden;
+  overflow-y: auto;
 }
 
 #bar-article-modal > .section-header,
@@ -2352,7 +2873,11 @@ h3 {
 #bar-payment-modal > form,
 #saga-export-modal > form {
   grid-template-columns: 1fr;
+  align-content: start;
+  height: auto;
+  max-height: calc(100dvh - 116px);
   overflow-x: hidden;
+  overflow-y: auto;
 }
 
 #bar-payment-modal .receipt-method-actions {
@@ -2361,11 +2886,110 @@ h3 {
 
 #unit-modal > .section-header,
 #unit-modal > form {
-  width: min(860px, calc(100vw - 48px));
+  width: min(1040px, calc(100vw - 48px));
 }
 
 #unit-modal > form {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.45fr);
+  align-content: start;
+  align-items: start;
+  gap: 10px;
+  height: auto;
+  max-height: calc(100dvh - 86px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+#unitForm > .form-section {
+  gap: 7px;
+  padding: 9px;
+}
+
+#unitForm > .unit-pricing-section {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.34fr);
+  gap: 6px 10px;
+  align-items: start;
+}
+
+#unitForm .unit-pricing-section .form-section-head {
+  grid-column: 1;
+}
+
+#unitForm .unit-pricing-section .mini-calendar-toolbar {
+  grid-column: 1;
+  gap: 8px;
+}
+
+#unitForm .unit-pricing-section .mini-calendar-toolbar h4 {
+  font-size: 14px;
+}
+
+#unitForm .unit-pricing-section .mini-calendar-toolbar p {
+  display: none;
+}
+
+#unitForm .unit-price-tools {
+  grid-column: 2;
+  grid-row: 1 / span 3;
   grid-template-columns: 1fr;
+  gap: 6px;
+  padding: 7px;
+}
+
+#unitForm .unit-price-tools label {
+  font-size: 12px;
+}
+
+#unitForm .unit-price-tools input,
+#unitForm .unit-price-tools .ghost-button {
+  min-height: 34px;
+}
+
+#unitForm .unit-price-tools .ghost-button {
+  padding-inline: 10px;
+}
+
+#unitForm .unit-price-calendar {
+  grid-column: 1;
+  gap: 2px;
+  padding: 5px;
+}
+
+#unitForm .unit-price-calendar .calendar-weekday {
+  min-height: 13px;
+  font-size: 10px;
+}
+
+#unitForm .unit-price-calendar .calendar-day {
+  min-height: 27px;
+  padding: 1px 2px;
+}
+
+#unitForm .unit-price-calendar .calendar-day strong {
+  font-size: 12px;
+}
+
+#unitForm .unit-price-calendar .calendar-day small {
+  font-size: 10px;
+}
+
+#unitForm .calendar-summary {
+  grid-column: 1 / -1;
+  min-height: 16px;
+  font-size: 12px;
+}
+
+#unitForm > .primary-button.full {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  grid-column: 1 / -1;
+  min-height: 42px;
+  margin-top: 0;
+  box-shadow: 0 -8px 18px rgba(31, 46, 50, 0.08);
 }
 
 #clone-unit-modal > .section-header,
@@ -2435,12 +3059,12 @@ button:focus-visible {
 }
 
 .booking-payment-section input[name="price"] {
-  min-height: 54px;
+  min-height: 40px;
   color: #412347;
   background: #fffafd;
   border-color: rgba(139, 94, 146, 0.36);
-  font-family: "Trirong", Georgia, serif;
-  font-size: 24px;
+  font-family: var(--font-display);
+  font-size: 19px;
   font-weight: 600;
 }
 
@@ -2450,7 +3074,9 @@ button:focus-visible {
 }
 
 .booking-calendar-panel {
-  padding: 12px;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
   background:
     linear-gradient(180deg, rgba(255, 253, 248, 0.95), rgba(255, 246, 236, 0.96)),
     #fffdf8;
@@ -2460,6 +3086,76 @@ button:focus-visible {
 
 .booking-stay-section .field-grid {
   grid-template-columns: minmax(0, 1.25fr) minmax(140px, 0.75fr) minmax(110px, 0.5fr);
+}
+
+#bookingForm .booking-unit-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(94px, 0.38fr) minmax(70px, 0.28fr);
+}
+
+#bookingForm .booking-payment-section input[name="price"] {
+  min-height: 40px;
+  color: #412347;
+  background: #fffafd;
+  border-color: rgba(139, 94, 146, 0.36);
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+}
+
+#bookingForm .booking-calendar-panel .mini-calendar-toolbar {
+  gap: 6px;
+}
+
+#bookingForm .booking-calendar-panel .mini-calendar-toolbar .eyebrow {
+  display: none;
+}
+
+#bookingForm .booking-calendar-panel .mini-calendar-toolbar h4 {
+  font-size: 14px;
+}
+
+#bookingForm .booking-calendar-panel .mini-calendar-controls {
+  gap: 6px;
+}
+
+#bookingForm .booking-calendar-panel .mini-calendar-controls strong {
+  min-width: 82px;
+  font-size: 13px;
+}
+
+#bookingForm .booking-calendar-panel .icon-button.compact {
+  width: 28px;
+  min-height: 28px;
+}
+
+#bookingForm .booking-calendar-panel .price-calendar {
+  gap: 2px;
+  padding: 4px;
+}
+
+#bookingForm .booking-calendar-panel .calendar-weekday {
+  min-height: 14px;
+  font-size: 10px;
+}
+
+#bookingForm .booking-calendar-panel .calendar-day {
+  min-height: 32px;
+  padding: 2px;
+  border-radius: 5px;
+}
+
+#bookingForm .booking-calendar-panel .calendar-day strong {
+  font-size: 13px;
+}
+
+#bookingForm .booking-calendar-panel .calendar-day small {
+  font-size: 10px;
+}
+
+#bookingForm .booking-calendar-panel .calendar-summary {
+  min-height: 16px;
+  font-size: 13px;
+  line-height: 1.3;
 }
 
 .booking-client-section input[readonly] {
@@ -2473,7 +3169,7 @@ button:focus-visible {
   position: absolute;
   top: 18px;
   right: 0;
-  z-index: 1;
+  z-index: 5;
   display: grid;
   align-content: start;
   justify-items: end;
@@ -2616,7 +3312,7 @@ button:focus-visible {
 }
 
 .linked-reservation-tab strong {
-  font-family: "Trirong", Georgia, serif;
+  font-family: var(--font-display);
   font-size: 15px;
   line-height: 1.15;
 }
@@ -2684,7 +3380,7 @@ button:focus-visible {
 }
 
 .linked-reservation-summary .summary-header strong {
-  font-family: "Trirong", Georgia, serif;
+  font-family: var(--font-display);
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0.02em;
@@ -2702,7 +3398,7 @@ button:focus-visible {
 }
 
 .linked-reservation-summary .summary-total {
-  font-family: "Trirong", Georgia, serif;
+  font-family: var(--font-display);
   font-size: 17px;
   font-weight: 900;
   opacity: 1;
@@ -2906,7 +3602,7 @@ button:focus-visible {
 
 .calendar-day.is-checkout small {
   color: #52615d;
-  font-size: 9px;
+  font-size: 10px;
   text-transform: uppercase;
 }
 
@@ -2971,8 +3667,13 @@ button:focus-visible {
   position: fixed;
   z-index: 30;
   display: grid;
-  min-width: 190px;
-  padding: 6px;
+  min-width: 172px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 4px;
   background: rgba(255, 253, 248, 0.98);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -2986,13 +3687,16 @@ button:focus-visible {
 .context-menu button {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   width: 100%;
-  padding: 10px;
+  min-height: 34px;
+  padding: 6px 8px;
   color: var(--ink);
   background: transparent;
   border: 0;
   border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
   text-align: left;
 }
 
@@ -3037,31 +3741,40 @@ button:focus-visible {
 
   .booking-modal > form,
   .booking-modal-content > form {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(178px, 0.62fr) minmax(300px, 1.32fr) minmax(178px, 0.7fr);
+    height: min(760px, calc(100dvh - 86px));
   }
 
   .booking-modal.has-reservation-tabs .booking-modal-content {
-    width: min(100%, calc(100vw - 36px));
+    width: min(1050px, calc(100vw - 152px));
+    margin-right: 112px;
   }
 
   .booking-reservation-tabs {
-    width: 100px;
-    transform: translateX(calc(100% - 20px));
+    top: 16px;
+    width: 128px;
+    transform: translateX(calc(100% - 22px));
   }
 
-  .linked-reservations-count {
-    display: none;
+  .linked-reservations-track {
+    width: 118px;
   }
 
   .linked-reservation-tab {
     width: 96px;
     min-height: 48px;
-    padding: 6px 8px 6px 10px;
+    padding: 7px 8px 7px 10px;
+    transform: translateX(8px);
   }
 
   .linked-reservation-tab.is-current {
-    width: 108px;
-    transform: translateX(-4px) scale(1.03);
+    width: 118px;
+    transform: translateX(-2px) scale(1.04);
+  }
+
+  .linked-reservation-summary {
+    width: 118px;
+    padding: 8px 9px;
   }
 
   .linked-reservation-tab strong {
@@ -3080,6 +3793,38 @@ button:focus-visible {
   .source-record-table-wrap {
     min-height: 320px;
     height: auto;
+  }
+
+  #bookingForm .source-record-actions {
+    justify-content: stretch;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  #bookingForm .source-record-section .form-section-head {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  #bookingForm .source-record-actions .mode-segmented.compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  #bookingForm .source-record-actions .ghost-button {
+    flex: 1 1 auto;
+  }
+
+  #bookingForm .source-record-table th:nth-child(3),
+  #bookingForm .source-record-table td:nth-child(3),
+  #bookingForm .source-record-table th:nth-child(4),
+  #bookingForm .source-record-table td:nth-child(4) {
+    display: none;
+  }
+
+  #bookingForm .booking-actions .ghost-button {
+    flex-basis: 100%;
   }
 }
 
@@ -3122,7 +3867,7 @@ button:focus-visible {
   }
 
   .workspace {
-    padding: 18px;
+    padding: 14px;
   }
 
   .topbar,
@@ -3141,6 +3886,220 @@ button:focus-visible {
     min-width: 0;
   }
 
+  .mode-segmented {
+    width: 100%;
+  }
+
+  .booking-modal {
+    align-content: stretch;
+    padding: 8px;
+  }
+
+  .booking-modal-content {
+    width: calc(100vw - 16px);
+    margin-right: 0;
+    max-height: calc(100dvh - 16px);
+  }
+
+  .booking-modal.has-reservation-tabs .booking-modal-content {
+    width: calc(100vw - 132px);
+    margin-right: 104px;
+  }
+
+  .booking-modal-content > .section-header {
+    padding: 12px;
+  }
+
+  .booking-modal-content > form {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: max-content;
+    height: auto;
+    max-height: calc(100dvh - 88px);
+    align-content: start;
+    overflow-y: auto;
+    padding: 12px;
+  }
+
+  #unit-modal > .section-header,
+  #unit-modal > form {
+    width: calc(100vw - 16px);
+  }
+
+  #unit-modal > form {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: calc(100dvh - 88px);
+    padding: 10px;
+  }
+
+  #unitForm > .unit-pricing-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #unitForm .unit-pricing-section .form-section-head,
+  #unitForm .unit-pricing-section .mini-calendar-toolbar,
+  #unitForm .unit-price-tools,
+  #unitForm .unit-price-calendar {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  #unitForm .unit-price-tools {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  #bookingForm > .booking-form-column {
+    align-content: start;
+    align-self: start;
+    height: auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  #bookingForm > .booking-import-column,
+  #bookingForm > .booking-main-column,
+  #bookingForm > .booking-side-column {
+    grid-template-rows: none;
+    grid-auto-rows: auto;
+  }
+
+  #bookingForm > .booking-main-column > .form-section,
+  #bookingForm > .booking-side-column > .form-section {
+    overflow: visible;
+  }
+
+  #bookingForm .booking-actions {
+    position: static;
+  }
+
+  #bookingForm .booking-client-section {
+    grid-template-columns: 1fr;
+  }
+
+  #bookingForm .booking-client-section .form-section-head,
+  #bookingForm .booking-contact-grid,
+  #bookingForm .booking-party-grid,
+  #bookingForm .booking-car-field {
+    grid-column: 1;
+  }
+
+  .booking-reservation-tabs {
+    top: 14px;
+    width: 112px;
+    gap: 5px;
+    padding: 0;
+    transform: translateX(calc(100% - 20px));
+  }
+
+  .linked-reservations-track {
+    width: 104px;
+  }
+
+  .linked-reservations-count {
+    justify-self: end;
+    padding: 4px 8px;
+    font-size: 10px;
+  }
+
+  .linked-reservation-tab {
+    width: 86px;
+    min-height: 46px;
+    padding: 6px 7px 6px 9px;
+    grid-template-columns: minmax(0, 1fr);
+    transform: translateX(8px);
+  }
+
+  .linked-reservation-tab.is-current {
+    width: 104px;
+    transform: translateX(-2px) scale(1.04);
+  }
+
+  .linked-reservation-summary {
+    width: 104px;
+    padding: 7px 8px;
+  }
+
+  .linked-tab-number,
+  .linked-reservation-tab span:not(.linked-tab-number),
+  .linked-reservation-tab em {
+    display: none;
+  }
+
+}
+
+@media (min-width: 801px) and (max-width: 880px) {
+  .booking-modal {
+    align-content: center;
+  }
+
+  .booking-modal-content > .section-header {
+    align-items: center;
+    flex-direction: row;
+    min-height: 52px;
+    padding: 9px 12px 7px;
+  }
+
+  .booking-modal-content > form {
+    grid-template-columns: minmax(166px, 0.62fr) minmax(286px, 1.32fr) minmax(166px, 0.7fr);
+    grid-auto-rows: 1fr;
+    height: min(680px, calc(100dvh - 86px));
+    max-height: none;
+    align-content: stretch;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 10px;
+  }
+
+  #bookingForm > .booking-form-column {
+    align-content: stretch;
+    align-self: stretch;
+    height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  #bookingForm > .booking-import-column {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  #bookingForm > .booking-main-column {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  #bookingForm > .booking-main-column > .form-section,
+  #bookingForm > .booking-side-column > .form-section {
+    overflow: visible;
+  }
+
+  #bookingForm .booking-actions {
+    position: sticky;
+  }
+
+  #bookingForm .booking-client-section {
+    grid-template-columns: minmax(0, 1fr) minmax(102px, 0.48fr);
+  }
+
+  #bookingForm .booking-client-section .form-section-head,
+  #bookingForm .booking-contact-grid {
+    grid-column: 1 / -1;
+  }
+
+  #bookingForm .booking-contact-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(118px, 0.72fr);
+  }
+
+  #bookingForm .booking-party-grid {
+    grid-column: 1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  #bookingForm .booking-car-field {
+    grid-column: 2;
+  }
+
+  #bookingForm .booking-unit-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(82px, 0.4fr) minmax(58px, 0.28fr);
+  }
 }
 
 @media (max-width: 620px) {
@@ -3154,6 +4113,7 @@ button:focus-visible {
 
   .metric-grid,
     .review-list,
+    .client-card-grid,
     .stationing-card-grid,
     .bar-product-grid,
     .field-grid,
@@ -3195,4 +4155,211 @@ button:focus-visible {
   .mode-switch {
     justify-content: space-between;
   }
+
+  .booking-modal {
+    padding: 0;
+  }
+
+  .booking-modal-content {
+    width: 100vw;
+    margin-right: 0;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  #unit-modal > .section-header,
+  #unit-modal > form {
+    width: 100vw;
+  }
+
+  .booking-modal.has-reservation-tabs .booking-modal-content {
+    width: calc(100vw - 96px);
+    margin-right: 80px;
+  }
+
+  .booking-modal-content > .section-header {
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .booking-modal-content > form {
+    padding: 10px;
+  }
+
+  #bookingForm {
+    gap: 8px;
+  }
+
+  #unitForm .unit-price-tools {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .form-section {
+    padding: 11px;
+  }
+
+  #bookingForm .form-section-head::before {
+    width: 28px;
+    height: 28px;
+  }
+
+  .source-record-section {
+    display: grid;
+    max-height: none;
+  }
+
+  #bookingForm .source-record-table-wrap {
+    max-height: min(44dvh, 360px);
+  }
+
+  #bookingForm .source-record-table,
+  #bookingForm .source-record-table tbody,
+  #bookingForm .source-record-table tr,
+  #bookingForm .source-record-table td {
+    display: block;
+    width: 100%;
+  }
+
+  #bookingForm .source-record-table thead {
+    display: none;
+  }
+
+  #bookingForm .source-record-row {
+    display: grid;
+    gap: 6px;
+    margin: 8px;
+    padding: 10px;
+    background: rgba(255, 253, 248, 0.9);
+    border: 1px solid rgba(221, 212, 197, 0.82);
+    border-radius: var(--radius);
+    box-shadow: 0 6px 16px rgba(31, 46, 50, 0.06);
+  }
+
+  #bookingForm .source-record-table td {
+    padding: 0;
+    border: 0;
+  }
+
+  #bookingForm .source-record-party,
+  #bookingForm .source-record-price {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  #bookingForm .source-record-table td.source-record-party,
+  #bookingForm .source-record-table td.source-record-price,
+  #bookingForm .source-record-table td:nth-child(3),
+  #bookingForm .source-record-table td:nth-child(4) {
+    display: flex;
+  }
+
+  #bookingForm .source-record-party::before,
+  #bookingForm .source-record-price::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  #bookingForm .source-record-separator td {
+    padding: 8px;
+    text-align: center;
+  }
+
+  .booking-stay-section .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .booking-reservation-tabs {
+    top: 68px;
+    width: 86px;
+    transform: translateX(calc(100% - 18px));
+  }
+
+  .linked-reservations-track {
+    width: 82px;
+  }
+
+  .linked-reservations-count {
+    display: none;
+  }
+
+  .linked-reservation-tab {
+    width: 72px;
+    min-height: 44px;
+    padding: 6px;
+    grid-template-columns: minmax(0, 1fr);
+    transform: translateX(6px);
+  }
+
+  .linked-reservation-tab.is-current {
+    width: 84px;
+    transform: translateX(-1px) scale(1.04);
+  }
+
+  .linked-reservation-summary {
+    width: 84px;
+    min-height: 44px;
+    padding: 7px;
+  }
+
+  .linked-reservation-summary .summary-header strong,
+  .linked-reservation-summary .summary-details span:not(.summary-total),
+  .linked-reservation-summary .summary-details em {
+    display: none;
+  }
+
+  .linked-reservation-summary .summary-total {
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .linked-tab-number,
+  .linked-reservation-tab em {
+    display: none;
+  }
+
+  .linked-reservation-tab strong {
+    font-size: 12px;
+  }
+}
+
+#receipt-modal > .section-header,
+#bar-article-modal > .section-header,
+#bar-attach-modal > .section-header,
+#bar-payment-modal > .section-header,
+#saga-export-modal > .section-header,
+#unit-modal > .section-header,
+#clone-unit-modal > .section-header,
+#stationing-modal > .section-header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#receipt-modal > .section-header .icon-button,
+#bar-article-modal > .section-header .icon-button,
+#bar-attach-modal > .section-header .icon-button,
+#bar-payment-modal > .section-header .icon-button,
+#saga-export-modal > .section-header .icon-button,
+#unit-modal > .section-header .icon-button,
+#clone-unit-modal > .section-header .icon-button,
+#stationing-modal > .section-header .icon-button {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+#receipt-modal.is-open,
+#bar-article-modal.is-open,
+#bar-attach-modal.is-open,
+#bar-payment-modal.is-open,
+#saga-export-modal.is-open,
+#unit-modal.is-open,
+#clone-unit-modal.is-open,
+#stationing-modal.is-open {
+  align-content: center;
+  justify-items: center;
 }

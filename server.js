@@ -342,13 +342,78 @@ async function readData() {
   };
 }
 
+function requestError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function tableCount(tableName) {
+  return db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get().count;
+}
+
+function payloadArray(payload, key, options = {}) {
+  const hasValue = Object.prototype.hasOwnProperty.call(payload || {}, key);
+  const value = payload?.[key];
+  const fallback = options.fallback;
+  const arrayValue = hasValue ? value : fallback;
+  if (!arrayValue) {
+    throw requestError(400, `Payload invalid: '${key}' trebuie să fie o listă.`);
+  }
+  if (!Array.isArray(arrayValue)) {
+    throw requestError(400, `Payload invalid: '${key}' trebuie să fie o listă.`);
+  }
+
+  const invalidIndex = arrayValue.findIndex((item) => !item || typeof item !== "object" || Array.isArray(item));
+  if (invalidIndex >= 0) {
+    throw requestError(400, `Payload invalid: '${key}[${invalidIndex}]' trebuie să fie obiect.`);
+  }
+
+  return arrayValue;
+}
+
+function ensureRequiredField(items, key, fieldName) {
+  const invalidIndex = items.findIndex((item) => !String(item[fieldName] || "").trim());
+  if (invalidIndex >= 0) {
+    throw requestError(400, `Payload invalid: '${key}[${invalidIndex}].${fieldName}' lipsește.`);
+  }
+}
+
+function allowEmptyReplacement(payload, key) {
+  const setting = payload?.allowEmptyCollections;
+  return setting === true || (Array.isArray(setting) && setting.includes(key));
+}
+
+function preventAccidentalWipe(payload, key, tableName, nextRows) {
+  const existingRows = tableCount(tableName);
+  if (existingRows > 0 && nextRows.length === 0 && !allowEmptyReplacement(payload, key)) {
+    throw requestError(
+      409,
+      `Refuz să înlocuiesc ${existingRows} înregistrări din '${key}' cu o listă goală fără confirmare explicită.`
+    );
+  }
+}
+
 async function writeData(payload) {
-  const stays = Array.isArray(payload.stays) ? payload.stays : [];
-  const submittedConfig = payload.config || {};
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw requestError(400, "Payload invalid: corpul cererii trebuie să fie obiect JSON.");
+  }
+
+  const submittedConfig = payload.config && typeof payload.config === "object" && !Array.isArray(payload.config)
+    ? payload.config
+    : {};
   const { units: discardedUnits, ...config } = submittedConfig;
-  const units = Array.isArray(payload.units) ? payload.units : Array.isArray(discardedUnits) ? discardedUnits : [];
-  const stationing = Array.isArray(payload.stationing) ? payload.stationing : [];
-  const barArticles = Array.isArray(payload.barArticles) ? payload.barArticles : [];
+  const stays = payloadArray(payload, "stays");
+  const units = payloadArray(payload, "units", { fallback: discardedUnits });
+  const stationing = payloadArray(payload, "stationing");
+  const barArticles = payloadArray(payload, "barArticles");
+  ensureRequiredField(stays, "stays", "id");
+  ensureRequiredField(units, "units", "id");
+  ensureRequiredField(barArticles, "barArticles", "name");
+  preventAccidentalWipe(payload, "stays", "reservations", stays);
+  preventAccidentalWipe(payload, "units", "units", units);
+  preventAccidentalWipe(payload, "stationing", "stationing", stationing);
+  preventAccidentalWipe(payload, "barArticles", "bar_articles", barArticles);
   const currentConfig = configRow();
   const baseSavedAt = String(payload.baseSavedAt || "");
   if (baseSavedAt && currentConfig.savedAt && baseSavedAt !== currentConfig.savedAt) {

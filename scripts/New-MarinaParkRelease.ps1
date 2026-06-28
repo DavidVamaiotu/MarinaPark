@@ -59,6 +59,11 @@ function Copy-ReleaseFile($RelativePath) {
   Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
 }
 
+function Set-Utf8NoBomContent($Path, $Value) {
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($Path, $Value, $utf8NoBom)
+}
+
 try {
   New-Item -ItemType Directory -Force -Path $DistDir, $PackageDir | Out-Null
 
@@ -68,7 +73,7 @@ try {
   }
 
   $versionJson = $versionInfo | ConvertTo-Json -Depth 3
-  Set-Content -LiteralPath (Join-Path $RootDir "version.json") -Value $versionJson -Encoding UTF8
+  Set-Utf8NoBomContent (Join-Path $RootDir "version.json") ($versionJson + [Environment]::NewLine)
 
   foreach ($relativePath in $ReleaseFiles) {
     Copy-ReleaseFile $relativePath
@@ -88,7 +93,7 @@ try {
     createdAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
   }
 
-  $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
+  Set-Utf8NoBomContent $ManifestPath (($manifest | ConvertTo-Json -Depth 4) + [Environment]::NewLine)
 
   Write-Host "Release pregatit:"
   Write-Host "  ZIP:      $ZipPath"
