@@ -273,6 +273,7 @@ const guestTimeline = document.querySelector("#guestTimeline");
 const timelineScale = document.querySelector("#timelineScale");
 const guestTimelineMode = document.querySelector("#guestTimelineMode");
 const modeSwitch = document.querySelector("#modeSwitch");
+const clientsModeSwitch = document.querySelector("#clientsModeSwitch");
 const monthLabel = document.querySelector("#monthLabel");
 const prevMonthButton = document.querySelector("#prevMonth");
 const nextMonthButton = document.querySelector("#nextMonth");
@@ -820,12 +821,14 @@ function unitTypeOptionForUnit(unit) {
 }
 
 function updateModeSwitchUi() {
-  if (!modeSwitch) return;
   const normalized = normalizeTimelineMode(activeMode);
-  modeSwitch.querySelectorAll("[data-mode-option]").forEach((button) => {
-    const isActive = button.dataset.modeOption === normalized;
-    button.classList.toggle("is-active", isActive);
-    button.setAttribute("aria-checked", String(isActive));
+  [modeSwitch, clientsModeSwitch].forEach((switchElement) => {
+    if (!switchElement) return;
+    switchElement.querySelectorAll("[data-mode-option]").forEach((button) => {
+      const isActive = button.dataset.modeOption === normalized;
+      button.classList.toggle("is-active", isActive);
+      button.setAttribute("aria-checked", String(isActive));
+    });
   });
 }
 
@@ -3505,11 +3508,17 @@ function setMode(mode) {
   updateModeSwitchUi();
   markPagesDirty("calendar", "clients", "statistics");
   renderMetrics();
-  renderGuestTimeline();
-  dirtyPages.delete("calendar");
+  if (activePage === "clients") {
+    reservationPage = 1;
+    renderReservations();
+    dirtyPages.delete("clients");
+  } else {
+    renderGuestTimeline();
+    dirtyPages.delete("calendar");
+  }
   refreshIcons();
   queueFileSave();
-  showToast(`Calendar ${timelineModeLabel(activeMode)} activ`);
+  showToast(`${unitTypeLabel(activeMode)} activ`);
 }
 
 function renderMetrics() {
@@ -3626,7 +3635,13 @@ async function checkGoogleReviews() {
 function renderReservations() {
   disconnectReservationAutoLoad();
   const visible = stays
-    .filter((stay) => stay.guest !== "Disponibil" && shouldShowClientInList(stay) && matchesSearch(stay))
+    .filter(
+      (stay) =>
+        stay.guest !== "Disponibil" &&
+        unitMatchesTimelineMode(stay) &&
+        shouldShowClientInList(stay) &&
+        matchesSearch(stay)
+    )
     .sort((first, second) => {
       if (searchTerm) {
         const scoreCompare = staySearchScore(first) - staySearchScore(second);
@@ -3653,33 +3668,13 @@ function renderReservations() {
         const details = stayDetails(stay);
         const paid = isStayFullyPaid(stay);
         const urgency = clientUrgency(stay);
-        const paymentLabel = stay.paymentMethod ? `Plată: ${stay.paymentMethod}` : "Plată: nesetat";
-        const facilityTags = normalizeStayFacilities(stay.facilities, stay)
-          .map((facility) => `<span class="unit-tag">${escapeHtml(facility.name)}${facility.includedInBasePrice ? " · inclus" : ` · ${formatCurrency(facility.total)}`}</span>`)
-          .join("");
-        const linkedCount = linkedReservationsCountFor(stay);
-        const linkedTag = linkedCount > 1 ? `<span class="unit-tag linked-count">${linkedCount} rezervări client</span>` : "";
-        const barItemsPanel = reservationBarItemsMarkup(stay, { compact: true });
 
         return `
           <article class="client-card ${urgency.className}">
             <header>
-              <div>
-                <h3>${stay.guest}</h3>
-                <p>${stay.id} - ${stay.kind}</p>
-              </div>
-              <div class="client-card-actions">
-                <strong class="client-price">${formatCurrency(stay.price)}</strong>
-                <button class="icon-button compact client-edit-button" type="button" data-edit-client="${stay.key}" title="Editează clientul" aria-label="Editează clientul ${stay.guest}">
-                  <i data-lucide="pencil" aria-hidden="true"></i>
-                </button>
-                <button class="icon-button compact client-receipt-button" type="button" data-receipt-client="${stay.key}" title="Generează bon" aria-label="Generează bon pentru ${stay.guest}">
-                  <i data-lucide="receipt-text" aria-hidden="true"></i>
-                </button>
-                <button class="icon-button compact client-delete-button" type="button" data-delete-client="${stay.key}" title="Șterge clientul" aria-label="Șterge clientul ${stay.guest}">
-                  <i data-lucide="trash-2" aria-hidden="true"></i>
-                </button>
-              </div>
+              <h3>${stay.guest}</h3>
+              <strong class="client-price">${formatCurrency(stay.price)}</strong>
+              <p>${stay.id} - ${stay.kind}</p>
             </header>
             <div class="stay-progress">
               <div class="progress-meta">
@@ -3690,13 +3685,19 @@ function renderReservations() {
                 <span class="progress-fill" style="--progress: ${details.progress}%"></span>
               </div>
             </div>
-            <span class="unit-tag">${stay.id} · ${stay.kind}</span>
-            ${linkedTag}
-            ${facilityTags}
-            ${barItemsPanel}
             <div class="payment-row">
               <span class="payment-chip ${paid ? "is-paid" : "is-unpaid"}">${paid ? "Achitat" : "Neachitat"}</span>
-              <span>${paymentLabel}</span>
+            </div>
+            <div class="client-card-actions">
+              <button class="icon-button compact client-edit-button" type="button" data-edit-client="${stay.key}" title="Editează clientul" aria-label="Editează clientul ${stay.guest}">
+                <i data-lucide="pencil" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button compact client-receipt-button" type="button" data-receipt-client="${stay.key}" title="Generează bon" aria-label="Generează bon pentru ${stay.guest}">
+                <i data-lucide="receipt-text" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button compact client-delete-button" type="button" data-delete-client="${stay.key}" title="Șterge clientul" aria-label="Șterge clientul ${stay.guest}">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
+              </button>
             </div>
           </article>
         `;
@@ -3829,17 +3830,6 @@ function renderStationing() {
               <h3>${record.owner}</h3>
               <p>${record.phone || "fără telefon"}</p>
             </div>
-            <div class="client-card-actions">
-              <button class="icon-button compact client-edit-button" type="button" data-edit-stationing="${record.key}" title="Editează staționarea" aria-label="Editează staționarea ${record.owner}">
-                <i data-lucide="pencil" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button compact client-receipt-button" type="button" data-receipt-stationing="${record.key}" title="Încasează cu bon" aria-label="Încasează staționarea pentru ${record.owner}">
-                <i data-lucide="receipt-text" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button compact client-delete-button" type="button" data-delete-stationing="${record.key}" title="Șterge staționarea" aria-label="Șterge staționarea ${record.owner}">
-                <i data-lucide="trash-2" aria-hidden="true"></i>
-              </button>
-            </div>
           </header>
           <div class="stationing-card-main">
             <span class="unit-tag">${record.caravan}</span>
@@ -3881,6 +3871,17 @@ function renderStationing() {
             <span>${formatCurrency(record.totalPrice)} total · ${formatCurrency(record.nightlyPrice)} / noapte</span>
           </div>
           ${note}
+          <div class="client-card-actions">
+            <button class="icon-button compact client-edit-button" type="button" data-edit-stationing="${record.key}" title="Editează staționarea" aria-label="Editează staționarea ${record.owner}">
+              <i data-lucide="pencil" aria-hidden="true"></i>
+            </button>
+            <button class="icon-button compact client-receipt-button" type="button" data-receipt-stationing="${record.key}" title="Încasează cu bon" aria-label="Încasează staționarea pentru ${record.owner}">
+              <i data-lucide="receipt-text" aria-hidden="true"></i>
+            </button>
+            <button class="icon-button compact client-delete-button" type="button" data-delete-stationing="${record.key}" title="Șterge staționarea" aria-label="Șterge staționarea ${record.owner}">
+              <i data-lucide="trash-2" aria-hidden="true"></i>
+            </button>
+          </div>
         </article>
       `;
     })
@@ -6594,10 +6595,12 @@ function setActivePage(page) {
 
 window.setActivePage = setActivePage;
 
-modeSwitch?.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-mode-option]");
-  if (!button) return;
-  setMode(button.dataset.modeOption);
+[modeSwitch, clientsModeSwitch].forEach((switchElement) => {
+  switchElement?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-mode-option]");
+    if (!button) return;
+    setMode(button.dataset.modeOption);
+  });
 });
 
 function setVisibleMonth(month) {
