@@ -1,3 +1,11 @@
+@font-face {
+  font-family: "Rubik";
+  src: url("fonts/Rubik-Variable.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+}
+
 :root {
   --ink: #17211f;
   --muted: #505b57;
@@ -15,8 +23,8 @@
   --danger: #b74b43;
   --shadow: 0 20px 60px rgba(47, 34, 22, 0.12);
   --radius: 8px;
-  --font-body: Arial, "Helvetica Neue", Helvetica, sans-serif;
-  --font-display: Arial, "Helvetica Neue", Helvetica, sans-serif;
+  --font-body: "Rubik", Arial, sans-serif;
+  --font-display: var(--font-body);
 }
 
 body[data-mode="camping"] {
@@ -57,9 +65,11 @@ body {
   color: var(--ink);
   font-family: var(--font-body);
   font-size: 16px;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 1.4;
+  font-synthesis: style;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
 
@@ -1062,54 +1072,64 @@ h3 {
 
 .client-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
 .client-card {
   --card-accent: var(--gold);
-  --card-bg: #fffdf8;
-  display: grid;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   min-height: 160px;
-  padding: 14px;
-  background: var(--card-bg);
+  padding: 12px;
+  background: #fff;
   border: 1px solid var(--line);
-  border-left: 4px solid var(--card-accent);
   border-radius: var(--radius);
 }
 
 .client-card.is-leaving-today {
   --card-accent: #c84f4a;
-  --card-bg: #fff1ef;
 }
 
 .client-card.is-overdue {
   --card-accent: #8b312c;
-  --card-bg: #fdecea;
 }
 
 .client-card.is-leaving-tomorrow {
   --card-accent: #d7a926;
-  --card-bg: #fff8df;
 }
 
 .client-card.is-current-stay {
   --card-accent: #2478b7;
-  --card-bg: #eef7ff;
 }
 
 .client-card header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: stretch;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
 }
 
 .client-card-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.client-card .client-card-actions {
+  width: 100%;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid #eee8dc;
+}
+
+.client-card .client-card-actions .icon-button.compact {
+  width: 32px;
+  min-height: 32px;
 }
 
 .client-edit-button,
@@ -1134,7 +1154,12 @@ h3 {
 }
 
 .client-card h3 {
-  font-size: 18px;
+  width: 100%;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 17px;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .client-card p {
@@ -1158,6 +1183,19 @@ h3 {
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
+}
+
+.client-card .client-price {
+  display: block;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.client-card .payment-row {
+  justify-content: center;
+  width: 100%;
+  gap: 0;
 }
 
 .reservation-bar-panel {
@@ -1309,7 +1347,7 @@ h3 {
   display: block;
   height: 100%;
   width: var(--progress);
-  background: linear-gradient(90deg, var(--card-accent), var(--sea));
+  background: var(--card-accent);
   border-radius: inherit;
 }
 
@@ -1379,10 +1417,11 @@ h3 {
 .stationing-card {
   --card-accent: var(--leaf);
   --card-bg: #fffdf8;
-  display: grid;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   min-height: 210px;
-  padding: 14px;
+  padding: 12px;
   background:
     linear-gradient(135deg, rgba(47, 92, 75, 0.07), transparent 38%),
     var(--card-bg);
@@ -1417,6 +1456,13 @@ h3 {
   margin: 3px 0 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.stationing-card > .client-card-actions {
+  width: 100%;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid rgba(99, 63, 45, 0.12);
 }
 
 .stationing-status {
