@@ -228,12 +228,11 @@ let barArticles = [];
 let barCart = [];
 let searchDebounceTimer = null;
 const RESERVATION_PAGE_SIZE = 50;
-const TIMELINE_VIRTUAL_ROW_THRESHOLD = 70;
-const TIMELINE_ROW_BASE_HEIGHT = 82;
-const TIMELINE_LANE_HEIGHT = 58;
-const TIMELINE_ROW_GAP = 8;
-const TIMELINE_ROW_OVERSCAN = 8;
-const TIMELINE_BAR_OVERSCAN_DAYS = 21;
+const TIMELINE_VIRTUAL_ROW_THRESHOLD = 60;
+const TIMELINE_ROW_BASE_HEIGHT = 44;
+const TIMELINE_LANE_HEIGHT = 34;
+const TIMELINE_ROW_GAP = 1;
+const TIMELINE_ROW_OVERSCAN = 10;
 let reservationPage = 1;
 let staysByUnitIndex = new Map();
 let timelineLayoutCache = new Map();
@@ -273,6 +272,7 @@ const guestTimeline = document.querySelector("#guestTimeline");
 const timelineScale = document.querySelector("#timelineScale");
 const guestTimelineMode = document.querySelector("#guestTimelineMode");
 const modeSwitch = document.querySelector("#modeSwitch");
+const clientsModeSwitch = document.querySelector("#clientsModeSwitch");
 const monthLabel = document.querySelector("#monthLabel");
 const prevMonthButton = document.querySelector("#prevMonth");
 const nextMonthButton = document.querySelector("#nextMonth");
@@ -387,8 +387,10 @@ const closeSagaExportModalButton = document.querySelector("#closeSagaExportModal
 let today = new Date();
 today.setHours(0, 0, 0, 0);
 let visibleMonth = monthStart(today);
-let timelineWindowStart = addMonths(monthStart(today), -1);
-const timelineWindowMonths = 6;
+const timelineWindowMonths = 9;
+const timelineWindowShiftMonths = 4;
+let timelineWindowStart = addMonths(monthStart(today), -Math.floor(timelineWindowMonths / 2));
+let timelineLastRecenterAt = 0;
 let dragState = null;
 let editingStayKey = null;
 let bookingPersonId = null;
@@ -408,7 +410,6 @@ let editingFacilityKey = null;
 let saveToFilesTimer = null;
 let lastDatabaseSavedAt = null;
 let saveToFilesPromise = Promise.resolve();
-let timelineLastVirtualShiftAt = 0;
 let unitPricingMonth = monthStart(today);
 let unitPricingDraft = {};
 let unitPricingSelectedDates = new Set([toISODate(today)]);
@@ -442,7 +443,6 @@ let sagaExportConfig = {
 };
 const timelineUnitColumnWidth = 180;
 let timelineDayWidth = 54;
-const timelineVirtualShiftMonths = 1;
 const timelineWheelMaxDays = 1;
 const timelineTargetVisibleDays = 31;
 const timelineMinDayWidth = 24;
@@ -494,7 +494,7 @@ function ensureTimelineWindowContains(month) {
   const targetMonth = monthStart(month);
   if (timelineMonthInWindow(targetMonth)) return false;
 
-  timelineWindowStart = addMonths(targetMonth, -1);
+  timelineWindowStart = addMonths(targetMonth, -Math.floor(timelineWindowMonths / 2));
   return true;
 }
 
@@ -820,12 +820,14 @@ function unitTypeOptionForUnit(unit) {
 }
 
 function updateModeSwitchUi() {
-  if (!modeSwitch) return;
   const normalized = normalizeTimelineMode(activeMode);
-  modeSwitch.querySelectorAll("[data-mode-option]").forEach((button) => {
-    const isActive = button.dataset.modeOption === normalized;
-    button.classList.toggle("is-active", isActive);
-    button.setAttribute("aria-checked", String(isActive));
+  [modeSwitch, clientsModeSwitch].forEach((switchElement) => {
+    if (!switchElement) return;
+    switchElement.querySelectorAll("[data-mode-option]").forEach((button) => {
+      const isActive = button.dataset.modeOption === normalized;
+      button.classList.toggle("is-active", isActive);
+      button.setAttribute("aria-checked", String(isActive));
+    });
   });
 }
 
@@ -3184,6 +3186,14 @@ function clientUrgency(stay) {
   return { className: "is-upcoming", priority: 3 };
 }
 
+function clientCardMessage(urgencyClass) {
+  if (urgencyClass === "is-overdue") return "Clientul a stat mai mult decât trebuia!";
+  if (urgencyClass === "is-leaving-today") return "Clientul pleacă astăzi.";
+  if (urgencyClass === "is-leaving-tomorrow") return "Clientul pleacă mâine.";
+  if (urgencyClass === "is-current-stay") return "Clientul este cazat acum.";
+  return "Rezervare viitoare.";
+}
+
 function linkedReservationsForPerson(personId) {
   const normalizedId = String(personId || "").trim();
   if (!normalizedId) return [];
@@ -3207,7 +3217,7 @@ function shouldShowClientInList(stay) {
 }
 
 function timelineRowHeight(laneCount) {
-  return Math.max(TIMELINE_ROW_BASE_HEIGHT, laneCount * TIMELINE_LANE_HEIGHT + 14);
+  return Math.max(TIMELINE_ROW_BASE_HEIGHT, laneCount * TIMELINE_LANE_HEIGHT + 8);
 }
 
 function timelineLaneCacheKey(unit) {
@@ -3230,9 +3240,8 @@ function timelineLaneItems(unit) {
   const items = sorted.map((stay) => {
     const start = stayStartDate(stay) || timelineWindowStart;
     const end = stayEndDate(stay) || addDays(start, 1);
-    // Touching reservation bars need separate lanes because their full labels
-    // can extend beyond short bars and otherwise overlap each other.
-    let laneIndex = laneEnds.findIndex((laneEnd) => start > laneEnd);
+    // Reservations that meet on checkout/check-in day can share one row.
+    let laneIndex = laneEnds.findIndex((laneEnd) => start >= laneEnd);
 
     if (laneIndex === -1) {
       laneIndex = laneEnds.length;
@@ -3265,9 +3274,10 @@ function timelineBarHtml(stay, lane, dayCount) {
   const compactClass = duration <= 2 ? "is-compact" : duration <= 4 ? "is-tight" : "";
   const paymentClass = isStayFullyPaid(stay) ? "is-paid" : "is-unpaid";
   const typeClass = stay.group === "camping" ? "is-camping-stay" : "is-room-stay";
+  const renderSignature = timelineBarRenderSignature(stay, lane);
 
   return `
-    <div class="timeline-bar ${compactClass} ${typeClass} ${paymentClass}" data-stay-key="${escapeHtml(stay.key)}" style="grid-column: ${startColumn} / ${endColumn}; grid-row: ${lane};" title="Trage mijlocul pentru mutare sau marginile pentru redimensionare">
+    <div class="timeline-bar ${compactClass} ${typeClass} ${paymentClass}" data-stay-key="${escapeHtml(stay.key)}" data-render-signature="${escapeHtml(renderSignature)}" style="grid-column: ${startColumn} / ${endColumn}; grid-row: ${lane};" title="${escapeHtml(stay.guest)} · ${escapeHtml(stay.dates)} · trage pentru mutare sau redimensionare">
       <button class="timeline-handle" type="button" data-drag-mode="resize-start" aria-label="Mută începutul"></button>
       <div class="timeline-bar-content" data-drag-mode="move">
         <div class="timeline-bar-label">
@@ -3283,13 +3293,26 @@ function timelineBarHtml(stay, lane, dayCount) {
   `;
 }
 
+function timelineBarRenderSignature(stay, lane) {
+  return JSON.stringify([
+    toISODate(timelineWindowStart),
+    daysInTimelineWindow(),
+    stay.key,
+    stay.start,
+    stay.end,
+    stay.guest,
+    stay.dates,
+    stay.party,
+    stay.group,
+    isStayFullyPaid(stay),
+    lane
+  ]);
+}
+
 function timelineVisibleDayBounds() {
-  const dayCount = daysInTimelineWindow();
-  const left = Math.max(0, timelineShell.scrollLeft - timelineUnitColumnWidth);
-  const right = Math.max(0, timelineShell.scrollLeft + timelineShell.clientWidth - timelineUnitColumnWidth);
   return {
-    startDay: Math.max(0, Math.floor(left / timelineDayWidth) - TIMELINE_BAR_OVERSCAN_DAYS),
-    endDay: Math.min(dayCount, Math.ceil(right / timelineDayWidth) + TIMELINE_BAR_OVERSCAN_DAYS)
+    startDay: 0,
+    endDay: daysInTimelineWindow()
   };
 }
 
@@ -3302,26 +3325,86 @@ function timelineStayOverlapsDayBounds(stay, bounds) {
   return startDay < bounds.endDay && endDay > bounds.startDay;
 }
 
-function timelineRowHtml(row, virtualized = false, dayBounds = timelineVisibleDayBounds()) {
+function createTimelineRowElement() {
+  const rowElement = document.createElement("article");
+  rowElement.className = "timeline-row";
+  const unitElement = document.createElement("div");
+  unitElement.className = "timeline-unit";
+  unitElement.append(document.createElement("strong"), document.createElement("span"));
+  rowElement.append(unitElement);
+  return rowElement;
+}
+
+function createTimelineBarElement(stay, lane, dayCount) {
+  const template = document.createElement("template");
+  template.innerHTML = timelineBarHtml(stay, lane, dayCount).trim();
+  return template.content.firstElementChild;
+}
+
+function syncTimelineRowElement(rowElement, row, virtualized, dayBounds) {
   const { unit, lanes } = row;
   const dayCount = daysInTimelineWindow();
-  const bars = lanes.items
-    .filter(({ stay }) => timelineStayOverlapsDayBounds(stay, dayBounds))
-    .map(({ stay, lane }) => timelineBarHtml(stay, lane, dayCount))
-    .join("");
-  const positionStyle = virtualized
-    ? ` --timeline-row-top: ${row.top}px; --timeline-row-height: ${row.height}px;`
-    : "";
+  rowElement.dataset.unitId = unit.id;
+  rowElement.dataset.kind = unit.kind;
+  rowElement.dataset.group = unit.group;
+  rowElement.style.setProperty("--timeline-lanes", lanes.laneCount);
+  if (virtualized) {
+    rowElement.style.setProperty("--timeline-row-top", `${row.top}px`);
+    rowElement.style.setProperty("--timeline-row-height", `${row.height}px`);
+  } else {
+    rowElement.style.removeProperty("--timeline-row-top");
+    rowElement.style.removeProperty("--timeline-row-height");
+  }
 
-  return `
-    <article class="timeline-row ${bars ? "" : "is-empty"}" data-unit-id="${escapeHtml(unit.id)}" data-kind="${escapeHtml(unit.kind)}" data-group="${escapeHtml(unit.group)}" style="--timeline-lanes: ${lanes.laneCount};${positionStyle}">
-      <div class="timeline-unit">
-        <strong>${escapeHtml(unit.id)}</strong>
-        <span>${escapeHtml(unit.kind)}</span>
-      </div>
-      ${bars}
-    </article>
-  `;
+  const unitElement = rowElement.querySelector(":scope > .timeline-unit");
+  unitElement.querySelector("strong").textContent = unit.id;
+  unitElement.querySelector("span").textContent = unit.kind;
+
+  const visibleItems = lanes.items.filter(({ stay }) => timelineStayOverlapsDayBounds(stay, dayBounds));
+  const existingBars = new Map(
+    [...rowElement.querySelectorAll(":scope > .timeline-bar")].map((bar) => [bar.dataset.stayKey, bar])
+  );
+
+  visibleItems.forEach(({ stay, lane }) => {
+    const signature = timelineBarRenderSignature(stay, lane);
+    let bar = existingBars.get(stay.key);
+    if (!bar) {
+      bar = createTimelineBarElement(stay, lane, dayCount);
+      rowElement.append(bar);
+    } else if (bar.dataset.renderSignature !== signature && dragState?.stay?.key !== stay.key) {
+      const replacement = createTimelineBarElement(stay, lane, dayCount);
+      bar.replaceWith(replacement);
+      bar = replacement;
+    }
+    existingBars.delete(stay.key);
+  });
+
+  existingBars.forEach((bar, stayKey) => {
+    if (dragState?.stay?.key !== stayKey) bar.remove();
+  });
+  rowElement.classList.toggle("is-empty", visibleItems.length === 0);
+}
+
+function updateTimelineDateGridBackground(dayCount) {
+  const rowHeight = 44;
+  const width = dayCount * timelineDayWidth;
+  const todayText = toISODate(today);
+  const cells = Array.from({ length: dayCount }, (_, index) => {
+    const date = addDays(timelineWindowStart, index);
+    const x = index * timelineDayWidth;
+    const weekend = date.getDay() === 0 || date.getDay() === 6;
+    const current = toISODate(date) === todayText;
+    const fill = weekend ? "#c06d67" : current ? "#4f8f64" : "#9aa49e";
+    const background = current
+      ? `<rect x="${x}" y="0" width="${timelineDayWidth}" height="${rowHeight}" fill="#edf8f1"/>`
+      : weekend
+        ? `<rect x="${x}" y="0" width="${timelineDayWidth}" height="${rowHeight}" fill="#fffafa"/>`
+        : "";
+    return `${background}<text x="${x + timelineDayWidth / 2}" y="${rowHeight / 2 + 3}" text-anchor="middle" fill="${fill}" font-family="Arial,sans-serif" font-size="9" font-weight="400">${String(date.getDate()).padStart(2, "0")}</text>`;
+  }).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${rowHeight}" viewBox="0 0 ${width} ${rowHeight}">${cells}</svg>`;
+  timelineShell.style.setProperty("--timeline-date-grid", `url("data:image/svg+xml;base64,${window.btoa(svg)}")`);
+  timelineShell.style.setProperty("--timeline-date-grid-width", `${width}px`);
 }
 
 function timelineVisibleRange(rows) {
@@ -3352,12 +3435,16 @@ function renderVisibleTimelineRows(force = false) {
   if (!rows.length) return;
   const { startIndex, endIndex } = timelineVisibleRange(rows);
   const { startDay, endDay } = timelineVisibleDayBounds();
+  const rowRangeChanged =
+    startIndex !== timelineRenderState.startIndex ||
+    endIndex !== timelineRenderState.endIndex;
+  const dayRangeChanged =
+    startDay !== timelineRenderState.startDay ||
+    endDay !== timelineRenderState.endDay;
   if (
     !force &&
-    startIndex === timelineRenderState.startIndex &&
-    endIndex === timelineRenderState.endIndex &&
-    startDay === timelineRenderState.startDay &&
-    endDay === timelineRenderState.endDay
+    !rowRangeChanged &&
+    !dayRangeChanged
   ) {
     return;
   }
@@ -3367,10 +3454,26 @@ function renderVisibleTimelineRows(force = false) {
   timelineRenderState.startDay = startDay;
   timelineRenderState.endDay = endDay;
   const dayBounds = { startDay, endDay };
-  guestTimeline.innerHTML = rows
-    .slice(startIndex, endIndex)
-    .map((row) => timelineRowHtml(row, timelineRenderState.virtualized, dayBounds))
-    .join("");
+  const visibleRows = rows.slice(startIndex, endIndex);
+  const existingRows = new Map(
+    [...guestTimeline.querySelectorAll(":scope > .timeline-row")].map((rowElement) => [rowElement.dataset.unitId, rowElement])
+  );
+  const desiredElements = visibleRows.map((row) => {
+    let rowElement = existingRows.get(row.unit.id);
+    if (!rowElement) rowElement = createTimelineRowElement();
+    syncTimelineRowElement(rowElement, row, timelineRenderState.virtualized, dayBounds);
+    existingRows.delete(row.unit.id);
+    return rowElement;
+  });
+
+  existingRows.forEach((rowElement) => rowElement.remove());
+  guestTimeline.querySelectorAll(":scope > :not(.timeline-row)").forEach((element) => element.remove());
+  if (force || rowRangeChanged) {
+    desiredElements.forEach((rowElement, index) => {
+      const currentElement = guestTimeline.children[index];
+      if (currentElement !== rowElement) guestTimeline.insertBefore(rowElement, currentElement || null);
+    });
+  }
   if (dragState) {
     dragState.bar = findTimelineBarByStayKey(dragState.stay.key);
     dragState.row = dragState.bar?.closest(".timeline-row") || dragState.row;
@@ -3422,22 +3525,42 @@ function renderGuestTimeline(options = {}) {
   updateTimelineDayWidth();
   const previousScrollLeft = timelineShell.scrollLeft;
   const dayCount = daysInTimelineWindow();
+  updateTimelineDateGridBackground(dayCount);
   const units = timelineUnitRows();
+  const weekdayLabels = ["Du", "Lu", "Ma", "Mi", "Jo", "Vi", "Sâ"];
   const days = Array.from({ length: dayCount }, (_, index) => {
     const date = addDays(timelineWindowStart, index);
     const isMonthStart = date.getDate() === 1;
+    const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+    const isToday = toISODate(date) === toISODate(today);
     return `
-      <span class="${isMonthStart ? "is-month-start" : ""}">
-        <strong>${date.toLocaleDateString("ro-RO", { day: "numeric" })}</strong>
-        <small>${date.toLocaleDateString("ro-RO", { month: "short" })}</small>
+      <span class="timeline-day ${isMonthStart ? "is-month-start" : ""} ${isWeekend ? "is-weekend" : ""} ${isToday ? "is-today" : ""}" style="grid-column: ${index + 2}; grid-row: 2;">
+        <strong>${weekdayLabels[date.getDay()]}</strong>
+        <small>${String(date.getDate()).padStart(2, "0")}</small>
       </span>
     `;
   });
+  const weeks = [];
+  let weekStartIndex = 0;
+  for (let index = 1; index <= dayCount; index += 1) {
+    const date = index < dayCount ? addDays(timelineWindowStart, index) : null;
+    if (index < dayCount && date.getDay() !== 1) continue;
+    const firstDate = addDays(timelineWindowStart, weekStartIndex);
+    const lastDate = addDays(timelineWindowStart, index - 1);
+    const sameMonth = firstDate.getMonth() === lastDate.getMonth();
+    const firstLabel = firstDate.toLocaleDateString("ro-RO", { day: "numeric" });
+    const lastLabel = lastDate.toLocaleDateString("ro-RO", { day: "numeric", month: "short" }).replace(".", "");
+    const label = sameMonth
+      ? `${firstLabel}–${lastLabel}`
+      : `${firstDate.toLocaleDateString("ro-RO", { day: "numeric", month: "short" }).replace(".", "")}–${lastLabel}`;
+    weeks.push(`<span class="timeline-week" style="grid-column: ${weekStartIndex + 2} / ${index + 2}; grid-row: 1;">${label}</span>`);
+    weekStartIndex = index;
+  }
 
   guestTimelineMode.textContent = `Vedere ${timelineModeLabel(activeMode)}`;
   updateTimelineMonthLabel();
   timelineShell.style.setProperty("--timeline-days", dayCount);
-  timelineScale.innerHTML = `<span class="timeline-corner">Loc</span>${days.join("")}`;
+  timelineScale.innerHTML = `<span class="timeline-corner"><strong>Loc</strong><small>rezervări</small></span>${weeks.join("")}${days.join("")}`;
 
   if (!units.length) {
     timelineRenderState = {
@@ -3470,7 +3593,7 @@ function renderGuestTimeline(options = {}) {
     nextTop += height + TIMELINE_ROW_GAP;
     return row;
   });
-  const virtualized = activeMode === "room" || rows.length > TIMELINE_VIRTUAL_ROW_THRESHOLD;
+  const virtualized = rows.length > TIMELINE_VIRTUAL_ROW_THRESHOLD;
   timelineRenderState = {
     rows,
     rowTops: rows.map((row) => row.top),
@@ -3505,11 +3628,17 @@ function setMode(mode) {
   updateModeSwitchUi();
   markPagesDirty("calendar", "clients", "statistics");
   renderMetrics();
-  renderGuestTimeline();
-  dirtyPages.delete("calendar");
+  if (activePage === "clients") {
+    reservationPage = 1;
+    renderReservations();
+    dirtyPages.delete("clients");
+  } else {
+    renderGuestTimeline();
+    dirtyPages.delete("calendar");
+  }
   refreshIcons();
   queueFileSave();
-  showToast(`Calendar ${timelineModeLabel(activeMode)} activ`);
+  showToast(`${unitTypeLabel(activeMode)} activ`);
 }
 
 function renderMetrics() {
@@ -3626,7 +3755,13 @@ async function checkGoogleReviews() {
 function renderReservations() {
   disconnectReservationAutoLoad();
   const visible = stays
-    .filter((stay) => stay.guest !== "Disponibil" && shouldShowClientInList(stay) && matchesSearch(stay))
+    .filter(
+      (stay) =>
+        stay.guest !== "Disponibil" &&
+        unitMatchesTimelineMode(stay) &&
+        shouldShowClientInList(stay) &&
+        matchesSearch(stay)
+    )
     .sort((first, second) => {
       if (searchTerm) {
         const scoreCompare = staySearchScore(first) - staySearchScore(second);
@@ -3653,51 +3788,43 @@ function renderReservations() {
         const details = stayDetails(stay);
         const paid = isStayFullyPaid(stay);
         const urgency = clientUrgency(stay);
-        const paymentLabel = stay.paymentMethod ? `Plată: ${stay.paymentMethod}` : "Plată: nesetat";
-        const facilityTags = normalizeStayFacilities(stay.facilities, stay)
-          .map((facility) => `<span class="unit-tag">${escapeHtml(facility.name)}${facility.includedInBasePrice ? " · inclus" : ` · ${formatCurrency(facility.total)}`}</span>`)
-          .join("");
-        const linkedCount = linkedReservationsCountFor(stay);
-        const linkedTag = linkedCount > 1 ? `<span class="unit-tag linked-count">${linkedCount} rezervări client</span>` : "";
-        const barItemsPanel = reservationBarItemsMarkup(stay, { compact: true });
+        const checkoutDate = stayEndDate(stay);
+        const remainingDays = checkoutDate ? Math.max(0, daysBetween(today, checkoutDate)) : 0;
+        const remainingLabel = remainingDays === 1 ? "zi rămasă" : "zile rămase";
+        const timelineLabel = formatDateRangeLabel(stay.start, stay.end) || stay.dates || "-";
 
         return `
-          <article class="client-card ${urgency.className}">
-            <header>
+          <article class="client-card ${urgency.className} ${paid ? "is-paid" : "is-unpaid"}" aria-label="${escapeHtml(stay.guest)}, ${paid ? "achitat" : "neachitat"}">
+            <h3>${stay.guest}</h3>
+            <dl class="client-card-facts">
               <div>
-                <h3>${stay.guest}</h3>
-                <p>${stay.id} - ${stay.kind}</p>
+                <dt>Cost</dt>
+                <dd>${formatCurrency(stay.price)}</dd>
               </div>
-              <div class="client-card-actions">
-                <strong class="client-price">${formatCurrency(stay.price)}</strong>
-                <button class="icon-button compact client-edit-button" type="button" data-edit-client="${stay.key}" title="Editează clientul" aria-label="Editează clientul ${stay.guest}">
-                  <i data-lucide="pencil" aria-hidden="true"></i>
-                </button>
-                <button class="icon-button compact client-receipt-button" type="button" data-receipt-client="${stay.key}" title="Generează bon" aria-label="Generează bon pentru ${stay.guest}">
-                  <i data-lucide="receipt-text" aria-hidden="true"></i>
-                </button>
-                <button class="icon-button compact client-delete-button" type="button" data-delete-client="${stay.key}" title="Șterge clientul" aria-label="Șterge clientul ${stay.guest}">
-                  <i data-lucide="trash-2" aria-hidden="true"></i>
-                </button>
+              <div>
+                <dt>Timeline</dt>
+                <dd>${timelineLabel}</dd>
               </div>
-            </header>
-            <div class="stay-progress">
-              <div class="progress-meta">
-                <span>${details.label}</span>
-                <strong>${details.progress}%</strong>
-              </div>
-              <div class="progress-track" aria-label="Progres cazare">
+            </dl>
+            <p class="client-card-message">${clientCardMessage(urgency.className)}</p>
+            <div class="client-remaining">
+              <span><strong>${remainingDays}</strong> ${remainingLabel}</span>
+              <div class="progress-track" aria-label="Progres cazare: ${details.progress}%">
                 <span class="progress-fill" style="--progress: ${details.progress}%"></span>
               </div>
             </div>
-            <span class="unit-tag">${stay.id} · ${stay.kind}</span>
-            ${linkedTag}
-            ${facilityTags}
-            ${barItemsPanel}
-            <div class="payment-row">
-              <span class="payment-chip ${paid ? "is-paid" : "is-unpaid"}">${paid ? "Achitat" : "Neachitat"}</span>
-              <span>${paymentLabel}</span>
+            <div class="client-card-actions">
+              <button class="icon-button compact client-edit-button" type="button" data-edit-client="${stay.key}" title="Editează clientul" aria-label="Editează clientul ${stay.guest}">
+                <i data-lucide="pencil" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button compact client-receipt-button" type="button" data-receipt-client="${stay.key}" title="Generează bon" aria-label="Generează bon pentru ${stay.guest}">
+                <i data-lucide="receipt-text" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button compact client-delete-button" type="button" data-delete-client="${stay.key}" title="Șterge clientul" aria-label="Șterge clientul ${stay.guest}">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
+              </button>
             </div>
+            <span class="client-unit-tag" title="${stay.kind}">${stay.id}</span>
           </article>
         `;
       }
@@ -3829,17 +3956,6 @@ function renderStationing() {
               <h3>${record.owner}</h3>
               <p>${record.phone || "fără telefon"}</p>
             </div>
-            <div class="client-card-actions">
-              <button class="icon-button compact client-edit-button" type="button" data-edit-stationing="${record.key}" title="Editează staționarea" aria-label="Editează staționarea ${record.owner}">
-                <i data-lucide="pencil" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button compact client-receipt-button" type="button" data-receipt-stationing="${record.key}" title="Încasează cu bon" aria-label="Încasează staționarea pentru ${record.owner}">
-                <i data-lucide="receipt-text" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button compact client-delete-button" type="button" data-delete-stationing="${record.key}" title="Șterge staționarea" aria-label="Șterge staționarea ${record.owner}">
-                <i data-lucide="trash-2" aria-hidden="true"></i>
-              </button>
-            </div>
           </header>
           <div class="stationing-card-main">
             <span class="unit-tag">${record.caravan}</span>
@@ -3881,6 +3997,17 @@ function renderStationing() {
             <span>${formatCurrency(record.totalPrice)} total · ${formatCurrency(record.nightlyPrice)} / noapte</span>
           </div>
           ${note}
+          <div class="client-card-actions">
+            <button class="icon-button compact client-edit-button" type="button" data-edit-stationing="${record.key}" title="Editează staționarea" aria-label="Editează staționarea ${record.owner}">
+              <i data-lucide="pencil" aria-hidden="true"></i>
+            </button>
+            <button class="icon-button compact client-receipt-button" type="button" data-receipt-stationing="${record.key}" title="Încasează cu bon" aria-label="Încasează staționarea pentru ${record.owner}">
+              <i data-lucide="receipt-text" aria-hidden="true"></i>
+            </button>
+            <button class="icon-button compact client-delete-button" type="button" data-delete-stationing="${record.key}" title="Șterge staționarea" aria-label="Șterge staționarea ${record.owner}">
+              <i data-lucide="trash-2" aria-hidden="true"></i>
+            </button>
+          </div>
         </article>
       `;
     })
@@ -5271,7 +5398,7 @@ function openBookingModal(defaults = {}) {
   const defaultPersonId = String(defaults.personId || "").trim();
   bookingPersonId = defaultPersonId || (editingStayKey ? normalizePersonId("", editingStayKey) : createPersonId(defaults.guest || defaults.phone || ""));
   bookingUnitId = defaults.unitId || defaults.id || null;
-  guestFormTitle.textContent = editingStayKey ? "Editează clientul" : "Rezervare nouă";
+  guestFormTitle.textContent = editingStayKey ? "Editează clientul" : "Adăugare client";
   bookingSubmitLabel.textContent = editingStayKey ? "Salvează clientul" : "Adaugă rezervarea";
   deleteBookingButton.hidden = !editingStayKey;
   receiptFromBookingButton.hidden = !editingStayKey;
@@ -5884,6 +6011,7 @@ function renderBookingRangeCalendar() {
       .map((date) => {
         const dateText = toISODate(date);
         const isOutside = date.getMonth() !== bookingCalendarMonth.getMonth();
+        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
         const isSelected = arrival && departure && date >= arrival && date <= departure;
         const isCheckout = Boolean(arrival && departure && dateText === toISODate(departure));
         const isRangeStart = isSelected && dateText === toISODate(arrival);
@@ -5893,6 +6021,7 @@ function renderBookingRangeCalendar() {
         const classNames = [
           "calendar-day",
           isOutside ? "is-outside" : "",
+          isWeekend ? "is-weekend" : "",
           dateText === toISODate(today) ? "is-today" : "",
           rates.hasCustomPrice ? "is-custom-price" : "",
           isSelected ? "is-selected" : "",
@@ -6039,7 +6168,7 @@ function renderSourceBookings() {
       ? [
           `
           <tr class="source-record-separator" aria-hidden="true">
-            <td colspan="4"><span>------------</span></td>
+            <td colspan="4"><span>După data sosirii</span></td>
           </tr>
         `
         ]
@@ -6049,7 +6178,7 @@ function renderSourceBookings() {
       ? [
           `
           <tr class="source-record-separator source-record-empty-today">
-            <td colspan="4"><span>Nu există rezervări pentru azi (${formatShortDateLabel(todayText) || todayText})</span></td>
+            <td colspan="4"><span>Nu există sosiri astăzi · După data sosirii</span></td>
           </tr>
         `
         ]
@@ -6259,14 +6388,14 @@ function autoScrollTimelineDuringDrag(event) {
   if (event.clientX > rect.right - edgeSize) {
     timelineShell.scrollLeft += step;
     timelineLastScrollLeft = timelineShell.scrollLeft;
-    virtualizeTimelineWindow(true);
+    recenterTimelineWindowIfNeeded(true);
     return true;
   }
 
   if (event.clientX < rect.left + edgeSize) {
     timelineShell.scrollLeft -= step;
     timelineLastScrollLeft = timelineShell.scrollLeft;
-    virtualizeTimelineWindow(true);
+    recenterTimelineWindowIfNeeded(true);
     return true;
   }
 
@@ -6320,37 +6449,14 @@ function updateVisibleMonthFromScroll() {
   }
 }
 
-function virtualizeTimelineWindow(force = false) {
-  const maxScroll = timelineShell.scrollWidth - timelineShell.clientWidth;
-  const edgeDistance = timelineDayWidth * 21;
-  const now = performance.now();
-  if (!force && now - timelineLastVirtualShiftAt < 300) {
-    return false;
-  }
-
-  if (timelineShell.scrollLeft > maxScroll - edgeDistance) {
-    timelineLastVirtualShiftAt = now;
-    shiftTimelineWindow(timelineVirtualShiftMonths);
-    return true;
-  }
-
-  if (timelineShell.scrollLeft < edgeDistance) {
-    timelineLastVirtualShiftAt = now;
-    shiftTimelineWindow(-timelineVirtualShiftMonths);
-    return true;
-  }
-
-  return false;
-}
-
 function shiftTimelineWindow(monthDelta) {
   const oldStart = timelineWindowStart;
   const oldScrollLeft = timelineShell.scrollLeft;
   timelineWindowStart = addMonths(timelineWindowStart, monthDelta);
   const shiftedDays = daysBetween(oldStart, timelineWindowStart);
   const scrollAdjustment = shiftedDays * timelineDayWidth;
-  renderGuestTimeline();
-  timelineShell.scrollLeft = oldScrollLeft - scrollAdjustment;
+  renderGuestTimeline({ preserveScroll: true });
+  timelineShell.scrollLeft = Math.max(0, oldScrollLeft - scrollAdjustment);
   timelineLastScrollLeft = timelineShell.scrollLeft;
   renderVisibleTimelineRows(true);
   if (dragState) {
@@ -6363,17 +6469,66 @@ function shiftTimelineWindow(monthDelta) {
   }
 }
 
+function recenterTimelineWindowIfNeeded(force = false) {
+  const maxScroll = Math.max(0, timelineShell.scrollWidth - timelineShell.clientWidth);
+  if (maxScroll <= 0) return false;
+  const now = performance.now();
+  if (!force && now - timelineLastRecenterAt < 250) return false;
+  const edgeDistance = Math.min(timelineDayWidth * 28, maxScroll * 0.2);
+  let direction = 0;
+  if (timelineShell.scrollLeft >= maxScroll - edgeDistance) direction = timelineWindowShiftMonths;
+  else if (timelineShell.scrollLeft <= edgeDistance) direction = -timelineWindowShiftMonths;
+  if (!direction) return false;
+
+  timelineLastRecenterAt = now;
+  shiftTimelineWindow(direction);
+  return true;
+}
+
+function timelineViewportOutsideRenderedBuffer() {
+  const { rows, startIndex, endIndex, startDay, endDay, totalHeight, virtualized } = timelineRenderState;
+  if (!rows.length || startDay < 0 || endDay < 0) return true;
+
+  const visibleStartDay = Math.max(0, Math.floor(timelineShell.scrollLeft / timelineDayWidth));
+  const visibleEndDay = Math.min(
+    daysInTimelineWindow(),
+    Math.ceil((timelineShell.scrollLeft + timelineShell.clientWidth - timelineUnitColumnWidth) / timelineDayWidth)
+  );
+  if (visibleStartDay < startDay || visibleEndDay > endDay) return true;
+  if (!virtualized) return false;
+
+  const scaleOffset = timelineScale.offsetHeight + TIMELINE_ROW_GAP;
+  const viewportTop = Math.max(0, timelineShell.scrollTop - scaleOffset);
+  const viewportBottom = Math.min(totalHeight, viewportTop + timelineShell.clientHeight);
+  const firstRow = rows[startIndex];
+  const lastRow = rows[endIndex - 1];
+  if (!firstRow || !lastRow) return true;
+  return viewportTop < firstRow.top || viewportBottom > lastRow.top + lastRow.height;
+}
+
+function renderTimelineAfterScroll() {
+  if (timelineViewportOutsideRenderedBuffer()) {
+    if (timelineRenderFrame) {
+      window.cancelAnimationFrame(timelineRenderFrame);
+      timelineRenderFrame = null;
+    }
+    renderVisibleTimelineRows();
+    return;
+  }
+  queueVisibleTimelineRowsRender();
+}
+
 function handleTimelineScroll() {
   const currentScrollLeft = timelineShell.scrollLeft;
   const horizontalChanged = Math.abs(currentScrollLeft - timelineLastScrollLeft) >= 1;
   timelineLastScrollLeft = currentScrollLeft;
+  const recentered = horizontalChanged ? recenterTimelineWindowIfNeeded() : false;
   if (suppressTimelineScrollMonthUpdate || performance.now() < timelineMonthNavigationLockedUntil) {
-    queueVisibleTimelineRowsRender();
+    renderTimelineAfterScroll();
     return;
   }
-  const shifted = horizontalChanged ? virtualizeTimelineWindow() : false;
-  if (horizontalChanged || shifted) updateVisibleMonthFromScroll();
-  queueVisibleTimelineRowsRender();
+  if (horizontalChanged || recentered) updateVisibleMonthFromScroll();
+  renderTimelineAfterScroll();
 }
 
 function normalizedWheelDelta(event) {
@@ -6400,9 +6555,9 @@ function handleTimelineWheel(event) {
   const cappedDelta = Math.min(Math.max(horizontalDelta, -maxDelta), maxDelta);
   timelineShell.scrollLeft += cappedDelta;
   timelineLastScrollLeft = timelineShell.scrollLeft;
-  const shifted = virtualizeTimelineWindow();
+  recenterTimelineWindowIfNeeded();
   updateVisibleMonthFromScroll();
-  if (!shifted) queueVisibleTimelineRowsRender();
+  renderTimelineAfterScroll();
 }
 
 function beginTimelineDrag(event) {
@@ -6594,10 +6749,12 @@ function setActivePage(page) {
 
 window.setActivePage = setActivePage;
 
-modeSwitch?.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-mode-option]");
-  if (!button) return;
-  setMode(button.dataset.modeOption);
+[modeSwitch, clientsModeSwitch].forEach((switchElement) => {
+  switchElement?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-mode-option]");
+    if (!button) return;
+    setMode(button.dataset.modeOption);
+  });
 });
 
 function setVisibleMonth(month) {

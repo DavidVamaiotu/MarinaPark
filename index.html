@@ -331,6 +331,11 @@
                 <p class="eyebrow">Registru clienți</p>
                 <h2 id="reservationsTitle">Clienți</h2>
               </div>
+              <div class="mode-segmented" id="clientsModeSwitch" role="radiogroup" aria-label="Tip clienți">
+                <button class="is-active" type="button" data-mode-option="room" role="radio" aria-checked="true">Camere</button>
+                <button type="button" data-mode-option="tent" role="radio" aria-checked="false">Cort</button>
+                <button type="button" data-mode-option="rv" role="radio" aria-checked="false">Rulote</button>
+              </div>
             </div>
             <div class="client-card-grid" id="reservationCards"></div>
           </section>
@@ -341,7 +346,7 @@
             <div class="section-header tight">
               <div>
                 <p class="eyebrow">Formular client</p>
-                <h2 id="guestFormTitle">Rezervare nouă</h2>
+                <h2 id="guestFormTitle">Adăugare client</h2>
               </div>
               <button class="icon-button compact" type="button" id="closeBooking" title="Închide formularul" aria-label="Închide formularul">
                 <i data-lucide="x" aria-hidden="true"></i>
@@ -357,7 +362,7 @@
                   <div class="form-section-head">
                     <div>
                       <p class="eyebrow">Baza de date</p>
-                      <h3 id="sourceRecordsTitle">Rezervări importate</h3>
+                      <h3 id="sourceRecordsTitle">Rezervari efectuate</h3>
                     </div>
                     <div class="source-record-actions">
                       <div class="mode-segmented compact" id="sourceModeSwitch" role="radiogroup" aria-label="Tip rezervări importate">
@@ -373,7 +378,7 @@
                   </div>
                   <div class="source-record-status" id="sourceRecordStatus">Se încarcă ultimele 300 rezervări.</div>
                   <div class="source-record-table-wrap">
-                    <table class="source-record-table" aria-label="Rezervări din baza de date">
+                    <table class="source-record-table" aria-label="Clienți din baza de date">
                       <thead>
                         <tr>
                           <th>Nume</th>
@@ -393,24 +398,22 @@
               </div>
 
               <div class="booking-form-column booking-main-column">
-                <section class="form-section booking-client-section">
+                <section class="form-section booking-client-section booking-reference-section">
                   <div class="form-section-head">
                     <div>
                       <p class="eyebrow">Client</p>
                       <h3>Contact și persoane</h3>
                     </div>
                   </div>
-                  <div class="field-grid booking-contact-grid">
+                  <label class="booking-name-field">
+                    *Nume
+                    <input name="guest" type="text" placeholder="Nume complet client" required />
+                  </label>
+                  <div class="booking-quick-grid">
                     <label>
-                      Nume client
-                      <input name="guest" type="text" placeholder="Nume complet client" required />
+                      Nopți
+                      <input name="nights" type="number" min="1" max="365" value="2" required />
                     </label>
-                    <label>
-                      Telefon
-                      <input name="phone" type="tel" placeholder="+40 ..." required />
-                    </label>
-                  </div>
-                  <div class="field-grid three booking-party-grid">
                     <label>
                       Adulți
                       <input name="adults" type="number" min="0" max="12" value="2" />
@@ -419,15 +422,24 @@
                       Copii
                       <input name="children" type="number" min="0" max="12" value="0" />
                     </label>
-                    <label>
-                      Persoane
-                      <input name="party" type="number" min="1" max="24" value="2" required readonly />
-                    </label>
                   </div>
-                  <label class="booking-car-field">
-                    Mașină
+                  <input name="party" type="hidden" value="2" />
+                  <label class="booking-phone-field">
+                    Telefon
+                    <input name="phone" type="tel" placeholder="+40 ..." required />
+                  </label>
+                  <label class="booking-car-field booking-reference-car-field">
+                    Nr. mașină
                     <input name="car" type="text" placeholder="Număr auto, dacă există" />
                   </label>
+                  <label class="booking-price-field">
+                    Preț
+                    <input name="price" type="number" min="0" step="0.01" value="600.00" required />
+                  </label>
+                  <input name="basePrice" type="hidden" value="600.00" />
+                  <input name="paymentMethod" type="hidden" value="" />
+                  <input name="deposit" type="hidden" value="0.00" />
+                  <input name="balance" type="hidden" value="600.00" />
                 </section>
 
                 <section class="form-section booking-stay-section">
@@ -449,10 +461,6 @@
                         <option value="tent">Cort</option>
                         <option value="rv">Rulote</option>
                       </select>
-                    </label>
-                    <label>
-                      Nopți
-                      <input name="nights" type="number" min="1" max="365" value="2" required />
                     </label>
                   </div>
                   <input name="arrival" type="hidden" value="2026-05-04" required />
@@ -499,25 +507,6 @@
                     </div>
                   </div>
                   <div class="facility-toggle-list" id="bookingFacilities"></div>
-                </section>
-
-                <section class="form-section booking-payment-section">
-                  <div class="form-section-head">
-                    <div>
-                      <p class="eyebrow">Plată</p>
-                      <h3>Sume</h3>
-                    </div>
-                  </div>
-                  <div class="field-grid payment-amount-grid">
-                    <label>
-                      Total plată
-                      <input name="price" type="number" min="0" step="0.01" value="600.00" required />
-                    </label>
-                    <input name="basePrice" type="hidden" value="600.00" />
-                    <input name="paymentMethod" type="hidden" value="" />
-                    <input name="deposit" type="hidden" value="0.00" />
-                    <input name="balance" type="hidden" value="600.00" />
-                  </div>
                 </section>
 
                 <section class="form-section booking-bar-section booking-payment-section" id="bookingBarSection" hidden>

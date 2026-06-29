@@ -9,6 +9,8 @@ $UpdateFileList = @(
   "activity.html",
   "activity.js",
   "app.js",
+  "fonts\OFL.txt",
+  "fonts\Rubik-Variable.ttf",
   "index.html",
   "MarinaPark",
   "MarinaPark.bat",
