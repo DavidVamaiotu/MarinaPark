@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Administrare clienți Marina Park</title>
+    <link rel="icon" href="assets/marina-park-logo.png" type="image/png" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body data-mode="room">
@@ -11,7 +12,7 @@
       <aside class="sidebar" aria-label="Navigație principală">
         <div class="sidebar-head">
           <a class="brand" href="#" aria-label="Operațiuni clienți Marina Park">
-            <span class="brand-mark">MP</span>
+            <img class="brand-mark" src="assets/marina-park-logo.png" alt="" />
             <span>
               <strong>Marina Park</strong>
               <small>operațiuni</small>
@@ -331,10 +332,19 @@
                 <p class="eyebrow">Registru clienți</p>
                 <h2 id="reservationsTitle">Clienți</h2>
               </div>
-              <div class="mode-segmented" id="clientsModeSwitch" role="radiogroup" aria-label="Tip clienți">
-                <button class="is-active" type="button" data-mode-option="room" role="radio" aria-checked="true">Camere</button>
-                <button type="button" data-mode-option="tent" role="radio" aria-checked="false">Cort</button>
-                <button type="button" data-mode-option="rv" role="radio" aria-checked="false">Rulote</button>
+              <div class="clients-header-tools">
+                <div class="available-units-today" id="availableUnitsToday" aria-live="polite">
+                  <span class="available-units-title">
+                    <i data-lucide="door-open" aria-hidden="true"></i>
+                    <strong id="availableUnitsTodayLabel">Libere azi</strong>
+                  </span>
+                  <div class="available-units-list" id="availableUnitsTodayList" role="list"></div>
+                </div>
+                <div class="mode-segmented" id="clientsModeSwitch" role="radiogroup" aria-label="Tip clienți">
+                  <button class="is-active" type="button" data-mode-option="room" role="radio" aria-checked="true">Camere</button>
+                  <button type="button" data-mode-option="tent" role="radio" aria-checked="false">Cort</button>
+                  <button type="button" data-mode-option="rv" role="radio" aria-checked="false">Rulote</button>
+                </div>
               </div>
             </div>
             <div class="client-card-grid" id="reservationCards"></div>
@@ -353,7 +363,6 @@
               </button>
             </div>
             <div class="booking-reservation-tabs" id="linkedReservationsSection" hidden>
-              <div class="linked-reservations-count" id="linkedReservationsCount"></div>
               <div class="linked-reservations-track" id="linkedReservationsTrack" role="tablist" aria-label="Rezervări pentru același client"></div>
             </div>
             <form id="bookingForm">
@@ -405,9 +414,13 @@
                       <h3>Contact și persoane</h3>
                     </div>
                   </div>
+                  <div class="old-source-booking-warning" id="oldSourceBookingWarning" role="alert" hidden>
+                    <strong>Rezervare veche</strong>
+                    <span id="oldSourceBookingWarningText"></span>
+                  </div>
                   <label class="booking-name-field">
                     *Nume
-                    <input name="guest" type="text" placeholder="Nume complet client" required />
+                    <input name="guest" type="text" placeholder="Nume complet client" autocomplete="off" required />
                   </label>
                   <div class="booking-quick-grid">
                     <label>
@@ -426,7 +439,7 @@
                   <input name="party" type="hidden" value="2" />
                   <label class="booking-phone-field">
                     Telefon
-                    <input name="phone" type="tel" placeholder="+40 ..." required />
+                    <input name="phone" type="tel" placeholder="+40 ... (opțional)" />
                   </label>
                   <label class="booking-car-field booking-reference-car-field">
                     Nr. mașină
@@ -547,7 +560,7 @@
                   </button>
                   <button class="ghost-button full linked-reservation-action" type="button" id="addLinkedReservation" hidden>
                     <i data-lucide="calendar-plus" aria-hidden="true"></i>
-                    <span>Adaugă rezervare pentru același client</span>
+                    <span>Rezervare nouă</span>
                   </button>
                 </div>
               </div>

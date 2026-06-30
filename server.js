@@ -28,6 +28,7 @@ const contentTypes = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".ico": "image/x-icon",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -1137,6 +1138,108 @@ function sortSourceBookings(first, second) {
   return modifiedValue(second.modifiedAt) - modifiedValue(first.modifiedAt);
 }
 
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9+]+/g, " ")
+    .trim();
+}
+
+function searchTokens(value) {
+  return normalizeSearchText(value).split(/\s+/).filter(Boolean);
+}
+
+function clampScore(value) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function fuzzyDistance(first, second) {
+  const rows = first.length + 1;
+  const columns = second.length + 1;
+  const distances = Array.from({ length: rows }, () => Array(columns).fill(0));
+
+  for (let row = 0; row < rows; row += 1) distances[row][0] = row;
+  for (let column = 0; column < columns; column += 1) distances[0][column] = column;
+
+  for (let row = 1; row < rows; row += 1) {
+    for (let column = 1; column < columns; column += 1) {
+      const cost = first[row - 1] === second[column - 1] ? 0 : 1;
+      distances[row][column] = Math.min(
+        distances[row - 1][column] + 1,
+        distances[row][column - 1] + 1,
+        distances[row - 1][column - 1] + cost
+      );
+
+      if (row > 1 && column > 1 && first[row - 1] === second[column - 2] && first[row - 2] === second[column - 1]) {
+        distances[row][column] = Math.min(distances[row][column], distances[row - 2][column - 2] + 1);
+      }
+    }
+  }
+
+  return distances[first.length][second.length];
+}
+
+function fuzzyTokenScore(queryToken, targetToken) {
+  if (!queryToken || !targetToken) return Infinity;
+  if (queryToken === targetToken) return 0;
+  if (targetToken.startsWith(queryToken)) return clampScore(4 + Math.max(0, targetToken.length - queryToken.length));
+  if (targetToken.includes(queryToken)) return clampScore(12 + Math.max(0, targetToken.length - queryToken.length));
+  if (queryToken.includes(targetToken) && targetToken.length >= Math.min(4, queryToken.length)) return 18;
+  if (queryToken.length <= 2) return Infinity;
+
+  const allowedDistance = queryToken.length <= 4 ? 2 : Math.min(3, Math.ceil(queryToken.length * 0.35));
+
+  if (targetToken.startsWith(queryToken[0])) {
+    const prefix = targetToken.slice(0, Math.min(targetToken.length, Math.max(queryToken.length + 1, 4)));
+    const prefixDistance = fuzzyDistance(queryToken, prefix);
+    if (prefixDistance <= allowedDistance) {
+      return clampScore(24 + (prefixDistance / Math.max(queryToken.length, 1)) * 45);
+    }
+  }
+
+  const distance = fuzzyDistance(queryToken, targetToken);
+  if (distance > allowedDistance) return Infinity;
+
+  return clampScore(34 + (distance / Math.max(queryToken.length, targetToken.length, 1)) * 55);
+}
+
+function fuzzyMatchScore(query, text) {
+  const normalizedQuery = normalizeSearchText(query);
+  const normalizedText = normalizeSearchText(text);
+  if (!normalizedQuery) return 0;
+  if (!normalizedText) return Infinity;
+  if (normalizedText === normalizedQuery) return 0;
+  if (normalizedText.startsWith(normalizedQuery)) return 2;
+  if (normalizedText.includes(normalizedQuery)) return 8;
+
+  const compactQuery = normalizedQuery.replaceAll(" ", "");
+  const compactText = normalizedText.replaceAll(" ", "");
+  if (compactText === compactQuery) return 0;
+  if (compactText.startsWith(compactQuery)) return 5;
+  if (compactQuery.length >= 3 && compactText.includes(compactQuery)) return 12;
+
+  const queryTokens = searchTokens(normalizedQuery);
+  const targetTokens = searchTokens(normalizedText);
+  if (!queryTokens.length || !targetTokens.length) return Infinity;
+
+  const tokenScores = queryTokens.map((queryToken) =>
+    Math.min(...targetTokens.map((targetToken) => fuzzyTokenScore(queryToken, targetToken)))
+  );
+  if (tokenScores.some((score) => !Number.isFinite(score))) return Infinity;
+
+  const averageScore = tokenScores.reduce((sum, score) => sum + score, 0) / tokenScores.length;
+  const compactWindow = compactText.slice(0, Math.max(compactQuery.length + 3, 6));
+  const compactDistance = compactQuery.length >= 4 ? fuzzyDistance(compactQuery, compactWindow) : Infinity;
+  const compactScore =
+    compactDistance <= Math.ceil(compactQuery.length * 0.34)
+      ? 22 + (compactDistance / Math.max(compactQuery.length, 1)) * 48
+      : Infinity;
+
+  return Math.min(averageScore, compactScore);
+}
+
 const bookingTypeMap = {
   6: { kind: "Cameră cvadruplă", unitHint: "cvdr 1" },
   7: { kind: "Cameră cvadruplă", unitHint: "cvdr 4" },
@@ -1160,8 +1263,9 @@ const bookingTypeMap = {
   27: { kind: "Bungalou", unitHint: "bungalow 21" }
 };
 
-async function fetchSourceBookings(mode) {
+async function fetchSourceBookings(mode, query = "") {
   const isCamping = mode === "camping";
+  const searchAllRows = Boolean(normalizeSearchText(query));
   const connection = await mysql.createConnection({
     host: mysqlHost,
     user: mysqlUser,
@@ -1173,11 +1277,11 @@ async function fetchSourceBookings(mode) {
   try {
     const [rows] = await connection.execute(
       isCamping
-        ? "SELECT form, modification_date FROM wp_booking ORDER BY modification_date DESC LIMIT 5000"
-        : "SELECT remark, form, cost, booking_type, modification_date FROM wp_booking ORDER BY modification_date DESC LIMIT 5000"
+        ? `SELECT form, modification_date FROM wp_booking ORDER BY modification_date DESC${searchAllRows ? "" : " LIMIT 5000"}`
+        : `SELECT remark, form, cost, booking_type, modification_date FROM wp_booking ORDER BY modification_date DESC${searchAllRows ? "" : " LIMIT 5000"}`
     );
 
-    return rows
+    const bookings = rows
       .map((row, index) => {
         const form = parseBookingForm(row.form);
         const range = parseRomanianDateRange(form.datesText);
@@ -1225,9 +1329,16 @@ async function fetchSourceBookings(mode) {
           modifiedAt: row.modification_date || ""
         };
       })
-      .filter(Boolean)
-      .sort(sortSourceBookings)
-      .slice(0, 300);
+      .filter(Boolean);
+
+    if (!normalizeSearchText(query)) return bookings.sort(sortSourceBookings).slice(0, 300);
+
+    return bookings
+      .map((booking) => ({ booking, score: fuzzyMatchScore(query, booking.guest) }))
+      .filter((match) => Number.isFinite(match.score))
+      .sort((first, second) => first.score - second.score || sortSourceBookings(first.booking, second.booking))
+      .slice(0, 300)
+      .map((match) => match.booking);
   } finally {
     await connection.end();
   }
@@ -1367,7 +1478,8 @@ const server = http.createServer(async (request, response) => {
     if (request.url.startsWith("/api/source-bookings") && request.method === "GET") {
       const url = new URL(request.url, `http://${request.headers.host}`);
       const mode = url.searchParams.get("mode") === "camping" ? "camping" : "room";
-      send(response, 200, JSON.stringify({ ok: true, bookings: await fetchSourceBookings(mode) }));
+      const query = String(url.searchParams.get("query") || "").trim().slice(0, 120);
+      send(response, 200, JSON.stringify({ ok: true, bookings: await fetchSourceBookings(mode, query) }));
       return;
     }
 

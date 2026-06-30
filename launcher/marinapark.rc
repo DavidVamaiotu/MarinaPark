@@ -1,0 +1,29 @@
+1 ICON "../assets/marina-park.ico"
+
+1 VERSIONINFO
+FILEVERSION 1,0,16,0
+PRODUCTVERSION 1,0,16,0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x00040004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "Marina Park\0"
+      VALUE "FileDescription", "Marina Park Launcher\0"
+      VALUE "FileVersion", "1.0.16.0\0"
+      VALUE "InternalName", "MarinaPark.exe\0"
+      VALUE "OriginalFilename", "MarinaPark.exe\0"
+      VALUE "ProductName", "Marina Park\0"
+      VALUE "ProductVersion", "1.0.16.0\0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END

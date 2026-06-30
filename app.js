@@ -278,6 +278,9 @@ const prevMonthButton = document.querySelector("#prevMonth");
 const nextMonthButton = document.querySelector("#nextMonth");
 const currentMonthButton = document.querySelector("#currentMonth");
 const reservationCards = document.querySelector("#reservationCards");
+const availableUnitsToday = document.querySelector("#availableUnitsToday");
+const availableUnitsTodayLabel = document.querySelector("#availableUnitsTodayLabel");
+const availableUnitsTodayList = document.querySelector("#availableUnitsTodayList");
 const searchInput = document.querySelector("#globalSearch");
 const bookingForm = document.querySelector("#bookingForm");
 const bookingModal = document.querySelector("#guest-form-section");
@@ -311,6 +314,8 @@ const loadSourceBookingsButton = document.querySelector("#loadSourceBookings");
 const sourceModeSwitch = document.querySelector("#sourceModeSwitch");
 const sourceRecordStatus = document.querySelector("#sourceRecordStatus");
 const sourceRecordRows = document.querySelector("#sourceRecordRows");
+const oldSourceBookingWarning = document.querySelector("#oldSourceBookingWarning");
+const oldSourceBookingWarningText = document.querySelector("#oldSourceBookingWarningText");
 const closeBooking = document.querySelector("#closeBooking");
 const appShell = document.querySelector("#appShell");
 const sidebarToggle = document.querySelector("#sidebarToggle");
@@ -402,6 +407,11 @@ let receiptTargetType = "stay";
 let receiptPaymentInProgress = false;
 let sourceBookings = [];
 let sourceRecordsMode = activeMode;
+let sourceBookingQuery = "";
+let sourceBookingCandidates = [];
+let sourceBookingSearchPending = false;
+let sourceBookingSearchTimer = null;
+let sourceBookingRequestId = 0;
 let units = [];
 let facilityCatalog = defaultFacilityCatalog.map((facility) => ({ ...facility }));
 let bookingFacilityDraft = [];
@@ -1613,14 +1623,38 @@ function hasStayPaymentEvidence(stay) {
 }
 
 function paymentCoveredPriceForStay(stay) {
-  return hasStayPaymentEvidence(stay) ? settledPriceForStay(stay) : 0;
+  if (!hasStayPaymentEvidence(stay)) return 0;
+  const settledPrice = settledPriceForStay(stay);
+  return settledPrice > 0 ? settledPrice : actualPaidAmountForStay(stay);
 }
 
 function isStayFullyPaid(stay) {
   if (!stay || stay.guest === "Disponibil") return false;
   const price = normalizeMoneyValue(stay.price);
-  if (price <= 0 || !hasStayPaymentEvidence(stay)) return false;
-  return stay.paid === true || paymentCoveredPriceForStay(stay) >= price;
+  if (price <= 0) return false;
+  return (
+    stay.paid === true ||
+    actualPaidAmountForStay(stay) > 0 ||
+    settledPriceForStay(stay) > 0 ||
+    String(stay.paidAt || "").trim() !== "" ||
+    String(stay.receiptId || "").trim() !== ""
+  );
+}
+
+function applyStayPayment(stay, requestedAmount, method) {
+  if (!stay || stay.guest === "Disponibil") return 0;
+  const price = normalizeMoneyValue(stay.price);
+  const appliedAmount = normalizeMoneyValue(requestedAmount);
+  if (price <= 0) return 0;
+  if (appliedAmount <= 0) return 0;
+
+  stay.paymentMethod = method;
+  stay.settledPrice = price;
+  stay.actualPaidAmount = normalizeMoneyValue(actualPaidAmountForStay(stay) + appliedAmount);
+  stay.balance = 0;
+  stay.deposit = price;
+  stay.paid = true;
+  return appliedAmount;
 }
 
 function barArticleSearchScore(article) {
@@ -1881,12 +1915,16 @@ function normalizeStay(stay, index) {
   const price = Number(stay.price || 0);
   const basePrice = normalizeMoneyValue(stay.basePrice ?? Math.max(0, price - manualFacilityTotal(facilities) - barTotal));
   const settledPrice = normalizeMoneyValue(stay.settledPrice ?? stay.paidThroughPrice ?? 0);
-  const hasPaymentEvidence = hasStayPaymentEvidence(stay);
-  const paid = guest !== "Disponibil" && (
-    hasPaymentEvidence &&
-    price > 0 &&
-    (stay.paid === true || stay.isPaid === true || stay.paymentStatus === "paid" || settledPrice >= price)
+  const actualPaidAmount = actualPaidAmountForStay(stay);
+  const explicitlyPaid = stay.paid === true || stay.isPaid === true || stay.paymentStatus === "paid";
+  const paid = guest !== "Disponibil" && price > 0 && (
+    explicitlyPaid ||
+    actualPaidAmount > 0 ||
+    settledPrice > 0 ||
+    String(stay.paidAt || "").trim() !== "" ||
+    String(stay.receiptId || "").trim() !== ""
   );
+  const coveredPrice = paid ? price : 0;
 
   return {
     id,
@@ -1908,11 +1946,11 @@ function normalizeStay(stay, index) {
     facilities,
     barItems,
     price,
-    balance: Math.max(0, Number(stay.balance || 0)),
-    deposit: Math.max(0, Number(stay.deposit ?? Math.max(0, Number(stay.price || 0) - Number(stay.balance || 0)))),
+    balance: Math.max(0, normalizeMoneyValue(price - coveredPrice)),
+    deposit: coveredPrice,
     paid,
-    settledPrice: hasPaymentEvidence ? (paid && settledPrice <= 0 ? normalizeMoneyValue(price) : settledPrice) : 0,
-    actualPaidAmount: hasPaymentEvidence ? actualPaidAmountForStay(stay) : 0,
+    settledPrice: coveredPrice,
+    actualPaidAmount,
     paymentMethod: String(stay.paymentMethod || ""),
     stationingDeduction: normalizeStayStationingDeduction(stay.stationingDeduction),
     note: String(stay.note || "")
@@ -2176,12 +2214,7 @@ function readSagaExportSettings() {
 
 function receiptAmountFor(stay) {
   if (!stay || stay.guest === "Disponibil") return 0;
-  if (isStayFullyPaid(stay)) return 0;
   const price = normalizeMoneyValue(stay.price);
-  const settledPrice = paymentCoveredPriceForStay(stay);
-  if (settledPrice > 0) {
-    return Math.max(0, normalizeMoneyValue(price - settledPrice));
-  }
   return price;
 }
 
@@ -2286,10 +2319,6 @@ function openReceiptModal(stayKey) {
   receiptStayKey = stay.key;
   receiptDraft = receiptDraftForStay(stay);
   const amount = receiptDraft.amount;
-  if (amount <= 0) {
-    showToast("Rezervarea este deja marcată ca achitată.");
-    return;
-  }
   const stationingDeduction = normalizeStayStationingDeduction(receiptDraft.stay.stationingDeduction);
   const stationingDeductionLine = stationingDeduction && !stationingDeduction.appliedAt
     ? `<span>Deducere stationare pregatita: ${stationingDeduction.nights} ${stationingDeduction.nights === 1 ? "noapte" : "nopti"}.</span>`
@@ -2315,10 +2344,6 @@ function openLinkedReceiptModal(personId) {
   const totalBalance = linked.reduce((sum, s) => sum + normalizeMoneyValue(receiptAmountFor(s)), 0);
   const totalPrice = linked.reduce((sum, s) => sum + Number(s.price || 0), 0);
   const firstStay = linked[0];
-  if (totalBalance <= 0) {
-    showToast("Toate rezervările clientului sunt deja marcate ca achitate.");
-    return;
-  }
 
   readReceiptSettings();
   receiptTargetType = "stay";
@@ -2368,7 +2393,7 @@ function openStationingReceiptModal(recordKey) {
     <span>${details.paidNights} nopți plătite din ${details.prepaidNights}; rest curent ${formatCurrency(receiptDraft.stationing.balance)}</span>
   `;
   receiptAmountInput.value = amount.toFixed(2);
-  receiptAmountInput.removeAttribute("max");
+  receiptAmountInput.max = amount.toFixed(2);
   receiptModal.classList.add("is-open");
   document.body.style.overflow = "hidden";
   refreshIcons();
@@ -2860,24 +2885,12 @@ async function generateReceipt(stayKey, method) {
           ? receiptDraft
           : receiptDraftForStay(stay);
     const availableAmount = normalizeMoneyValue(draft.amount);
-    const amount = normalizeMoneyValue(receiptAmountInput.value || availableAmount);
-    if (targetType === "stay" && draft.isLinkedTotal && Array.isArray(draft.linkedKeys)) {
-      const currentLinkedDue = draft.linkedKeys
-        .map((key) => stays.find((item) => item.key === key))
-        .filter(Boolean)
-        .reduce((sum, item) => sum + receiptAmountFor(item), 0);
-      if (currentLinkedDue <= 0) {
-        showToast("Toate rezervÄƒrile clientului sunt deja marcate ca achitate.");
-        return false;
-      }
-    } else if (targetType === "stay" && isStayFullyPaid(stay)) {
-      showToast("Rezervarea este deja marcatÄƒ ca achitatÄƒ.");
-      return false;
-    }
-    if (amount <= 0) {
+    const enteredAmount = receiptAmountInput.value === "" ? availableAmount : Number(receiptAmountInput.value);
+    if (!Number.isFinite(enteredAmount) || enteredAmount <= 0) {
       showToast("Prețul pentru bon trebuie să fie mai mare decât 0");
       return false;
     }
+    const amount = normalizeMoneyValue(enteredAmount);
 
     const paymentBefore = targetType === "stationing" ? { ...stationingRecord } : { ...stay };
     const formEditChanges =
@@ -2937,25 +2950,32 @@ async function generateReceipt(stayKey, method) {
         .filter(Boolean)
         .map((item) => ({ ...item, barItems: normalizeStayBarItems(item.barItems) }));
 
-      draft.linkedKeys.forEach((key) => {
+      let remainingAmount = amount;
+      const linkedCount = Math.max(1, draft.linkedKeys.length);
+      draft.linkedKeys.forEach((key, index) => {
         const linkedStay = stays.find((item) => item.key === key);
         if (!linkedStay || linkedStay.guest === "Disponibil") return;
-        linkedStay.paymentMethod = method;
-        linkedStay.paid = true;
-        linkedStay.settledPrice = normalizeMoneyValue(linkedStay.price);
+        const remainingReservations = linkedCount - index;
+        const allocatedAmount = index === linkedCount - 1
+          ? remainingAmount
+          : normalizeMoneyValue(remainingAmount / remainingReservations);
+        const appliedAmount = applyStayPayment(linkedStay, allocatedAmount, method);
+        if (amount > 0 && normalizeMoneyValue(linkedStay.price) > 0 && !linkedStay.paid) {
+          linkedStay.paymentMethod = method;
+          linkedStay.settledPrice = normalizeMoneyValue(linkedStay.price);
+          linkedStay.balance = 0;
+          linkedStay.deposit = normalizeMoneyValue(linkedStay.price);
+          linkedStay.paid = true;
+        }
+        remainingAmount = Math.max(0, normalizeMoneyValue(remainingAmount - appliedAmount));
         linkedPaymentRecords.push(linkedStay);
       });
     } else {
       if (draft.source === "form") {
-        Object.assign(stay, draft.stay, {
-          paymentMethod: method
-        });
+        Object.assign(stay, draft.stay);
       }
-      stay.paymentMethod = method;
       stay.price = Number(draft.stay.price || stay.price || amount);
-      stay.paid = true;
-      stay.settledPrice = normalizeMoneyValue(stay.price);
-      stay.actualPaidAmount = amount;
+      applyStayPayment(stay, amount, method);
     }
     if (formEditChanges.length) {
       if (targetType === "stationing") {
@@ -3130,7 +3150,7 @@ function timelineEndColumn(dateText, fallback) {
   if (!dateText) return fallback;
   const date = dateFromISO(dateText);
   const dayCount = daysInTimelineWindow();
-  return Math.min(Math.max(daysBetween(timelineWindowStart, date) + 2, 3), dayCount + 2);
+  return Math.min(Math.max(daysBetween(timelineWindowStart, date) + 3, 3), dayCount + 2);
 }
 
 function stayDetails(stay) {
@@ -3144,7 +3164,9 @@ function stayDetails(stay) {
     return { nights: 0, progress: 0, label: stay.dates };
   }
   const nights = Math.max(1, daysBetween(start, end));
-  const elapsed = Math.min(Math.max(daysBetween(start, today), 0), nights);
+  const isCurrentlyStaying = start <= today && end > today;
+  const elapsedDays = daysBetween(start, today);
+  const elapsed = Math.min(Math.max(elapsedDays + (isCurrentlyStaying ? 1 : 0), 0), nights);
   const progress = Math.round((elapsed / nights) * 100);
 
   return {
@@ -3394,13 +3416,13 @@ function updateTimelineDateGridBackground(dayCount) {
     const x = index * timelineDayWidth;
     const weekend = date.getDay() === 0 || date.getDay() === 6;
     const current = toISODate(date) === todayText;
-    const fill = weekend ? "#c06d67" : current ? "#4f8f64" : "#9aa49e";
+    const fill = weekend ? "#a7443f" : current ? "#2f7045" : "#4b5563";
     const background = current
       ? `<rect x="${x}" y="0" width="${timelineDayWidth}" height="${rowHeight}" fill="#edf8f1"/>`
       : weekend
         ? `<rect x="${x}" y="0" width="${timelineDayWidth}" height="${rowHeight}" fill="#fffafa"/>`
         : "";
-    return `${background}<text x="${x + timelineDayWidth / 2}" y="${rowHeight / 2 + 3}" text-anchor="middle" fill="${fill}" font-family="Arial,sans-serif" font-size="9" font-weight="400">${String(date.getDate()).padStart(2, "0")}</text>`;
+    return `${background}<text x="${x + timelineDayWidth / 2}" y="${rowHeight / 2 + 3}" text-anchor="middle" fill="${fill}" font-family="Arial,sans-serif" font-size="10" font-weight="600">${String(date.getDate()).padStart(2, "0")}</text>`;
   }).join("");
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${rowHeight}" viewBox="0 0 ${width} ${rowHeight}">${cells}</svg>`;
   timelineShell.style.setProperty("--timeline-date-grid", `url("data:image/svg+xml;base64,${window.btoa(svg)}")`);
@@ -3752,8 +3774,39 @@ async function checkGoogleReviews() {
   }
 }
 
+function renderAvailableUnitsToday() {
+  if (!availableUnitsToday || !availableUnitsTodayLabel || !availableUnitsTodayList) return;
+
+  const availableUnits = unitOptions()
+    .filter((unit) => unitMatchesTimelineMode(unit))
+    .filter((unit) =>
+      !stays.some((stay) => {
+        if (stay.guest === "Disponibil" || stay.id !== unit.id || stay.group !== unit.group) return false;
+        const start = stayStartDate(stay);
+        const end = stayEndDate(stay);
+        return Boolean(start && end && start <= today && end > today);
+      })
+    )
+    .sort((first, second) => first.id.localeCompare(second.id, "ro-RO", { numeric: true }));
+
+  availableUnitsTodayLabel.textContent = `Libere azi · ${availableUnits.length}`;
+  availableUnitsToday.setAttribute(
+    "aria-label",
+    `${availableUnits.length} ${timelineModeLabel(activeMode)} libere astăzi`
+  );
+  availableUnitsTodayList.innerHTML = availableUnits.length
+    ? availableUnits
+        .map(
+          (unit) =>
+            `<span class="available-unit-chip" role="listitem" title="${escapeHtml(unit.kind)}">${escapeHtml(unit.id)}</span>`
+        )
+        .join("")
+    : `<span class="available-units-empty">Niciuna</span>`;
+}
+
 function renderReservations() {
   disconnectReservationAutoLoad();
+  renderAvailableUnitsToday();
   const visible = stays
     .filter(
       (stay) =>
@@ -5334,8 +5387,11 @@ function nextReservationId(kind) {
 
 function syncBookingPaymentFields() {
   bookingForm.elements.deposit.disabled = false;
-  setMoneyField("deposit", 0);
-  setMoneyField("balance", Number(bookingForm.elements.price.value || 0));
+  const price = normalizeMoneyValue(bookingForm.elements.price.value);
+  const currentStay = editingStayKey ? stays.find((stay) => stay.key === editingStayKey) : null;
+  const coveredPrice = currentStay ? Math.min(price, paymentCoveredPriceForStay(currentStay)) : 0;
+  setMoneyField("deposit", coveredPrice);
+  setMoneyField("balance", normalizeMoneyValue(price - coveredPrice));
 }
 
 function updatePartyTotal() {
@@ -5366,9 +5422,7 @@ function syncDepartureFromNights() {
 }
 
 function syncBalanceFromPrice() {
-  const price = Number(bookingForm.elements.price.value || 0);
-  setMoneyField("deposit", 0);
-  setMoneyField("balance", normalizeMoneyValue(price));
+  syncBookingPaymentFields();
 }
 
 function syncBasePriceFromTotalInput() {
@@ -5387,7 +5441,7 @@ function openBookingModal(defaults = {}) {
   const kind = normalizeTimelineMode(defaults.kind || defaults.group || activeMode);
   const price = Number(defaults.price ?? 600);
   const balance = normalizeMoneyValue(defaults.balance ?? price);
-  const deposit = 0;
+  const deposit = Math.max(0, normalizeMoneyValue(price - balance));
   const defaultStayContext = { start: toISODate(defaultArrival), end: defaultDeparture };
   bookingFacilityDraft = normalizeStayFacilities(defaults.facilities, defaultStayContext);
   bookingStationingDeductionDraft = normalizeStayStationingDeduction(defaults.stationingDeduction);
@@ -5459,6 +5513,11 @@ function openBookingModal(defaults = {}) {
   bookingForm.elements.paymentMethod.value = defaults.paymentMethod || "";
   bookingForm.elements.note.value = defaults.note || "";
   sourceBookings = [];
+  sourceBookingQuery = "";
+  sourceBookingCandidates = [];
+  sourceBookingSearchPending = false;
+  showOldSourceBookingWarning();
+  window.clearTimeout(sourceBookingSearchTimer);
   syncSourceModeFromKind();
   renderSourceBookings();
   sourceRecordStatus.textContent = "Se încarcă ultimele 300 rezervări.";
@@ -5505,6 +5564,8 @@ function closeBookingModal() {
   deleteBookingButton.hidden = true;
   receiptFromBookingButton.hidden = true;
   bookingEditSession = null;
+  window.clearTimeout(sourceBookingSearchTimer);
+  sourceBookingRequestId += 1;
 }
 
 function setMoneyField(name, value) {
@@ -5700,15 +5761,7 @@ function renderLinkedReservations() {
     return;
   }
 
-  const currentKeys = linked.map((s) => [
-    s.key,
-    s.id,
-    s.dates,
-    s.price,
-    receiptAmountFor(s),
-    isStayFullyPaid(s) ? "paid" : "unpaid",
-    s.isDraft ? "draft" : "saved"
-  ].join("|"));
+  const currentKeys = linked.map((stay) => `${stay.key}|${stay.isDraft ? "draft" : "saved"}`);
   const keysMatch = currentKeys.length === _lastLinkedTabKeys.length && currentKeys.every((k, i) => k === _lastLinkedTabKeys[i]);
 
   if (keysMatch) {
@@ -5726,72 +5779,30 @@ function renderLinkedReservations() {
   _lastLinkedTabKeys = currentKeys;
 
   const currentIndex = Math.max(0, linked.findIndex((stay) => stay.key === (editingStayKey || "new-draft")));
-  const tabColors = [
-    { accent: "#0f6e7a", bg: "#e8f6f6", text: "#12363a" },
-    { accent: "#b86f38", bg: "#fff0e5", text: "#4d2917" },
-    { accent: "#4f7f46", bg: "#eef7eb", text: "#203d21" },
-    { accent: "#8b5e92", bg: "#f6edf7", text: "#412347" },
-    { accent: "#6f5a3c", bg: "#f4ecdd", text: "#3c2f1f" }
-  ];
   linkedReservationsSection.hidden = false;
   bookingModal.classList.add("has-reservation-tabs");
 
-  /* Summary tab aggregates saved linked reservations. Drafts must be saved before payment. */
-  const summaryLinked = existingLinked.length ? existingLinked : linked.filter((stay) => !stay.isDraft);
-  const totalPrice = summaryLinked.reduce((sum, s) => sum + Number(s.price || 0), 0);
-  const totalBalance = summaryLinked.reduce((sum, s) => sum + receiptAmountFor(s), 0);
-  const totalNights = summaryLinked.reduce((sum, s) => {
-    const n = s.nights !== undefined ? s.nights : stayDetails(s).nights;
-    return sum + n;
-  }, 0);
-  const allPaid = summaryLinked.length > 0 && summaryLinked.every(isStayFullyPaid);
   const hasDraft = linked.some((stay) => stay.isDraft);
-  const summaryCountLabel = hasDraft ? `${summaryLinked.length} salvate` : `${summaryLinked.length} rezervări`;
-
-  const summaryTab = `
-    <button class="linked-reservation-summary" data-linked-reservation="summary" type="button" title="${hasDraft ? "Salvează rezervarea nouă înainte de plata totală" : "Plată totală client"}">
-      <div class="summary-header">
-        <span class="summary-icon">Σ</span>
-        <strong>Total client</strong>
-      </div>
-      <div class="summary-details">
-        <span>${summaryCountLabel} · ${totalNights} ${totalNights === 1 ? "noapte" : "nopți"}</span>
-        <span class="summary-total">${formatCurrency(totalPrice)}</span>
-        <em class="${allPaid ? "is-paid" : "is-unpaid"}">${allPaid ? "Achitat integral" : `De încasat ${formatCurrency(totalBalance)}`}</em>
-      </div>
+  const totalTab = `
+    <button class="linked-reservation-summary compact-total-tab" data-linked-reservation="summary" type="button" aria-label="Plata totală pentru client" title="${hasDraft ? "Salvează rezervarea nouă înainte de plata totală" : "Plată totală client"}">
+      <span>T</span>
     </button>
   `;
 
   const tabsHtml = linked
     .map((stay, index) => {
       const current = index === currentIndex;
-      const paid = isStayFullyPaid(stay);
-      const status = paid ? "Achitat integral" : `De încasat ${formatCurrency(receiptAmountFor(stay))}`;
-      const stayNights = stay.nights !== undefined ? stay.nights : stayDetails(stay).nights;
-      const color = tabColors[index % tabColors.length];
-      const style = [
-        `--tab-accent:${color.accent}`,
-        `--tab-bg:${color.bg}`,
-        `--tab-text:${color.text}`,
-        `--tab-index:${index}`
-      ].join(";");
+      const reservationNumber = index + 1;
 
       return `
-        <button class="linked-reservation-tab ${current ? "is-current" : ""} ${paid ? "is-paid" : "is-unpaid"} ${stay.isDraft ? "is-draft" : ""}" type="button" role="tab" aria-selected="${current}" data-linked-reservation="${escapeHtml(stay.key)}" style="${style}">
-          <strong>${escapeHtml(stay.dates || "")}</strong>
-          <span class="linked-tab-number">${index + 1}</span>
-          <span>${escapeHtml(stay.id)} · ${stayNights} ${stayNights === 1 ? "noapte" : "nopți"}</span>
-          <em>${stay.isDraft ? "Nou" : status}</em>
+        <button class="linked-reservation-tab is-entering ${current ? "is-current" : ""} ${stay.isDraft ? "is-draft" : ""}" type="button" role="tab" aria-label="Rezervarea ${reservationNumber}" title="Deschide rezervarea ${reservationNumber}" aria-selected="${current}" data-linked-reservation="${escapeHtml(stay.key)}" style="--tab-index:${index}">
+          <span class="linked-tab-number">${reservationNumber}</span>
         </button>
       `;
     })
     .join("");
 
-  linkedReservationsTrack.innerHTML = summaryTab + tabsHtml;
-
-  if (linkedReservationsCount) {
-    linkedReservationsCount.textContent = `${linked.length} rezervări`;
-  }
+  linkedReservationsTrack.innerHTML = totalTab + tabsHtml;
 }
 
 function linkedReservationDraftDefaultsFromStay(source) {
@@ -6131,9 +6142,16 @@ function finishCalendarDrags() {
 
 function renderSourceBookings() {
   if (!sourceBookings.length) {
+    const emptyMessage = sourceBookingSearchPending
+      ? sourceBookingQuery
+        ? "Se caută nume asemănătoare..."
+        : "Se încarcă rezervările..."
+      : sourceBookingQuery
+        ? "Nu am găsit clienți cu un nume asemănător."
+        : "Nu sunt date încărcate.";
     sourceRecordRows.innerHTML = `
       <tr>
-        <td colspan="4">Nu sunt date încărcate.</td>
+        <td colspan="4">${emptyMessage}</td>
       </tr>
     `;
     return;
@@ -6162,30 +6180,28 @@ function renderSourceBookings() {
     </tr>
   `;
   };
+
+  if (sourceBookingQuery) {
+    sourceRecordRows.innerHTML = orderedBookings
+      .map((booking) => rowForBooking(booking, sourceBookings.indexOf(booking)))
+      .join("");
+    return;
+  }
+
   const todayRows = todayBookings.map((booking) => rowForBooking(booking, sourceBookings.indexOf(booking)));
   const separator =
     todayBookings.length && otherBookings.length
       ? [
           `
           <tr class="source-record-separator" aria-hidden="true">
-            <td colspan="4"><span>După data sosirii</span></td>
-          </tr>
-        `
-        ]
-      : [];
-  const noTodayRow =
-    !todayBookings.length && otherBookings.length
-      ? [
-          `
-          <tr class="source-record-separator source-record-empty-today">
-            <td colspan="4"><span>Nu există sosiri astăzi · După data sosirii</span></td>
+            <td colspan="4"><span class="source-record-divider"></span></td>
           </tr>
         `
         ]
       : [];
   const otherRows = otherBookings.map((booking) => rowForBooking(booking, sourceBookings.indexOf(booking)));
 
-  sourceRecordRows.innerHTML = [...todayRows, ...separator, ...noTodayRow, ...otherRows].join("");
+  sourceRecordRows.innerHTML = [...todayRows, ...separator, ...otherRows].join("");
 }
 
 function sourceRecordDateValue(value) {
@@ -6198,9 +6214,24 @@ function sourceRecordModifiedValue(value) {
   return Number.isFinite(time) ? time : 0;
 }
 
+function rememberSourceBookingCandidates(bookings, replace = false) {
+  const candidateMap = new Map();
+  const candidates = replace ? bookings : [...sourceBookingCandidates, ...bookings];
+  candidates.forEach((booking) => {
+    const key = [booking.guest, booking.phone, booking.start, booking.end, booking.unitHint, booking.source].join("|");
+    candidateMap.set(key, booking);
+  });
+  sourceBookingCandidates = [...candidateMap.values()];
+}
+
 function orderedSourceBookings(todayText = toISODate(new Date())) {
   const todayValue = sourceRecordDateValue(todayText);
   return [...sourceBookings].sort((first, second) => {
+    if (sourceBookingQuery) {
+      const scoreCompare = fuzzyMatchScore(sourceBookingQuery, first.guest) - fuzzyMatchScore(sourceBookingQuery, second.guest);
+      if (scoreCompare !== 0) return scoreCompare;
+    }
+
     const firstStart = sourceRecordDateValue(first.start);
     const secondStart = sourceRecordDateValue(second.start);
     const firstGroup = first.start === todayText ? 0 : firstStart > todayValue ? 1 : 2;
@@ -6221,12 +6252,24 @@ function sourceTodayArrivalCount() {
 }
 
 function setSourceRecordsMode(mode) {
-  sourceRecordsMode = normalizeTimelineMode(mode);
+  const nextMode = normalizeTimelineMode(mode);
+  if (nextMode !== sourceRecordsMode) sourceBookingCandidates = [];
+  sourceRecordsMode = nextMode;
   updateSourceModeSwitchUi();
 }
 
 function syncSourceModeFromKind() {
   setSourceRecordsMode(bookingForm.elements.kind.value);
+}
+
+function showOldSourceBookingWarning(booking = null) {
+  if (!oldSourceBookingWarning || !oldSourceBookingWarningText) return;
+  const checkoutDate = validDateFromISO(booking?.end);
+  const isOldReservation = Boolean(checkoutDate && checkoutDate < today);
+  oldSourceBookingWarning.hidden = !isOldReservation;
+  oldSourceBookingWarningText.textContent = isOldReservation
+    ? `Această rezervare s-a încheiat pe ${formatShortDateLabel(booking.end)}. Verifică perioada înainte de salvare.`
+    : "";
 }
 
 function applySourceBooking(booking) {
@@ -6263,34 +6306,79 @@ function applySourceBooking(booking) {
   renderBookingFacilities();
   renderBookingRangeCalendar();
   renderBookingStationingLink();
+  showOldSourceBookingWarning(booking);
   savePricingSnapshot();
   showToast(`Date preluate pentru ${booking.guest}`);
 }
 
-async function loadSourceBookings() {
+async function loadSourceBookings(query = bookingForm.elements.guest.value.trim()) {
   const mode = groupForMode(sourceRecordsMode);
+  const normalizedQuery = String(query || "").trim();
+  const requestId = ++sourceBookingRequestId;
+  sourceBookingQuery = normalizedQuery;
+  sourceBookingSearchPending = true;
   loadSourceBookingsButton.disabled = true;
-  sourceRecordStatus.textContent = `Se încarcă ultimele 300 rezervări pentru ${timelineModeLabel(sourceRecordsMode)}...`;
+  sourceRecordStatus.textContent = normalizedQuery
+    ? `Se caută în baza de date nume asemănătoare cu „${normalizedQuery}”...`
+    : `Se încarcă ultimele 300 rezervări pentru ${timelineModeLabel(sourceRecordsMode)}...`;
 
   try {
-    const response = await fetch(`/api/source-bookings?mode=${mode}`, { cache: "no-store" });
+    const params = new URLSearchParams({ mode });
+    if (normalizedQuery) params.set("query", normalizedQuery);
+    const response = await fetch(`/api/source-bookings?${params}`, { cache: "no-store" });
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error(result.error || "Nu am putut citi baza de date");
+    if (requestId !== sourceBookingRequestId) return;
 
     sourceBookings = Array.isArray(result.bookings) ? result.bookings : [];
+    rememberSourceBookingCandidates(sourceBookings, !normalizedQuery);
+    sourceBookingSearchPending = false;
     renderSourceBookings();
     const todayCount = sourceTodayArrivalCount();
-    sourceRecordStatus.textContent = sourceBookings.length
-      ? `${sourceBookings.length} rezervări încărcate. ${todayCount} rezervări pentru azi, apoi restul după dată.`
-      : "Nu am găsit rezervări valide pentru modul curent.";
+    sourceRecordStatus.textContent = normalizedQuery
+      ? sourceBookings.length
+        ? `${sourceBookings.length} potriviri găsite pentru „${normalizedQuery}”.`
+        : `Nu am găsit clienți cu un nume asemănător cu „${normalizedQuery}”.`
+      : sourceBookings.length
+        ? `${sourceBookings.length} rezervări încărcate. ${todayCount} rezervări pentru azi, apoi restul după dată.`
+        : "Nu am găsit rezervări valide pentru modul curent.";
   } catch (error) {
+    if (requestId !== sourceBookingRequestId) return;
     sourceBookings = [];
+    sourceBookingSearchPending = false;
     renderSourceBookings();
     sourceRecordStatus.textContent = error.message || "Nu s-a putut face conexiunea la baza de date.";
   } finally {
-    loadSourceBookingsButton.disabled = false;
-    refreshIcons();
+    if (requestId === sourceBookingRequestId) {
+      loadSourceBookingsButton.disabled = false;
+      refreshIcons();
+    }
   }
+}
+
+function searchSourceBookingsFromName() {
+  renderBookingStationingLink();
+  showOldSourceBookingWarning();
+  window.clearTimeout(sourceBookingSearchTimer);
+  sourceBookingRequestId += 1;
+  sourceBookingQuery = bookingForm.elements.guest.value.trim();
+  sourceBookingSearchPending = true;
+  sourceBookings = sourceBookingQuery
+    ? sourceBookingCandidates
+        .map((booking) => ({ booking, score: fuzzyMatchScore(sourceBookingQuery, booking.guest) }))
+        .filter((match) => Number.isFinite(match.score))
+        .sort((first, second) => first.score - second.score)
+        .slice(0, 300)
+        .map((match) => match.booking)
+    : [];
+  renderSourceBookings();
+  sourceRecordStatus.textContent = sourceBookingQuery
+    ? `Se caută în baza de date nume asemănătoare cu „${sourceBookingQuery}”...`
+    : `Se încarcă ultimele 300 rezervări pentru ${timelineModeLabel(sourceRecordsMode)}...`;
+  loadSourceBookingsButton.disabled = true;
+  sourceBookingSearchTimer = window.setTimeout(() => {
+    loadSourceBookings(sourceBookingQuery);
+  }, 180);
 }
 
 function openEditClient(stayKey) {
@@ -6925,7 +7013,6 @@ linkedReservationsTrack?.addEventListener("click", (event) => {
   if (!button) return;
   const stayKey = button.dataset.linkedReservation;
 
-  /* Summary tab → open payment modal with total balance */
   if (stayKey === "summary") {
     if (!editingStayKey) {
       showToast("Salvează rezervarea nouă înainte de plata totală.");
@@ -7033,7 +7120,7 @@ bookingForm.elements.arrival.addEventListener("change", syncDepartureAndPricing)
 bookingForm.elements.nights.addEventListener("input", syncDepartureAndPricing);
 bookingForm.elements.nights.addEventListener("change", syncDepartureAndPricing);
 bookingForm.elements.departure.addEventListener("change", syncNightsAndPricing);
-bookingForm.elements.guest.addEventListener("input", renderBookingStationingLink);
+bookingForm.elements.guest.addEventListener("input", searchSourceBookingsFromName);
 bookingForm.elements.price.addEventListener("input", syncBasePriceFromTotalInput);
 bookingForm.elements.adults.addEventListener("input", recalculateBookingPriceAfterUserChange);
 bookingForm.elements.adults.addEventListener("change", recalculateBookingPriceAfterUserChange);
@@ -7060,12 +7147,14 @@ bookingStationingLinkSection?.addEventListener("click", (event) => {
   if (!card) return;
   selectBookingStationingDeduction(card.dataset.stationingDeduction);
 });
-loadSourceBookingsButton.addEventListener("click", loadSourceBookings);
+loadSourceBookingsButton.addEventListener("click", () => loadSourceBookings());
 sourceModeSwitch.addEventListener("click", (event) => {
   const button = event.target.closest("[data-source-mode-option]");
   if (!button) return;
   setSourceRecordsMode(button.dataset.sourceModeOption);
   sourceBookings = [];
+  sourceBookingCandidates = [];
+  sourceBookingSearchPending = false;
   renderSourceBookings();
   loadSourceBookings();
 });
@@ -7498,12 +7587,10 @@ bookingForm.addEventListener("submit", (event) => {
   const basePrice = normalizeMoneyValue(data.get("basePrice") || price);
   const facilities = refreshFacilityNights(bookingFacilityDraft, data.get("arrival"), data.get("departure"));
   const barItems = normalizeStayBarItems(existingStay?.barItems);
-  const balance = normalizeMoneyValue(price);
-  const deposit = 0;
-  const existingPaid = existingStay ? isStayFullyPaid(existingStay) : false;
-  const preservedSettledPrice = existingStay ? paymentCoveredPriceForStay(existingStay) : 0;
-  const settledPrice = existingPaid ? price : Math.min(price, preservedSettledPrice);
-  const paid = existingStay ? isStayFullyPaid({ ...existingStay, price, settledPrice, paid: existingPaid }) : false;
+  const paid = Boolean(existingStay && price > 0 && isStayFullyPaid(existingStay));
+  const settledPrice = paid ? price : 0;
+  const balance = paid ? 0 : normalizeMoneyValue(price);
+  const deposit = paid ? price : 0;
   const adults = Math.max(0, Number(data.get("adults") || 0));
   const children = Math.max(0, Number(data.get("children") || 0));
   const party = Math.max(1, adults + children);

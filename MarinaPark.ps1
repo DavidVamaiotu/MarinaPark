@@ -8,6 +8,7 @@ $UpdateFileList = @(
   "activity.css",
   "activity.html",
   "activity.js",
+  "assets\marina-park-logo.png",
   "app.js",
   "fonts\OFL.txt",
   "fonts\Rubik-Variable.ttf",
@@ -280,7 +281,7 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
   Write-Host "Node.js nu s-a putut instala automat."
-  Write-Host "Instaleaza Node.js manual de pe https://nodejs.org/ si porneste din nou MarinaPark.bat."
+  Write-Host "Instaleaza Node.js manual de pe https://nodejs.org/ si porneste din nou MarinaPark.exe."
   if (-not $BackgroundMode -and -not $LauncherMode) {
     Read-Host "Apasa Enter pentru inchidere"
   }

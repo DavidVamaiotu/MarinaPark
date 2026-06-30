@@ -31,7 +31,7 @@ Aplicatia se poate actualiza singura la pornire, folosind GitHub Releases.
 Fluxul este:
 
 1. Publici o versiune noua in GitHub Releases.
-2. Fiecare PC porneste `MarinaPark.bat`.
+2. Fiecare PC porneste `MarinaPark.exe` (sau `MarinaPark.bat` ca varianta de rezerva).
 3. `MarinaPark.ps1` citeste `version.json`, verifica manifestul `latest.json` din GitHub si descarca update-ul daca versiunea este mai noua.
 4. Sunt inlocuite doar fisierele aplicatiei. Datele locale din `data/`, `node_modules/`, logurile si bonurile nu sunt incluse in update si raman pe PC.
 
