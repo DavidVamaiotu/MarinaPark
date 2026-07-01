@@ -47,11 +47,31 @@ Installerul este NSIS per-user, nu cere drepturi de administrator și nu șterge
 
 ## Publicare și actualizare automată
 
-Versiunea din tag devine versiunea aplicației:
+Rulează scriptul `bump` din rădăcina proiectului. Implicit, acesta publică
+următoarea versiune patch:
 
-```powershell
-git tag v1.0.18
-git push origin v1.0.18
+```bash
+./bump
+```
+
+Poți cere o versiune minoră, majoră sau explicită:
+
+```bash
+./bump minor
+./bump major
+./bump 2.0.0
+```
+
+Scriptul verifică autentificarea GitHub, ia versiunea curentă din ultimul
+release public, actualizează fișierele de versiune, rulează testele, comite
+toate modificările curente, împinge branch-ul și tag-ul, așteaptă workflow-ul
+Windows și verifică installerul, `latest.yml` și blockmap-ul descărcate din
+release. Este disponibil și prin `npm run bump`.
+
+La prima utilizare, dacă autentificarea a expirat:
+
+```bash
+gh auth login -h github.com -p https -w
 ```
 
 Workflow-ul `.github/workflows/release.yml` construiește installerul pe Windows și publică în GitHub Releases installerul, `latest.yml` și metadatele de update.

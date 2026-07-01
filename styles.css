@@ -7334,47 +7334,150 @@ label,
   font-weight: 600;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1180px), (max-height: 760px) {
   #guest-form-section {
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   #guest-form-section .booking-modal-content {
     width: calc(100vw - 16px);
-    height: auto;
-    max-height: calc(100dvh - 16px);
+    height: calc(100dvh - 16px);
+    max-height: none;
   }
 
   #guest-form-section #bookingForm {
-    grid-template-columns: 190px minmax(0, 1fr);
-    grid-template-rows: auto auto;
-    overflow-y: auto;
+    grid-template-columns: 190px minmax(0, 1fr) 238px;
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
   }
 
   #guest-form-section #bookingForm > .booking-main-column {
     grid-column: 2;
     grid-row: 1;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto;
-    overflow: visible;
+    grid-template-rows: 218px minmax(0, 1fr);
+    overflow: hidden;
   }
 
-  #guest-form-section #bookingForm .booking-reference-section,
+  #guest-form-section #bookingForm .booking-reference-section {
+    grid-column: 1;
+    grid-row: 1;
+    align-content: stretch;
+    height: 100%;
+    gap: 6px 8px;
+    padding: 12px;
+  }
+
+  #guest-form-section #bookingForm .booking-name-field {
+    grid-column: 1 / -1;
+  }
+
+  #guest-form-section #bookingForm .booking-quick-grid {
+    grid-column: 1 / 4;
+    gap: 6px;
+    width: 100%;
+    margin: 0;
+  }
+
+  #guest-form-section #bookingForm .booking-phone-field {
+    grid-column: 4 / 7;
+  }
+
+  #guest-form-section #bookingForm .booking-reference-car-field {
+    grid-column: 1 / 4;
+  }
+
+  #guest-form-section #bookingForm .booking-price-field {
+    grid-column: 4 / 7;
+  }
+
+  #guest-form-section #bookingForm .booking-reference-section input {
+    min-height: 34px;
+    padding-block: 5px;
+  }
+
+  #guest-form-section #bookingForm .booking-reference-section label {
+    font-size: 12px;
+  }
+
   #guest-form-section #bookingForm .booking-stay-section {
     grid-column: 1;
-    grid-row: auto;
-    height: auto;
+    grid-row: 2;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    align-self: stretch;
+    height: 100%;
+    gap: 6px;
+    padding: 8px;
+  }
+
+  #guest-form-section #bookingForm .booking-calendar-panel {
+    max-width: none;
+    height: 100%;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 4px;
+    padding: 8px;
+  }
+
+  #guest-form-section #bookingForm .booking-calendar-panel .price-calendar {
+    grid-template-rows: 18px repeat(6, minmax(0, 1fr));
+    height: 100%;
+  }
+
+  #guest-form-section #bookingForm .booking-calendar-panel .calendar-weekday {
+    min-height: 18px;
+    padding-block: 2px;
+  }
+
+  #guest-form-section #bookingForm .booking-calendar-panel .calendar-day {
+    padding-block: 1px;
   }
 
   #guest-form-section #bookingForm > .booking-side-column {
-    grid-column: 2;
-    grid-row: 2;
-    height: auto;
-    overflow: visible;
+    grid-column: 3;
+    grid-row: 1;
+    height: 100%;
+    overflow: hidden;
   }
 
   #guest-form-section #bookingForm > .booking-import-column {
     grid-column: 1;
-    grid-row: 1 / span 2;
+    grid-row: 1;
   }
+}
+
+/* Dark green sidebar contrast. */
+.sidebar {
+  background: #173c32;
+  color: #f7fbf9;
+  border-right-color: #285447;
+}
+
+.sidebar .brand small,
+.sidebar .app-version,
+.sidebar .nav-item {
+  color: #c8dbd4;
+}
+
+.sidebar .sidebar-toggle,
+.sidebar .icon-button {
+  color: #e5f2ed;
+  background: #214b40;
+  border-color: #3d675b;
+}
+
+.sidebar .nav-item:hover,
+.sidebar .nav-item.is-active {
+  color: #ffffff;
+  background: #285447;
+}
+
+.sidebar .side-summary {
+  color: #f7fbf9;
+  background: #214b40;
+  border-color: #3d675b;
+}
+
+.sidebar .side-summary .eyebrow,
+.sidebar .side-summary dt {
+  color: #b9d0c8;
 }

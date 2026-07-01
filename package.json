@@ -1,16 +1,17 @@
 {
   "name": "marina-park",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "Aplicație desktop pentru administrarea Marina Park",
   "main": "electron-main.js",
   "author": "Marina Park",
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/start-electron.js",
     "server": "node --no-warnings server.js",
     "test": "node --test test/persistent-files.test.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis --x64",
-    "verify:release": "node scripts/verify-electron-release.js"
+    "verify:release": "node scripts/verify-electron-release.js",
+    "bump": "bash ./bump"
   },
   "dependencies": {
     "electron-updater": "6.8.9",

@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: ./bump [patch|minor|major|X.Y.Z] [--yes]
+
+Creates and publishes a Marina Park desktop release.
+
+Examples:
+  ./bump             # next patch version, for example 1.0.17 -> 1.0.18
+  ./bump minor       # next minor version
+  ./bump 2.0.0       # explicit version
+  ./bump patch --yes # skip the confirmation prompt
+
+The script stages every current repository change, commits it, pushes the
+current branch and version tag, waits for GitHub Actions, and verifies the
+published Electron auto-update files.
+EOF
+}
+
+die() {
+  printf 'bump: %s\n' "$*" >&2
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
+}
+
+bump_spec="patch"
+assume_yes=false
+spec_set=false
+
+for argument in "$@"; do
+  case "$argument" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -y|--yes)
+      assume_yes=true
+      ;;
+    patch|minor|major|[0-9]*.[0-9]*.[0-9]*)
+      if $spec_set; then
+        die "Only one version argument may be supplied."
+      fi
+      bump_spec="$argument"
+      spec_set=true
+      ;;
+    *)
+      die "Unknown argument: $argument. Run ./bump --help."
+      ;;
+  esac
+done
+
+need git
+need gh
+need node
+need npm
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Run this inside the Marina Park Git repository."
+cd "$repo_root"
+
+[[ -f package.json && -f electron-builder.yml && -f .github/workflows/release.yml ]] ||
+  die "This does not look like the Marina Park Electron repository."
+
+package_name="$(node -p "require('./package.json').name")"
+[[ "$package_name" == "marina-park" ]] || die "Unexpected package: $package_name"
+
+branch="$(git symbolic-ref --quiet --short HEAD)" || die "A release cannot be made from detached HEAD."
+
+for state_file in MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD; do
+  [[ ! -e "$(git rev-parse --git-path "$state_file")" ]] ||
+    die "Finish the current Git operation before publishing a release."
+done
+
+if ! gh auth status -h github.com >/dev/null 2>&1; then
+  printf '%s\n' "GitHub authentication is missing or expired." >&2
+  printf '%s\n' "Run: gh auth login -h github.com -p https -w" >&2
+  exit 1
+fi
+
+repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+[[ -n "$repo" ]] || die "Could not determine the GitHub repository."
+gh api "repos/$repo" >/dev/null || die "GitHub is unreachable or authentication is invalid."
+
+printf 'Fetching current GitHub state for %s...\n' "$repo"
+git fetch origin --tags --prune
+
+remote_branch="refs/remotes/origin/$branch"
+if git show-ref --verify --quiet "$remote_branch" &&
+   ! git merge-base --is-ancestor "$remote_branch" HEAD; then
+  die "origin/$branch contains commits that are not local. Pull or rebase before releasing."
+fi
+
+latest_tag="$(gh release view --repo "$repo" --json tagName --jq .tagName 2>/dev/null || true)"
+if [[ -z "$latest_tag" ]]; then
+  latest_tag="v0.0.0"
+fi
+latest_version="${latest_tag#v}"
+
+target_version="$({ node - "$latest_version" "$bump_spec" <<'NODE'
+const baseText = process.argv[2];
+const spec = process.argv[3];
+const parse = (value) => {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value);
+  if (!match) throw new Error(`Invalid semantic version: ${value}`);
+  return match.slice(1).map(Number);
+};
+const compare = (left, right) => {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+};
+
+const base = parse(baseText);
+let target;
+if (spec === "patch") target = [base[0], base[1], base[2] + 1];
+else if (spec === "minor") target = [base[0], base[1] + 1, 0];
+else if (spec === "major") target = [base[0] + 1, 0, 0];
+else target = parse(spec);
+
+if (compare(target, base) <= 0) {
+  throw new Error(`Target ${target.join(".")} must be newer than live release ${baseText}.`);
+}
+process.stdout.write(target.join("."));
+NODE
+  } 2>&1)" || die "$target_version"
+
+tag="v$target_version"
+local_package_version="$(node -p "require('./package.json').version")"
+local_display_version="$(node -p "require('./version.json').version")"
+
+node - "$local_package_version" "$local_display_version" "$target_version" <<'NODE'
+const versions = process.argv.slice(2);
+const parse = (value) => value.split(".").map(Number);
+const compare = (left, right) => {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+};
+const target = parse(versions[2]);
+for (const local of versions.slice(0, 2)) {
+  if (!/^\d+\.\d+\.\d+$/.test(local) || compare(parse(local), target) > 0) {
+    throw new Error(`Local version ${local} is newer than target ${versions[2]}. Use an explicit newer version.`);
+  }
+}
+NODE
+
+if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1 ||
+   gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+  die "$tag already exists on GitHub. Choose a newer version."
+fi
+
+sensitive_changes="$(git status --porcelain=v1 -uall | sed 's/^...//' | grep -Ei '(^|/)(\.env($|\.)|[^/]+\.(pem|p12|pfx|key)$|credentials?($|\.)|secrets?($|\.))' || true)"
+if [[ -n "$sensitive_changes" ]]; then
+  printf '%s\n' "Potentially sensitive changed files were found:" >&2
+  printf '%s\n' "$sensitive_changes" >&2
+  die "Remove or ignore those files before releasing."
+fi
+
+printf '\nLatest GitHub release: %s\n' "$latest_tag"
+printf 'Release to create:    %s\n' "$tag"
+printf 'Source branch:        %s\n' "$branch"
+printf '\nChanges that will be committed and published:\n'
+git status --short
+
+if ! $assume_yes; then
+  printf '\nPublish all of these changes as %s? [y/N] ' "$tag"
+  read -r answer
+  [[ "$answer" == "y" || "$answer" == "Y" ]] || die "Cancelled."
+fi
+
+printf '\nUpdating local version files to %s...\n' "$target_version"
+npm version "$target_version" --no-git-tag-version --allow-same-version >/dev/null
+node - "$target_version" <<'NODE'
+const fs = require("fs");
+const target = process.argv[2];
+const metadata = JSON.parse(fs.readFileSync("version.json", "utf8"));
+metadata.version = target;
+fs.writeFileSync("version.json", `${JSON.stringify(metadata, null, 2)}\n`);
+NODE
+
+printf 'Running release checks...\n'
+git diff --check
+node --check electron-main.js
+node --check server.js
+node --check app.js
+node --check scripts/start-electron.js
+npm test
+
+git add -A
+printf '\nRelease commit contents:\n'
+git diff --cached --stat
+
+if ! git diff --cached --quiet; then
+  git commit -m "Release $tag"
+else
+  printf 'No new commit was needed; using current HEAD.\n'
+fi
+
+release_commit="$(git rev-parse HEAD)"
+printf '\nPushing branch %s...\n' "$branch"
+git push -u origin "$branch"
+
+if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+  tag_commit="$(git rev-list -n 1 "$tag")"
+  [[ "$tag_commit" == "$release_commit" ]] || die "Local $tag points to a different commit."
+else
+  git tag -a "$tag" -m "Marina Park $target_version"
+fi
+
+printf 'Pushing %s to start the Windows release workflow...\n' "$tag"
+git push origin "$tag"
+
+printf 'Waiting for GitHub Actions to register the release workflow...\n'
+run_id=""
+for _ in {1..45}; do
+  run_ids="$(gh run list \
+    --repo "$repo" \
+    --workflow release.yml \
+    --event push \
+    --limit 30 \
+    --json databaseId,headBranch,headSha \
+    --jq ".[] | select(.headBranch == \"$tag\" and .headSha == \"$release_commit\") | .databaseId")"
+  run_id="${run_ids%%$'\n'*}"
+  [[ -n "$run_id" ]] && break
+  sleep 2
+done
+[[ -n "$run_id" ]] || die "The GitHub Actions release run did not appear. Check the Actions page."
+
+gh run watch "$run_id" --repo "$repo" --exit-status
+
+verify_dir="$(mktemp -d)"
+cleanup() {
+  rm -rf "$verify_dir"
+}
+trap cleanup EXIT
+
+printf '\nDownloading the public updater assets for verification...\n'
+gh release download "$tag" \
+  --repo "$repo" \
+  --dir "$verify_dir" \
+  --clobber \
+  --pattern "latest.yml" \
+  --pattern "MarinaPark-Setup-$target_version.exe" \
+  --pattern "MarinaPark-Setup-$target_version.exe.blockmap"
+
+node scripts/verify-electron-release.js "$verify_dir" "$target_version"
+
+published_latest="$(gh release view --repo "$repo" --json tagName --jq .tagName)"
+if [[ "$published_latest" != "$tag" ]]; then
+  printf 'Marking %s as the latest release...\n' "$tag"
+  gh release edit "$tag" --repo "$repo" --latest
+  published_latest="$(gh release view --repo "$repo" --json tagName --jq .tagName)"
+fi
+[[ "$published_latest" == "$tag" ]] || die "GitHub latest release is $published_latest, expected $tag."
+
+release_url="$(gh release view "$tag" --repo "$repo" --json url --jq .url)"
+printf '\nRelease %s is published and verified.\n%s\n' "$tag" "$release_url"
