@@ -6812,7 +6812,7 @@ textarea,
 }
 
 #guest-form-section .booking-modal-content {
-  width: min(1320px, calc(100vw - 24px));
+  width: min(1400px, calc(100vw - 24px));
   height: min(900px, calc(100dvh - 24px));
   max-height: none;
   border-radius: 14px;
@@ -7066,7 +7066,7 @@ textarea,
 
 /* Compact linked-reservation tabs: the reservation opens on click. */
 #guest-form-section.has-reservation-tabs .booking-modal-content {
-  width: min(1320px, calc(100vw - 104px));
+  width: min(1400px, calc(100vw - 104px));
   margin-right: 76px;
   overflow: visible;
 }
@@ -7339,38 +7339,38 @@ label,
   }
 
   #guest-form-section .booking-modal-content {
-    width: min(1320px, calc(100vw - 16px));
-    height: min(620px, calc(100dvh - 16px));
+    width: min(1400px, calc(100vw - 20px));
+    height: min(720px, calc(100dvh - 20px));
     max-height: none;
   }
 
   #guest-form-section .booking-modal-content > .section-header {
-    min-height: 42px;
-    padding-block: 4px;
+    min-height: 46px;
+    padding-block: 5px;
   }
 
   #guest-form-section .booking-modal-content > .section-header h2 {
-    font-size: 21px;
+    font-size: 22px;
   }
 
   #guest-form-section .booking-modal-content > .section-header .icon-button {
-    top: 7px;
+    top: 9px;
   }
 
   #guest-form-section #bookingForm {
-    grid-template-columns: 180px minmax(0, 1fr) 226px;
+    grid-template-columns: 190px minmax(0, 1fr) 250px;
     grid-template-rows: minmax(0, 1fr);
-    gap: 8px;
+    gap: 10px;
     overflow: hidden;
-    padding: 6px;
+    padding: 8px;
   }
 
   #guest-form-section #bookingForm > .booking-main-column {
     grid-column: 2;
     grid-row: 1;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: clamp(166px, 32%, 190px) minmax(0, 1fr);
-    gap: 6px;
+    grid-template-rows: clamp(230px, 38%, 250px) minmax(0, 1fr);
+    gap: 8px;
     overflow: hidden;
   }
 
@@ -7379,8 +7379,8 @@ label,
     grid-row: 1;
     align-content: stretch;
     height: 100%;
-    gap: 4px 6px;
-    padding: 8px;
+    gap: 6px 10px;
+    padding: 10px 14px;
   }
 
   #guest-form-section #bookingForm .booking-name-field {
@@ -7388,32 +7388,32 @@ label,
   }
 
   #guest-form-section #bookingForm .booking-quick-grid {
-    grid-column: 1 / 4;
-    gap: 4px;
-    width: 100%;
-    margin: 0;
+    grid-column: 1 / -1;
+    gap: 12px;
+    width: min(100%, 480px);
+    margin: 0 auto;
   }
 
   #guest-form-section #bookingForm .booking-phone-field {
-    grid-column: 4 / 7;
-  }
-
-  #guest-form-section #bookingForm .booking-reference-car-field {
     grid-column: 1 / 4;
   }
 
-  #guest-form-section #bookingForm .booking-price-field {
+  #guest-form-section #bookingForm .booking-reference-car-field {
     grid-column: 4 / 7;
   }
 
+  #guest-form-section #bookingForm .booking-price-field {
+    grid-column: 3 / 5;
+  }
+
   #guest-form-section #bookingForm .booking-reference-section input {
-    min-height: 30px;
-    padding-block: 3px;
+    min-height: 32px;
+    padding-block: 4px;
   }
 
   #guest-form-section #bookingForm .booking-reference-section label {
     gap: 2px;
-    font-size: 11px;
+    font-size: 12px;
   }
 
   #guest-form-section #bookingForm .booking-stay-section {
@@ -7422,25 +7422,27 @@ label,
     grid-template-rows: auto auto minmax(0, 1fr);
     align-self: stretch;
     height: 100%;
-    gap: 4px;
-    padding: 6px;
+    gap: 5px;
+    padding: 8px;
   }
 
   #guest-form-section #bookingForm .booking-calendar-panel {
-    max-width: none;
+    width: min(100%, 500px);
+    max-width: 500px;
     height: 100%;
+    margin-inline: auto;
     grid-template-rows: auto minmax(0, 1fr) auto;
-    gap: 3px;
-    padding: 6px;
+    gap: 5px;
+    padding: 8px;
   }
 
   #guest-form-section #bookingForm .booking-calendar-panel .price-calendar {
-    grid-template-rows: 18px repeat(6, minmax(0, 1fr));
+    grid-template-rows: 20px repeat(6, minmax(26px, 1fr));
     height: 100%;
   }
 
   #guest-form-section #bookingForm .booking-calendar-panel .calendar-weekday {
-    min-height: 18px;
+    min-height: 20px;
     padding-block: 2px;
   }
 
@@ -7475,27 +7477,27 @@ label,
   #guest-form-section #bookingForm > .booking-side-column {
     grid-column: 3;
     grid-row: 1;
-    gap: 6px;
+    gap: 8px;
     height: 100%;
     overflow: hidden;
   }
 
   #guest-form-section #bookingForm > .booking-side-column > .form-section {
-    padding: 8px;
+    padding: 10px;
   }
 
   #guest-form-section #bookingForm > .booking-side-column > .booking-extras-section {
-    min-height: 104px;
+    min-height: 118px;
   }
 
   #guest-form-section #bookingForm .booking-actions {
-    gap: 5px;
-    padding: 6px;
+    gap: 6px;
+    padding: 7px;
   }
 
   #guest-form-section #bookingForm .primary-button.full,
   #guest-form-section #bookingForm .ghost-button.full {
-    min-height: 36px;
+    min-height: 38px;
   }
 
   #guest-form-section #bookingForm > .booking-import-column {
