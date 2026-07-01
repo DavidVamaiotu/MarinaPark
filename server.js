@@ -7,8 +7,9 @@ const { execFile } = require("child_process");
 const { DatabaseSync } = require("node:sqlite");
 const mysql = require("mysql2/promise");
 
-const rootDir = __dirname;
-const dataDir = path.join(rootDir, "data");
+const rootDir = path.resolve(process.env.MARINA_APP_ROOT || __dirname);
+const dataDir = path.resolve(process.env.MARINA_DATA_DIR || path.join(rootDir, "data"));
+const runtimeDir = path.resolve(process.env.MARINA_RUNTIME_DIR || rootDir);
 const databasePath = path.join(dataDir, "marina-park.sqlite");
 const backupDir = path.join(dataDir, "backups");
 const dailyBackupPath = path.join(backupDir, "marina-park-daily.sqlite");
@@ -576,14 +577,14 @@ async function refreshDatabaseBackups(options = {}) {
     await copyCurrentDatabase(dailyBackupPath);
     nextMeta.dailyDate = today;
     nextMeta.dailySavedAt = now.toISOString();
-    nextMeta.dailyFile = path.relative(rootDir, dailyBackupPath);
+    nextMeta.dailyFile = path.relative(dataDir, dailyBackupPath);
   }
 
   if (shouldWriteWeekly) {
     await copyCurrentDatabase(weeklyBackupPath);
     nextMeta.weeklyWeek = week;
     nextMeta.weeklySavedAt = now.toISOString();
-    nextMeta.weeklyFile = path.relative(rootDir, weeklyBackupPath);
+    nextMeta.weeklyFile = path.relative(dataDir, weeklyBackupPath);
   }
 
   if (shouldWriteDaily || shouldWriteWeekly) {
@@ -842,7 +843,7 @@ async function receiptDirectoryFor(config = {}) {
 }
 
 async function appendReceiptInfoLine(line) {
-  const infoDir = path.join(rootDir, "bin");
+  const infoDir = path.join(runtimeDir, "bin");
   await fs.mkdir(infoDir, { recursive: true });
   await fs.appendFile(path.join(infoDir, "info.txt"), `${line}${os.EOL}`, "utf8");
   return path.join(infoDir, "info.txt");
@@ -1388,7 +1389,7 @@ async function serveStatic(request, response) {
   const requestedPath = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname === "/log" ? "/activity.html" : url.pathname);
   const filePath = path.resolve(rootDir, `.${requestedPath}`);
 
-  if (!filePath.startsWith(rootDir)) {
+  if (filePath !== rootDir && !filePath.startsWith(`${rootDir}${path.sep}`)) {
     send(response, 403, "Forbidden", "text/plain; charset=utf-8");
     return;
   }
@@ -1494,11 +1495,44 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(port, () => {
-  console.log(`Marina Park app: http://localhost:${port}`);
-  console.log("Database: data/marina-park.sqlite");
-});
+let backupInterval = null;
 
-enqueueDatabaseBackup({ reason: "startup" });
-const backupInterval = setInterval(() => enqueueDatabaseBackup({ reason: "interval" }), 60 * 60 * 1000);
-backupInterval.unref?.();
+function startServer(options = {}) {
+  const listenPort = Number(options.port ?? port);
+  const listenHost = String(options.host || process.env.HOST || "127.0.0.1");
+
+  return new Promise((resolve, reject) => {
+    const onError = (error) => reject(error);
+    server.once("error", onError);
+    server.listen(listenPort, listenHost, () => {
+      server.off("error", onError);
+      const address = server.address();
+      const activePort = typeof address === "object" && address ? address.port : listenPort;
+      const url = `http://${listenHost}:${activePort}`;
+      console.log(`Marina Park app: ${url}`);
+      console.log(`Database: ${databasePath}`);
+      enqueueDatabaseBackup({ reason: "startup" });
+      backupInterval = setInterval(() => enqueueDatabaseBackup({ reason: "interval" }), 60 * 60 * 1000);
+      backupInterval.unref?.();
+      resolve({ server, port: activePort, host: listenHost, url });
+    });
+  });
+}
+
+function stopServer() {
+  if (backupInterval) {
+    clearInterval(backupInterval);
+    backupInterval = null;
+  }
+  if (!server.listening) return Promise.resolve();
+  return new Promise((resolve) => server.close(resolve));
+}
+
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { startServer, stopServer };

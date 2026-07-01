@@ -1,70 +1,61 @@
-# Administrare clienti Marina Park
+# Marina Park Desktop
 
-Aplicatie locala pentru administrarea clientilor Marina Park.
+Aplicație Windows pentru administrarea clienților Marina Park.
 
-## Rulare
-
-Porneste serverul local:
+## Rulare în dezvoltare
 
 ```powershell
+npm install
 npm start
 ```
 
-Deschide apoi:
-
-```text
-http://localhost:4173
-```
-
-Cand ruleaza prin server, aplicatia salveaza rezervarile si configuratia intr-o baza de date SQLite locala: `data/marina-park.sqlite`. Daca deschizi direct `index.html`, aplicatia ramane functionala, dar poate salva doar in `localStorage`.
-
-## Baza de date
-
-- `data/marina-park.sqlite` contine rezervarile si configuratia aplicatiei.
-- Tabela `reservations` contine cate un rand per rezervare.
-- Tabela `app_config` contine configuratia locala a aplicatiei.
-
-## Update automat pe toate PC-urile
-
-Aplicatia se poate actualiza singura la pornire, folosind GitHub Releases.
-
-Fluxul este:
-
-1. Publici o versiune noua in GitHub Releases.
-2. Fiecare PC porneste `MarinaPark.exe` (sau `MarinaPark.bat` ca varianta de rezerva).
-3. `MarinaPark.ps1` citeste `version.json`, verifica manifestul `latest.json` din GitHub si descarca update-ul daca versiunea este mai noua.
-4. Sunt inlocuite doar fisierele aplicatiei. Datele locale din `data/`, `node_modules/`, logurile si bonurile nu sunt incluse in update si raman pe PC.
-
-Pentru a pregati un release nou:
+Pentru a porni doar serverul local în browser:
 
 ```powershell
-.\scripts\New-MarinaParkRelease.ps1 -Version 1.0.1
+npm run server
 ```
 
-Scriptul creeaza:
+## Fișiere păstrate la actualizare
 
-- `dist/MarinaPark-1.0.1.zip`
-- `dist/latest.json`
+Instalarea Electron separă aplicația de fișierele care trebuie păstrate:
 
-In GitHub, creezi un release cu tagul `v1.0.1` si incarci ambele fisiere ca assets. PC-urile se vor actualiza la urmatoarea pornire.
+- `%APPDATA%\Marina Park\data` — baza SQLite, jurnalul și backupurile;
+- `%APPDATA%\Marina Park\runtime` — fișiere generate în timpul rulării;
+- `%APPDATA%\Marina Park\custom` — fișiere adăugate sau modificate de utilizator.
 
-Dupa ce proiectul este pus pe GitHub, release-ul se poate face automat doar prin tag:
+Actualizatorul înlocuiește numai fișierele administrate ale aplicației. Nu șterge datele de mai sus, nici la actualizare, nici la dezinstalare.
+
+Fișierele puse de dezvoltator în `custom-defaults/` sunt copiate în directorul persistent `custom` la pornire. Copierea este de tip **missing-only**: un fișier nou este adăugat, dar un fișier existent cu același nume nu este înlocuit.
+
+La prima instalare, aplicația poate importa baza de date din vechiul folder Marina Park. Pentru migrare automată, rulează prima dată installerul din folderul instalării vechi; dacă acesta nu este detectat, aplicația permite alegerea manuală a folderului.
+
+Trecerea de la launcherul vechi PowerShell la Electron necesită o singură rulare manuală a installerului. După aceea, toate versiunile Electron se actualizează automat.
+
+## Construire installer Windows
 
 ```powershell
-git tag v1.0.1
-git push origin v1.0.1
+npm run dist
 ```
 
-Workflow-ul `.github/workflows/release.yml` va construi zip-ul, va crea release-ul si va incarca `latest.json`.
+Rezultatul este creat în `dist-electron/`:
 
-Daca repo-ul GitHub are alt nume, modifica in `version.json` campul `manifestUrl` si ruleaza scriptul cu:
+- `MarinaPark-Setup-<versiune>.exe`;
+- `latest.yml`;
+- metadatele necesare actualizării diferențiale.
+
+Installerul este NSIS per-user, nu cere drepturi de administrator și nu șterge datele aplicației la dezinstalare.
+
+## Publicare și actualizare automată
+
+Versiunea din tag devine versiunea aplicației:
 
 ```powershell
-.\scripts\New-MarinaParkRelease.ps1 -Version 1.0.1 -Repository "USER/REPO"
+git tag v1.0.18
+git push origin v1.0.18
 ```
 
-Pentru pornire fara update, foloseste:
+Workflow-ul `.github/workflows/release.yml` construiește installerul pe Windows și publică în GitHub Releases installerul, `latest.yml` și metadatele de update.
 
-```powershell
-.\MarinaPark.ps1 --no-update
-```
+Aplicația verifică actualizările la cinci secunde după pornire și apoi la fiecare patru ore. Update-ul este descărcat în fundal și instalat la repornire sau la închiderea aplicației.
+
+Pentru distribuție în afara PC-urilor controlate, installerul trebuie semnat cu un certificat Windows pentru a evita avertismentele SmartScreen.

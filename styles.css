@@ -7260,6 +7260,80 @@ textarea,
   }
 }
 
+/* Reduced emphasis: use weight only where it helps scanning. */
+strong {
+  font-weight: 550;
+}
+
+h1,
+h2 {
+  font-weight: 600;
+}
+
+h3,
+.brand strong {
+  font-weight: 500;
+}
+
+.eyebrow,
+label,
+.nav-item,
+.mode-segmented button,
+.ghost-button,
+.context-menu button {
+  font-weight: 450;
+}
+
+.nav-item.is-active,
+.mode-segmented button.is-active,
+.primary-button {
+  font-weight: 550;
+}
+
+.client-card h3 {
+  font-weight: 500;
+}
+
+.client-card-facts dd {
+  font-weight: 450;
+}
+
+.client-card .client-card-message {
+  font-weight: 400;
+}
+
+.client-card.is-overdue .client-card-message,
+.client-card.is-leaving-today .client-card-message {
+  font-weight: 500;
+}
+
+.client-remaining > span,
+.client-remaining > span strong,
+.client-unit-tag,
+.available-unit-chip,
+.payment-chip,
+.status-chip,
+.unit-tag,
+.stationing-status,
+.bar-sgr-chip,
+.timeline-bar-guest,
+.source-record-client strong,
+.source-record-period strong,
+.bar-product-card h3,
+.facility-list-card strong {
+  font-weight: 500;
+}
+
+.metric-card strong,
+.receipt-summary strong,
+.bar-summary-total,
+.linked-reservation-summary .summary-total,
+#guest-form-section .compact-total-tab span,
+.bar-checkout-summary dd,
+.side-summary dd {
+  font-weight: 600;
+}
+
 @media (max-width: 1180px) {
   #guest-form-section {
     overflow-y: auto;
