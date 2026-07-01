@@ -5172,15 +5172,35 @@ function applySidebarState() {
   sidebarToggle.title = sidebarCollapsed ? "Extinde meniul" : "Restrânge meniul";
   sidebarToggle.setAttribute("aria-label", sidebarToggle.title);
   sidebarToggle.innerHTML = `<i data-lucide="${sidebarCollapsed ? "panel-left-open" : "panel-left-close"}" aria-hidden="true"></i>`;
-  refreshIcons();
+  refreshIcons(sidebarToggle);
+}
+
+function syncTimelineAfterSidebarToggle() {
+  if (activePage !== "calendar" || !timelineRenderState.rows.length) return;
+
+  const visibleWidth = Math.max(0, timelineShell.clientWidth - timelineUnitColumnWidth);
+  const centerDay = Math.max(
+    0,
+    Math.round((timelineShell.scrollLeft + visibleWidth / 2) / timelineDayWidth)
+  );
+  if (!updateTimelineDayWidth()) {
+    renderVisibleTimelineRows();
+    return;
+  }
+
+  updateTimelineDateGridBackground(daysInTimelineWindow());
+  const centerDate = addDays(timelineWindowStart, centerDay);
+  timelineShell.scrollLeft = Math.max(0, scrollLeftForDate(centerDate) - visibleWidth / 2);
+  timelineLastScrollLeft = timelineShell.scrollLeft;
+  renderVisibleTimelineRows(true);
 }
 
 function toggleSidebar() {
   sidebarCollapsed = !sidebarCollapsed;
   localStorage.setItem("marinaParkSidebarCollapsed", String(sidebarCollapsed));
   applySidebarState();
-  requestAnimationFrame(() => setVisibleMonth(visibleMonth));
-  queueFileSave();
+  requestAnimationFrame(syncTimelineAfterSidebarToggle);
+  runWhenIdle(queueFileSave);
 }
 
 async function loadAppVersion() {

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, shell, screen } = require("electron");
 const fsp = require("fs/promises");
 const path = require("path");
 const { copyMissingFiles, pathExists } = require("./persistent-files");
@@ -81,11 +81,12 @@ async function chooseLegacyFolderIfNeeded(dataDir, customDir) {
 
 async function createWindow(url, customDir) {
   const applicationOrigin = new URL(url).origin;
+  const workArea = screen.getPrimaryDisplay().workAreaSize;
   mainWindow = new BrowserWindow({
-    width: 1500,
-    height: 960,
-    minWidth: 1100,
-    minHeight: 700,
+    width: Math.min(1500, workArea.width),
+    height: Math.min(960, workArea.height),
+    minWidth: Math.min(1100, workArea.width),
+    minHeight: Math.min(700, workArea.height),
     show: false,
     backgroundColor: "#f4f6f8",
     icon: path.join(__dirname, "assets", "marina-park.ico"),
