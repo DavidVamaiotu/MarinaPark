@@ -66,7 +66,8 @@ Scriptul verifică autentificarea GitHub, ia versiunea curentă din ultimul
 release public, actualizează fișierele de versiune, rulează testele, comite
 toate modificările curente, împinge branch-ul și tag-ul, așteaptă workflow-ul
 Windows și verifică installerul, `latest.yml` și blockmap-ul descărcate din
-release. Este disponibil și prin `npm run bump`.
+release. Dacă un tag patch există deja după un release eșuat, scriptul trece
+automat la următorul număr disponibil. Este disponibil și prin `npm run bump`.
 
 La prima utilizare, dacă autentificarea a expirat:
 

@@ -131,6 +131,23 @@ NODE
   } 2>&1)" || die "$target_version"
 
 tag="v$target_version"
+
+while git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1 ||
+      gh release view "$tag" --repo "$repo" >/dev/null 2>&1; do
+  if [[ "$bump_spec" != "patch" ]]; then
+    die "$tag already exists on GitHub. Choose a newer version."
+  fi
+  skipped_tag="$tag"
+  target_version="$(node - "$target_version" <<'NODE'
+const parts = process.argv[2].split(".").map(Number);
+parts[2] += 1;
+process.stdout.write(parts.join("."));
+NODE
+)"
+  tag="v$target_version"
+  printf 'Skipping existing tag %s; next available version is %s.\n' "$skipped_tag" "$tag"
+done
+
 local_package_version="$(node -p "require('./package.json').version")"
 local_display_version="$(node -p "require('./version.json').version")"
 
@@ -150,11 +167,6 @@ for (const local of versions.slice(0, 2)) {
   }
 }
 NODE
-
-if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1 ||
-   gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-  die "$tag already exists on GitHub. Choose a newer version."
-fi
 
 sensitive_changes="$(git status --porcelain=v1 -uall | sed 's/^...//' | grep -Ei '(^|/)(\.env($|\.)|[^/]+\.(pem|p12|pfx|key)$|credentials?($|\.)|secrets?($|\.))' || true)"
 if [[ -n "$sensitive_changes" ]]; then
@@ -233,7 +245,13 @@ for _ in {1..45}; do
 done
 [[ -n "$run_id" ]] || die "The GitHub Actions release run did not appear. Check the Actions page."
 
-gh run watch "$run_id" --repo "$repo" --exit-status
+run_url="https://github.com/$repo/actions/runs/$run_id"
+printf 'Workflow run ID: %s\n%s\n' "$run_id" "$run_url"
+if ! gh run watch "$run_id" --repo "$repo" --exit-status; then
+  printf '\nRelease workflow failed. Failed step log:\n' >&2
+  gh run view "$run_id" --repo "$repo" --log-failed || true
+  die "Release failed. Inspect $run_url"
+fi
 
 verify_dir="$(mktemp -d)"
 cleanup() {
