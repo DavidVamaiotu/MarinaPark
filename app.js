@@ -7238,6 +7238,7 @@ function setActivePage(page) {
   if (!page) return;
   const previousPage = activePage;
   activePage = page;
+  renderSidebarOccupancy();
   if (page === "clients" && dirtyPages.has("clients")) {
     reservationPage = 1;
   }

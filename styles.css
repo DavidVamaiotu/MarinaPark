@@ -7653,6 +7653,10 @@ label,
   margin-top: 0;
 }
 
+.booking-modal {
+  z-index: 100;
+}
+
 /* Keep the bar inventory dense on displays with higher OS scaling. */
 .bar-shell {
   grid-template-columns: minmax(0, 1fr) clamp(270px, 24vw, 320px);
