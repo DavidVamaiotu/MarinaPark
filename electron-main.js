@@ -161,7 +161,7 @@ async function startApplication() {
   process.env.MARINA_RUNTIME_DIR = runtimeDir;
 
   serverController = require("./server");
-  const { url } = await serverController.startServer({ host: "127.0.0.1", port: 0 });
+  const { url } = await serverController.startServer({ host: "127.0.0.1", port: 4173, portAttempts: 100 });
   await createWindow(url, customDir);
   setupAutoUpdater();
 }

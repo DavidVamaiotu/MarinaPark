@@ -238,6 +238,8 @@ let staysByUnitIndex = new Map();
 let timelineLayoutCache = new Map();
 let reservationAutoLoadObserver = null;
 let reservationAutoLoadQueued = false;
+let timelineStayHighlightTimer = null;
+let clientCardHighlightTimer = null;
 let timelineRenderState = {
   rows: [],
   rowTops: [],
@@ -438,6 +440,8 @@ let openLinkedDraftAfterSave = false;
 let editingBarArticleKey = null;
 let barPaymentInProgress = false;
 let barAttachInProgress = false;
+let receiptPaymentRequestId = null;
+let barPaymentRequestId = null;
 let receiptConfig = {
   receiptDirectory: localStorage.getItem("marinaParkReceiptDirectory") || "",
   receiptVat: localStorage.getItem("marinaParkReceiptVat") || "19",
@@ -466,7 +470,6 @@ units = buildUnitCatalogFromStays();
 applySidebarState();
 applyReceiptSettings();
 applySagaExportSettings();
-loadFileBackedData();
 
 
 function addDays(date, days) {
@@ -1180,13 +1183,16 @@ function recalculateStayPricingFromUnit(stay, options = {}) {
   const unit = unitById(stay.id);
   const nextPrice = priceForUnitRange(unit, stay.start, stay.end, Number(stay.adults || 0), Number(stay.children || 0));
   if (nextPrice === null) return false;
+  const coveredPrice = paymentCoveredPriceForStay(stay);
 
   stay.basePrice = nextPrice;
   stay.facilities = refreshFacilityNights(stay.facilities, stay.start, stay.end);
   stay.barItems = normalizeStayBarItems(stay.barItems);
   stay.price = normalizeMoneyValue(priceWithFacilities(stay.basePrice, stay.facilities) + reservationBarTotal(stay.barItems));
-  stay.deposit = 0;
-  stay.balance = stay.price;
+  stay.settledPrice = Math.min(stay.price, coveredPrice);
+  stay.deposit = stay.settledPrice;
+  stay.balance = normalizeMoneyValue(stay.price - stay.settledPrice);
+  stay.paid = stay.price > 0 && stay.balance === 0;
   return true;
 }
 
@@ -1615,6 +1621,7 @@ function actualPaidAmountForStay(stay) {
 function hasStayPaymentEvidence(stay) {
   if (!stay) return false;
   return (
+    stay.paid === true ||
     String(stay.paymentMethod || "").trim() !== "" ||
     actualPaidAmountForStay(stay) > 0 ||
     String(stay.paidAt || "").trim() !== "" ||
@@ -1632,13 +1639,7 @@ function isStayFullyPaid(stay) {
   if (!stay || stay.guest === "Disponibil") return false;
   const price = normalizeMoneyValue(stay.price);
   if (price <= 0) return false;
-  return (
-    stay.paid === true ||
-    actualPaidAmountForStay(stay) > 0 ||
-    settledPriceForStay(stay) > 0 ||
-    String(stay.paidAt || "").trim() !== "" ||
-    String(stay.receiptId || "").trim() !== ""
-  );
+  return paymentCoveredPriceForStay(stay) >= price;
 }
 
 function applyStayPayment(stay, requestedAmount, method) {
@@ -1649,11 +1650,12 @@ function applyStayPayment(stay, requestedAmount, method) {
   if (appliedAmount <= 0) return 0;
 
   stay.paymentMethod = method;
-  stay.settledPrice = price;
+  const settledPrice = Math.min(price, normalizeMoneyValue(paymentCoveredPriceForStay(stay) + appliedAmount));
+  stay.settledPrice = settledPrice;
   stay.actualPaidAmount = normalizeMoneyValue(actualPaidAmountForStay(stay) + appliedAmount);
-  stay.balance = 0;
-  stay.deposit = price;
-  stay.paid = true;
+  stay.balance = normalizeMoneyValue(price - settledPrice);
+  stay.deposit = settledPrice;
+  stay.paid = settledPrice >= price;
   return appliedAmount;
 }
 
@@ -1917,14 +1919,9 @@ function normalizeStay(stay, index) {
   const settledPrice = normalizeMoneyValue(stay.settledPrice ?? stay.paidThroughPrice ?? 0);
   const actualPaidAmount = actualPaidAmountForStay(stay);
   const explicitlyPaid = stay.paid === true || stay.isPaid === true || stay.paymentStatus === "paid";
-  const paid = guest !== "Disponibil" && price > 0 && (
-    explicitlyPaid ||
-    actualPaidAmount > 0 ||
-    settledPrice > 0 ||
-    String(stay.paidAt || "").trim() !== "" ||
-    String(stay.receiptId || "").trim() !== ""
-  );
-  const coveredPrice = paid ? price : 0;
+  const legacyReceiptPaid = String(stay.paidAt || "").trim() !== "" || String(stay.receiptId || "").trim() !== "";
+  const coveredPrice = Math.min(price, explicitlyPaid || legacyReceiptPaid ? price : settledPrice > 0 ? settledPrice : actualPaidAmount);
+  const paid = guest !== "Disponibil" && price > 0 && coveredPrice >= price;
 
   return {
     id,
@@ -2076,7 +2073,6 @@ async function loadFileBackedData() {
       queueFileSave();
     }
     rebuildStaysByUnitIndex();
-    renderAll();
   } catch {
     // Static file mode keeps using localStorage.
   }
@@ -2169,7 +2165,7 @@ function applyReceiptSettings() {
   cashPaymentCodeInput.value = receiptConfig.cashPaymentCode || "0";
 }
 
-function readReceiptSettings() {
+function readReceiptSettings(options = {}) {
   receiptConfig = {
     receiptDirectory: receiptDirectoryInput.value.trim(),
     receiptVat: String(Math.max(0, Number(receiptVatInput.value || 0))),
@@ -2180,7 +2176,7 @@ function readReceiptSettings() {
   localStorage.setItem("marinaParkReceiptVat", receiptConfig.receiptVat);
   localStorage.setItem("marinaParkCardPaymentCode", receiptConfig.cardPaymentCode);
   localStorage.setItem("marinaParkCashPaymentCode", receiptConfig.cashPaymentCode);
-  queueFileSave();
+  if (options.save !== false) queueFileSave();
   return receiptConfig;
 }
 
@@ -2215,7 +2211,7 @@ function readSagaExportSettings() {
 function receiptAmountFor(stay) {
   if (!stay || stay.guest === "Disponibil") return 0;
   const price = normalizeMoneyValue(stay.price);
-  return price;
+  return normalizeMoneyValue(price - Math.min(price, paymentCoveredPriceForStay(stay)));
 }
 
 function receiptDraftFromBookingForm(stay) {
@@ -2314,11 +2310,18 @@ function openReceiptModal(stayKey) {
   const stay = stays.find((item) => item.key === stayKey);
   if (!stay || stay.guest === "Disponibil") return;
 
-  readReceiptSettings();
+  readReceiptSettings({ save: false });
   receiptTargetType = "stay";
   receiptStayKey = stay.key;
   receiptDraft = receiptDraftForStay(stay);
   const amount = receiptDraft.amount;
+  if (amount <= 0) {
+    showToast("Rezervarea este deja achitată");
+    receiptStayKey = null;
+    receiptDraft = null;
+    return;
+  }
+  receiptPaymentRequestId = null;
   const stationingDeduction = normalizeStayStationingDeduction(receiptDraft.stay.stationingDeduction);
   const stationingDeductionLine = stationingDeduction && !stationingDeduction.appliedAt
     ? `<span>Deducere stationare pregatita: ${stationingDeduction.nights} ${stationingDeduction.nights === 1 ? "noapte" : "nopti"}.</span>`
@@ -2338,14 +2341,14 @@ function openReceiptModal(stayKey) {
 }
 
 function openLinkedReceiptModal(personId) {
-  const linked = linkedReservationsForPerson(personId).filter((s) => s.guest !== "Disponibil");
+  const linked = linkedReservationsForPerson(personId).filter((stay) => stay.guest !== "Disponibil" && receiptAmountFor(stay) > 0);
   if (!linked.length) return;
 
   const totalBalance = linked.reduce((sum, s) => sum + normalizeMoneyValue(receiptAmountFor(s)), 0);
   const totalPrice = linked.reduce((sum, s) => sum + Number(s.price || 0), 0);
   const firstStay = linked[0];
 
-  readReceiptSettings();
+  readReceiptSettings({ save: false });
   receiptTargetType = "stay";
   receiptStayKey = firstStay.key;
   receiptDraft = {
@@ -2355,6 +2358,7 @@ function openLinkedReceiptModal(personId) {
     isLinkedTotal: true,
     linkedKeys: linked.map((s) => s.key)
   };
+  receiptPaymentRequestId = null;
 
   const stayLines = linked.map((s, i) => {
     const nights = stayDetails(s).nights;
@@ -2380,11 +2384,18 @@ function openStationingReceiptModal(recordKey) {
   const record = stationing.find((item) => item.key === recordKey);
   if (!record) return;
 
-  readReceiptSettings();
+  readReceiptSettings({ save: false });
   receiptTargetType = "stationing";
   receiptStayKey = record.key;
   receiptDraft = receiptDraftForStationing(record);
   const amount = receiptDraft.amount;
+  if (amount <= 0) {
+    showToast("Staționarea este deja achitată");
+    receiptStayKey = null;
+    receiptDraft = null;
+    return;
+  }
+  receiptPaymentRequestId = null;
   const details = stationingDetails(receiptDraft.stationing);
   receiptSummary.innerHTML = `
     <strong>Plata cu numerar, card sau voucher</strong>
@@ -2404,6 +2415,7 @@ function closeReceiptModal() {
   receiptStayKey = null;
   receiptDraft = null;
   receiptTargetType = "stay";
+  receiptPaymentRequestId = null;
   setReceiptPaymentBusy(false);
   if (!bookingModal.classList.contains("is-open") && !stationingModal.classList.contains("is-open")) {
     document.body.style.overflow = "";
@@ -2416,6 +2428,54 @@ function setReceiptPaymentBusy(isBusy) {
   receiptForm.querySelectorAll("[data-receipt-method]").forEach((button) => {
     button.disabled = isBusy;
   });
+}
+
+function createPaymentRequestId(prefix) {
+  const randomId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${randomId}`.replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
+async function postPayment(payload) {
+  const response = await fetch("/api/payment", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) {
+    const error = new Error(result.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.result = result;
+    throw error;
+  }
+  return result;
+}
+
+function applyCommittedPaymentResult(result = {}) {
+  if (Array.isArray(result.stays)) {
+    const updates = new Map(result.stays.map((stay) => [stay.key, normalizeStay(stay)]));
+    stays.forEach((stay, index) => {
+      if (updates.has(stay.key)) stays[index] = updates.get(stay.key);
+    });
+  }
+  if (result.stationing?.key) {
+    const index = stationing.findIndex((record) => record.key === result.stationing.key);
+    if (index >= 0) stationing[index] = normalizeStationingRecord(result.stationing);
+  }
+  if (Array.isArray(result.barArticles)) {
+    const updates = new Map(result.barArticles.map((article) => [article.key, normalizeBarArticle(article)]));
+    barArticles = barArticles.map((article) => updates.get(article.key) || article);
+  }
+  if (result.savedAt) lastDatabaseSavedAt = result.savedAt;
+  try {
+    localStorage.setItem(staysStorageKey, JSON.stringify(stays));
+    localStorage.setItem(stationingStorageKey, JSON.stringify(stationing));
+    localStorage.setItem(barArticlesStorageKey, JSON.stringify(barArticles));
+  } catch {
+    // SQLite already contains the committed payment state.
+  }
+  rebuildStaysByUnitIndex();
+  markPagesDirty();
 }
 
 function unitDraftFromForm() {
@@ -2856,7 +2916,8 @@ async function applyStationingDeductionForStay(stay, options = {}) {
   return { record: nextRecord, deduction: updatedDeduction };
 }
 
-async function generateReceipt(stayKey, method) {
+// Retained temporarily during the payment-endpoint migration; UI uses generateCommittedReceipt.
+async function generateLegacyReceipt(stayKey, method) {
   if (receiptPaymentInProgress) return false;
   setReceiptPaymentBusy(true);
   const targetType = receiptTargetType;
@@ -3133,6 +3194,107 @@ async function generateReceipt(stayKey, method) {
   } catch (error) {
     const message = String(error.message || "");
     showToast(message.toLowerCase().includes("director") ? "Verifică setările pentru bonuri" : message || "Nu am putut genera bonul");
+    return false;
+  } finally {
+    setReceiptPaymentBusy(false);
+  }
+}
+
+async function generateCommittedReceipt(stayKey, method) {
+  if (receiptPaymentInProgress) return false;
+  setReceiptPaymentBusy(true);
+  const targetType = receiptTargetType;
+  const isVoucher = method === "voucher";
+
+  try {
+    const config = isVoucher ? {} : readReceiptSettings({ save: false });
+    if (!isVoucher && !config.receiptDirectory) {
+      showToast("Configurează bonurile în Setări");
+      closeReceiptModal();
+      setActivePage("settings");
+      return false;
+    }
+
+    const stay = targetType === "stay" ? stays.find((item) => item.key === stayKey) : null;
+    const stationingRecord = targetType === "stationing" ? stationing.find((item) => item.key === stayKey) : null;
+    if (targetType === "stay" && (!stay || stay.guest === "Disponibil")) return false;
+    if (targetType === "stationing" && !stationingRecord) return false;
+
+    const draft = targetType === "stationing"
+      ? receiptDraft && receiptDraft.stationing?.key === stationingRecord.key
+        ? receiptDraft
+        : receiptDraftForStationing(stationingRecord)
+      : receiptDraft && receiptDraft.stay?.key === stay.key
+        ? receiptDraft
+        : receiptDraftForStay(stay);
+    const availableAmount = normalizeMoneyValue(draft.amount);
+    const enteredAmount = receiptAmountInput.value === "" ? availableAmount : Number(receiptAmountInput.value);
+    if (!Number.isFinite(enteredAmount) || enteredAmount <= 0) {
+      showToast("Suma trebuie să fie mai mare decât 0");
+      return false;
+    }
+    const amount = normalizeMoneyValue(enteredAmount);
+    if (amount > availableAmount) {
+      showToast("Suma depășește restul de plată");
+      return false;
+    }
+
+    if (targetType === "stay") {
+      const deductionTargets = draft.isLinkedTotal && Array.isArray(draft.linkedKeys)
+        ? draft.linkedKeys.map((key) => stays.find((item) => item.key === key)).filter(Boolean)
+        : [draft.source === "form" ? draft.stay : stay];
+      let deductionApplied = false;
+      for (const deductionStay of deductionTargets) {
+        const deductionResult = await applyStationingDeductionForStay(deductionStay, { ask: true });
+        deductionApplied = deductionApplied || Boolean(deductionResult);
+      }
+      if (deductionApplied) {
+        saveStays();
+        const saved = await saveStaysToFiles({ showMessage: true });
+        if (!saved) throw new Error("Deducerea de staționare nu a putut fi salvată înainte de plată");
+      }
+    }
+
+    receiptPaymentRequestId ||= createPaymentRequestId(targetType === "stationing" ? "stationing" : "stay");
+    const result = await postPayment({
+      paymentId: receiptPaymentRequestId,
+      type: targetType,
+      method,
+      amount,
+      receiptConfig: config,
+      stayKey: targetType === "stay" ? stay.key : undefined,
+      linkedKeys: targetType === "stay" && draft.isLinkedTotal ? draft.linkedKeys : undefined,
+      draftStay: targetType === "stay" && !draft.isLinkedTotal ? draft.stay : undefined,
+      stationingKey: targetType === "stationing" ? stationingRecord.key : undefined,
+      draftStationing: targetType === "stationing" ? draft.stationing : undefined
+    });
+
+    applyCommittedPaymentResult(result);
+    receiptPaymentRequestId = null;
+    closeReceiptModal();
+    renderAll({ force: true });
+    if (targetType === "stay" && bookingModal.classList.contains("is-open")) {
+      const currentStay = editingStayKey ? stays.find((item) => item.key === editingStayKey) : null;
+      if (currentStay) bookingForm.elements.paymentMethod.value = currentStay.paymentMethod || "";
+      renderLinkedReservations();
+      renderBookingBarItems();
+    }
+    if (targetType === "stationing" && stationingModal.classList.contains("is-open")) {
+      const current = stationing.find((item) => item.key === editingStationingKey);
+      if (current) stationingForm.elements.paidAmount.value = current.paidAmount.toFixed(2);
+      syncStationingTotals();
+    }
+    showToast(
+      result.receiptPending
+        ? "Plata a fost salvată; bonul este în așteptare și va fi reîncercat automat."
+        : isVoucher
+          ? "Plata cu voucher a fost salvată."
+          : "Plata și bonul au fost salvate."
+    );
+    return true;
+  } catch (error) {
+    if (error.status && error.status < 500) receiptPaymentRequestId = null;
+    showToast(error.message || "Nu am putut finaliza plata");
     return false;
   } finally {
     setReceiptPaymentBusy(false);
@@ -3804,10 +3966,8 @@ function renderAvailableUnitsToday() {
     : `<span class="available-units-empty">Niciuna</span>`;
 }
 
-function renderReservations() {
-  disconnectReservationAutoLoad();
-  renderAvailableUnitsToday();
-  const visible = stays
+function visibleClientStays() {
+  return stays
     .filter(
       (stay) =>
         stay.guest !== "Disponibil" &&
@@ -3830,6 +3990,12 @@ function renderReservations() {
 
       return String(first.end || first.start).localeCompare(String(second.end || second.start));
     });
+}
+
+function renderReservations() {
+  disconnectReservationAutoLoad();
+  renderAvailableUnitsToday();
+  const visible = visibleClientStays();
 
   const limit = RESERVATION_PAGE_SIZE * reservationPage;
   const pageVisible = visible.slice(0, limit);
@@ -3847,7 +4013,7 @@ function renderReservations() {
         const timelineLabel = formatDateRangeLabel(stay.start, stay.end) || stay.dates || "-";
 
         return `
-          <article class="client-card ${urgency.className} ${paid ? "is-paid" : "is-unpaid"}" aria-label="${escapeHtml(stay.guest)}, ${paid ? "achitat" : "neachitat"}">
+          <article class="client-card ${urgency.className} ${paid ? "is-paid" : "is-unpaid"}" data-client-key="${escapeHtml(stay.key)}" aria-label="${escapeHtml(stay.guest)}, ${paid ? "achitat" : "neachitat"}">
             <h3>${stay.guest}</h3>
             <dl class="client-card-facts">
               <div>
@@ -3894,6 +4060,34 @@ function renderReservations() {
     `);
     observeReservationLoadSentinel();
   }
+}
+
+function jumpToClientCard(stayKey) {
+  const stay = stays.find((item) => item.key === stayKey);
+  if (!stay) return false;
+
+  activeMode = stay.group === "camping" ? campingModeForUnit(unitById(stay.id) || stay) : "room";
+  document.body.dataset.mode = groupForMode(activeMode);
+  updateModeSwitchUi();
+  searchTerm = "";
+  searchInput.value = "";
+  if (activePage !== "clients") setActivePage("clients");
+
+  const visible = visibleClientStays();
+  const clientIndex = visible.findIndex((item) => item.key === stayKey);
+  if (clientIndex < 0) return false;
+  reservationPage = Math.max(1, Math.ceil((clientIndex + 1) / RESERVATION_PAGE_SIZE));
+  renderReservations();
+  refreshIcons(reservationCards);
+
+  const card = reservationCards.querySelector(`[data-client-key="${timelineBarSelectorValue(stayKey)}"]`);
+  if (!card) return false;
+  reservationCards.querySelectorAll(".client-card.is-new-highlight").forEach((item) => item.classList.remove("is-new-highlight"));
+  window.clearTimeout(clientCardHighlightTimer);
+  card.classList.add("is-new-highlight");
+  card.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+  clientCardHighlightTimer = window.setTimeout(() => card.classList.remove("is-new-highlight"), 3200);
+  return true;
 }
 
 function disconnectReservationAutoLoad() {
@@ -4420,6 +4614,7 @@ function openBarPaymentModal() {
     showToast("Adaugă articole înainte de plată");
     return;
   }
+  barPaymentRequestId = null;
   renderBarPaymentSummary();
   barPaymentModal.classList.add("is-open");
   document.body.style.overflow = "hidden";
@@ -4428,6 +4623,7 @@ function openBarPaymentModal() {
 function closeBarPaymentModal(options = {}) {
   if (barPaymentInProgress && !options.force) return;
   barPaymentModal.classList.remove("is-open");
+  barPaymentRequestId = null;
   if (!receiptModal.classList.contains("is-open") && !bookingModal.classList.contains("is-open") && !stationingModal.classList.contains("is-open") && !barArticleModal.classList.contains("is-open") && !sagaExportModal.classList.contains("is-open")) {
     document.body.style.overflow = "";
   }
@@ -4557,7 +4753,8 @@ function barStockChangesFromLines(lines) {
   });
 }
 
-async function generateBarReceipt(method) {
+// Retained during the payment-endpoint migration; UI uses generateCommittedBarReceipt.
+async function generateLegacyBarReceipt(method) {
   if (barPaymentInProgress) return false;
   const isVoucher = method === "voucher";
   const totals = barCartTotals();
@@ -4652,6 +4849,68 @@ async function generateBarReceipt(method) {
     showToast(isVoucher ? "Plată voucher înregistrată la bar" : "Bon de bar generat");
     return true;
   } catch (error) {
+    showToast(error.message || "Nu am putut finaliza plata de bar");
+    return false;
+  } finally {
+    setBarPaymentBusy(false);
+  }
+}
+
+async function generateCommittedBarReceipt(method) {
+  if (barPaymentInProgress) return false;
+  const totals = barCartTotals();
+  if (!totals.lines.length) {
+    showToast("Checkout-ul este gol");
+    return false;
+  }
+  const invalidLine = totals.lines.find((line) => line.quantity > line.stock);
+  if (invalidLine) {
+    showToast(`Stoc insuficient pentru ${invalidLine.name}`);
+    renderBarPage();
+    refreshIcons();
+    return false;
+  }
+
+  setBarPaymentBusy(true);
+  try {
+    const isVoucher = method === "voucher";
+    const config = isVoucher ? {} : readReceiptSettings({ save: false });
+    if (!isVoucher && !config.receiptDirectory) {
+      showToast("Configurează bonurile în Setări");
+      closeBarPaymentModal({ force: true });
+      setActivePage("settings");
+      return false;
+    }
+    barPaymentRequestId ||= createPaymentRequestId("bar");
+    const result = await postPayment({
+      paymentId: barPaymentRequestId,
+      type: "bar",
+      method,
+      amount: totals.total,
+      items: totals.lines.map((line) => ({ key: line.key, quantity: line.quantity })),
+      receiptConfig: config
+    });
+    applyCommittedPaymentResult(result);
+    barCart = [];
+    barPaymentRequestId = null;
+    closeBarPaymentModal({ force: true });
+    renderBarPage();
+    refreshIcons();
+    showToast(
+      result.receiptPending
+        ? "Vânzarea a fost salvată; bonul este în așteptare și va fi reîncercat automat."
+        : isVoucher
+          ? "Plata cu voucher a fost salvată la bar."
+          : "Vânzarea, stocul și bonul au fost salvate."
+    );
+    return true;
+  } catch (error) {
+    if (error.status && error.status < 500) barPaymentRequestId = null;
+    if (error.status === 409) {
+      await loadFileBackedData();
+      renderBarPage();
+      refreshIcons();
+    }
     showToast(error.message || "Nu am putut finaliza plata de bar");
     return false;
   } finally {
@@ -4775,9 +5034,11 @@ function setBarAttachBusy(isBusy) {
 function updateBookingFormForBarDelta(stayKey, deltaTotal) {
   if (!bookingModal.classList.contains("is-open") || editingStayKey !== stayKey) return;
   const nextPrice = Math.max(0, normalizeMoneyValue(Number(bookingForm.elements.price.value || 0) + deltaTotal));
+  const stay = stays.find((item) => item.key === stayKey);
+  const coveredPrice = Math.min(nextPrice, paymentCoveredPriceForStay(stay));
   setMoneyField("price", nextPrice);
-  setMoneyField("deposit", 0);
-  setMoneyField("balance", nextPrice);
+  setMoneyField("deposit", coveredPrice);
+  setMoneyField("balance", normalizeMoneyValue(nextPrice - coveredPrice));
   renderBookingBarItems();
   renderLinkedReservations();
 }
@@ -4820,12 +5081,12 @@ async function attachBarCartToReservation(stayKey) {
 
     stay.barItems = mergeReservationBarItems(stay.barItems, addedItems);
     stay.price = normalizeMoneyValue(Number(stay.price || 0) + totals.total);
-    stay.balance = stay.price;
-    stay.deposit = 0;
     if (settledBeforeAttach > 0) {
       stay.settledPrice = Math.min(normalizeMoneyValue(stay.price), settledBeforeAttach);
     }
-    stay.paid = false;
+    stay.deposit = Math.min(stay.price, settledBeforeAttach);
+    stay.balance = normalizeMoneyValue(stay.price - stay.deposit);
+    stay.paid = stay.price > 0 && stay.balance === 0;
 
     const itemMessage = totals.lines.map((line) => `${line.name} x${line.quantity}`).join(", ");
     await logActivity({
@@ -4901,13 +5162,15 @@ function changeReservationBarItem(stayKey, itemId, delta, options = {}) {
     stay.barItems = items.map((entry) => (entry.id === itemId ? normalizeReservationBarItem(item) : entry));
   }
   stay.price = Math.max(0, normalizeMoneyValue(Number(stay.price || 0) + priceDelta));
-  stay.balance = stay.price;
-  stay.deposit = 0;
   const settledPrice = paymentCoveredPriceForStay(stay);
+  stay.deposit = Math.min(stay.price, settledPrice);
+  stay.balance = normalizeMoneyValue(stay.price - stay.deposit);
   if (settledPrice > 0 && normalizeMoneyValue(stay.price) <= settledPrice) {
     stay.settledPrice = normalizeMoneyValue(stay.price);
     stay.paid = true;
   } else if (settledPrice > 0) {
+    stay.paid = false;
+  } else {
     stay.paid = false;
   }
 
@@ -6518,6 +6781,69 @@ function findTimelineBarByStayKey(key) {
   return guestTimeline.querySelector(`[data-stay-key="${timelineBarSelectorValue(key)}"]`);
 }
 
+function highlightTimelineStay(stayKey, attempts = 0) {
+  renderVisibleTimelineRows(true);
+  const bar = findTimelineBarByStayKey(stayKey);
+  if (!bar) {
+    if (attempts < 10) window.setTimeout(() => highlightTimelineStay(stayKey, attempts + 1), 80);
+    return;
+  }
+
+  guestTimeline.querySelectorAll(".timeline-bar.is-new-highlight").forEach((item) => item.classList.remove("is-new-highlight"));
+  window.clearTimeout(timelineStayHighlightTimer);
+  bar.classList.add("is-new-highlight");
+  timelineStayHighlightTimer = window.setTimeout(() => bar.classList.remove("is-new-highlight"), 3200);
+}
+
+function jumpToTimelineStay(stayKey) {
+  const stay = stays.find((item) => item.key === stayKey);
+  const start = stayStartDate(stay);
+  const end = stayEndDate(stay) || (start ? addDays(start, 1) : null);
+  if (!stay || !start || !end) return false;
+
+  activeMode = stay.group === "camping" ? campingModeForUnit(unitById(stay.id) || stay) : "room";
+  document.body.dataset.mode = groupForMode(activeMode);
+  updateModeSwitchUi();
+  if (activePage !== "calendar") setActivePage("calendar");
+  visibleMonth = monthStart(start);
+  ensureTimelineWindowContains(visibleMonth);
+  updateTimelineMonthLabel();
+  renderGuestTimeline();
+
+  if (timelineProgrammaticScrollFrame) {
+    cancelAnimationFrame(timelineProgrammaticScrollFrame);
+    timelineProgrammaticScrollFrame = null;
+  }
+
+  const row = timelineRenderState.rows.find((item) => item.unit.id === stay.id);
+  if (!row) return false;
+  const visibleDateWidth = Math.max(timelineDayWidth, timelineShell.clientWidth - timelineUnitColumnWidth);
+  const startOffset = scrollLeftForDate(start);
+  const endOffset = Math.max(startOffset + timelineDayWidth, scrollLeftForDate(end));
+  const targetLeft = Math.min(
+    Math.max(0, (startOffset + endOffset) / 2 - visibleDateWidth / 2),
+    Math.max(0, timelineShell.scrollWidth - timelineShell.clientWidth)
+  );
+  const scaleHeight = timelineScale.offsetHeight + TIMELINE_ROW_GAP;
+  const visibleRowsHeight = Math.max(row.height, timelineShell.clientHeight - scaleHeight);
+  const targetTop = Math.min(
+    Math.max(0, scaleHeight + row.top - (visibleRowsHeight - row.height) / 2),
+    Math.max(0, timelineShell.scrollHeight - timelineShell.clientHeight)
+  );
+
+  suppressTimelineScrollMonthUpdate = true;
+  timelineMonthNavigationLockedUntil = performance.now() + 1000;
+  timelineShell.scrollTo({ left: targetLeft, top: targetTop, behavior: "auto" });
+  timelineLastScrollLeft = targetLeft;
+  renderVisibleTimelineRows(true);
+  window.requestAnimationFrame(() => {
+    renderVisibleTimelineRows(true);
+    highlightTimelineStay(stayKey);
+    suppressTimelineScrollMonthUpdate = false;
+  });
+  return true;
+}
+
 function updateDraggedTimelineBar() {
   if (!dragState?.bar) return;
   const { stay, bar } = dragState;
@@ -6865,7 +7191,7 @@ window.setActivePage = setActivePage;
   });
 });
 
-function setVisibleMonth(month) {
+function setVisibleMonth(month, options = {}) {
   const targetMonth = monthStart(month);
   const targetMonthTime = targetMonth.getTime();
   visibleMonth = targetMonth;
@@ -6893,7 +7219,7 @@ function setVisibleMonth(month) {
     dirtyPages.delete("clients");
   }
   refreshIcons();
-  queueFileSave();
+  if (options.save !== false) queueFileSave();
   timelineProgrammaticScrollFrame = requestAnimationFrame(() => {
     timelineProgrammaticScrollFrame = null;
     timelineShell.scrollLeft = scrollLeftForDate(targetMonth);
@@ -7305,7 +7631,7 @@ deleteBarArticleButton.addEventListener("click", deleteBarArticle);
 barPaymentForm.addEventListener("click", (event) => {
   const methodButton = event.target.closest("[data-bar-payment-method]");
   if (!methodButton) return;
-  generateBarReceipt(methodButton.dataset.barPaymentMethod);
+  generateCommittedBarReceipt(methodButton.dataset.barPaymentMethod);
 });
 
 sagaExportForm.elements.allSales.addEventListener("change", syncSagaExportDateFields);
@@ -7388,7 +7714,7 @@ receiptFromStationingButton.addEventListener("click", () => {
 receiptForm.addEventListener("click", (event) => {
   const methodButton = event.target.closest("[data-receipt-method]");
   if (!methodButton || !receiptStayKey) return;
-  generateReceipt(receiptStayKey, methodButton.dataset.receiptMethod);
+  generateCommittedReceipt(receiptStayKey, methodButton.dataset.receiptMethod);
 });
 
 unitPricingPrevButton.addEventListener("click", () => {
@@ -7587,6 +7913,7 @@ timelineContextMenu.addEventListener("click", (event) => {
 
 bookingForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  const pageAtSubmit = activePage;
   const shouldOpenLinkedDraftAfterSave = openLinkedDraftAfterSave;
   openLinkedDraftAfterSave = false;
   const data = new FormData(bookingForm);
@@ -7607,10 +7934,11 @@ bookingForm.addEventListener("submit", (event) => {
   const basePrice = normalizeMoneyValue(data.get("basePrice") || price);
   const facilities = refreshFacilityNights(bookingFacilityDraft, data.get("arrival"), data.get("departure"));
   const barItems = normalizeStayBarItems(existingStay?.barItems);
-  const paid = Boolean(existingStay && price > 0 && isStayFullyPaid(existingStay));
-  const settledPrice = paid ? price : 0;
-  const balance = paid ? 0 : normalizeMoneyValue(price);
-  const deposit = paid ? price : 0;
+  const coveredPrice = existingStay ? Math.min(price, paymentCoveredPriceForStay(existingStay)) : 0;
+  const paid = Boolean(existingStay && price > 0 && coveredPrice >= price);
+  const settledPrice = coveredPrice;
+  const balance = normalizeMoneyValue(price - coveredPrice);
+  const deposit = coveredPrice;
   const adults = Math.max(0, Number(data.get("adults") || 0));
   const children = Math.max(0, Number(data.get("children") || 0));
   const party = Math.max(1, adults + children);
@@ -7736,14 +8064,29 @@ bookingForm.addEventListener("submit", (event) => {
     renderAll();
     setVisibleMonth(arrival);
     showToast(existingStay ? `Client actualizat: ${nextStay.guest}` : `Rezervarea ${id} a fost adăugată`);
+    if (!existingStay) {
+      window.requestAnimationFrame(() => {
+        if (pageAtSubmit === "clients") jumpToClientCard(nextStay.key);
+        else jumpToTimelineStay(nextStay.key);
+      });
+    }
   }
 });
 
 
-rebuildStaysByUnitIndex();
-renderAll();
-setActivePage(activePage);
-setVisibleMonth(today);
-syncLocalActivityLog();
-warmHiddenPages();
-loadAppVersion();
+async function initializeApp() {
+  setActivePage(activePage);
+  timelineShell.setAttribute("aria-busy", "true");
+  guestTimeline.innerHTML = `<p class="empty-state">Se încarcă rezervările...</p>`;
+
+  await loadFileBackedData();
+
+  rebuildStaysByUnitIndex();
+  timelineShell.removeAttribute("aria-busy");
+  setVisibleMonth(today, { save: false });
+  syncLocalActivityLog();
+  warmHiddenPages();
+  loadAppVersion();
+}
+
+initializeApp();

@@ -106,6 +106,22 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_activity_log_timestamp ON activity_log(timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_activity_log_event_type ON activity_log(event_type);
+  CREATE TABLE IF NOT EXISTS payment_transactions (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    entity_key TEXT NOT NULL,
+    method TEXT NOT NULL,
+    amount REAL NOT NULL,
+    status TEXT NOT NULL,
+    receipt_directory TEXT,
+    receipt_content TEXT,
+    info_line TEXT,
+    result TEXT NOT NULL,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_payment_transactions_status ON payment_transactions(status, updated_at);
 `);
 
 function send(response, status, body, contentType = "application/json; charset=utf-8") {
@@ -959,6 +975,482 @@ async function writeReceipt(payload) {
   return writeAccommodationReceipt(payload);
 }
 
+function paymentRequestId(value) {
+  const id = String(value || "").trim();
+  if (!/^[a-zA-Z0-9_-]{8,120}$/.test(id)) {
+    throw requestError(400, "Identificatorul plății este invalid");
+  }
+  return id;
+}
+
+function normalizedPaymentMethod(value) {
+  const method = String(value || "").trim().toLowerCase();
+  if (!["card", "numerar", "voucher"].includes(method)) {
+    throw requestError(400, "Metoda de plată este invalidă");
+  }
+  return method;
+}
+
+function paymentTransactionRow(id) {
+  return db.prepare("SELECT * FROM payment_transactions WHERE id = ?").get(id) || null;
+}
+
+function parsePaymentResult(row) {
+  try {
+    return JSON.parse(row?.result || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function setPaymentStatus(id, status, error = "") {
+  db.prepare(`
+    UPDATE payment_transactions
+    SET status = ?, last_error = ?, updated_at = ?
+    WHERE id = ?
+  `).run(status, String(error || ""), new Date().toISOString(), id);
+}
+
+async function appendReceiptInfoLineOnce(line, paymentId) {
+  if (!line) return "";
+  const infoDir = path.join(runtimeDir, "bin");
+  const infoPath = path.join(infoDir, "info.txt");
+  const marker = `[payment:${paymentId}]`;
+  await fs.mkdir(infoDir, { recursive: true });
+  const existing = await fs.readFile(infoPath, "utf8").catch(() => "");
+  if (!existing.includes(marker)) {
+    await fs.appendFile(infoPath, `${line} ${marker}${os.EOL}`, "utf8");
+  }
+  return infoPath;
+}
+
+async function publishPaymentOutbox(paymentId) {
+  let row = paymentTransactionRow(paymentId);
+  if (!row || row.status === "completed") return row;
+  if (row.method === "voucher") {
+    setPaymentStatus(paymentId, "completed");
+    return paymentTransactionRow(paymentId);
+  }
+
+  try {
+    if (!["receipt_written", "completed"].includes(row.status)) {
+      const directory = await receiptDirectoryFor({ receiptDirectory: row.receipt_directory });
+      const receiptPath = path.join(directory, "bon.inp");
+      const tempPath = path.join(directory, `.bon-${safeFilePart(paymentId, "payment")}.tmp`);
+      await fs.writeFile(tempPath, row.receipt_content, "utf8");
+      await fs.rename(tempPath, receiptPath);
+      setPaymentStatus(paymentId, "receipt_written");
+      row = paymentTransactionRow(paymentId);
+    }
+
+    if (row.status === "receipt_written") {
+      await appendReceiptInfoLineOnce(row.info_line, paymentId);
+      setPaymentStatus(paymentId, "completed");
+    }
+  } catch (error) {
+    setPaymentStatus(paymentId, row.status === "receipt_written" ? "receipt_written" : "receipt_pending", error.message);
+  }
+
+  return paymentTransactionRow(paymentId);
+}
+
+async function retryPendingPaymentOutbox() {
+  const pending = db
+    .prepare("SELECT id FROM payment_transactions WHERE status <> 'completed' ORDER BY created_at ASC LIMIT 100")
+    .all();
+  for (const row of pending) {
+    await publishPaymentOutbox(row.id);
+  }
+}
+
+function bumpPaymentSavedAt(now) {
+  const config = { ...configRow(), savedAt: now };
+  db.prepare(`
+    INSERT INTO app_config (key, updated_at, data)
+    VALUES ('app', ?, ?)
+    ON CONFLICT(key) DO UPDATE SET updated_at = excluded.updated_at, data = excluded.data
+  `).run(now, JSON.stringify(config));
+  return now;
+}
+
+function reservationByKey(key) {
+  const row = db.prepare("SELECT data FROM reservations WHERE key = ?").get(String(key || ""));
+  return row ? JSON.parse(row.data) : null;
+}
+
+function stationingByKey(key) {
+  const row = db.prepare("SELECT data FROM stationing WHERE key = ?").get(String(key || ""));
+  return row ? JSON.parse(row.data) : null;
+}
+
+function updateReservationRow(stay, now) {
+  const result = db.prepare(`
+    UPDATE reservations
+    SET id = ?, guest = ?, group_name = ?, kind = ?, start_date = ?, end_date = ?, updated_at = ?, data = ?
+    WHERE key = ?
+  `).run(
+    String(stay.id || ""),
+    String(stay.guest || ""),
+    String(stay.group || ""),
+    String(stay.kind || ""),
+    stay.start || null,
+    stay.end || null,
+    now,
+    JSON.stringify(stay),
+    String(stay.key || "")
+  );
+  if (!result.changes) throw requestError(404, `Rezervarea ${stay.key || ""} nu există`);
+}
+
+function updateStationingRow(record, now) {
+  const startDate = String(record.startDate || now.slice(0, 10));
+  const result = db.prepare(`
+    UPDATE stationing
+    SET owner = ?, caravan = ?, start_date = ?, end_date = ?, updated_at = ?, data = ?
+    WHERE key = ?
+  `).run(
+    String(record.owner || ""),
+    String(record.caravan || ""),
+    startDate,
+    stationingEndDate({ ...record, startDate }),
+    now,
+    JSON.stringify(record),
+    String(record.key || "")
+  );
+  if (!result.changes) throw requestError(404, `Staționarea ${record.key || ""} nu există`);
+}
+
+function coveredReservationAmount(stay) {
+  const price = Math.max(0, receiptNumber(stay?.price));
+  const explicitSettled = Math.max(0, receiptNumber(stay?.settledPrice ?? stay?.paidThroughPrice));
+  if (explicitSettled > 0) return Math.min(price, explicitSettled);
+  return stay?.paid === true || stay?.isPaid === true || stay?.paymentStatus === "paid" ? price : 0;
+}
+
+function reservationOutstanding(stay) {
+  return Math.max(0, Math.round((receiptNumber(stay?.price) - coveredReservationAmount(stay)) * 100) / 100);
+}
+
+function allocateProportionally(amount, balances) {
+  const amountCents = Math.round(receiptNumber(amount) * 100);
+  const weights = balances.map((value) => Math.max(0, Math.round(receiptNumber(value) * 100)));
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+  if (amountCents <= 0 || totalWeight <= 0) return balances.map(() => 0);
+  const distributable = Math.min(amountCents, totalWeight);
+  const exactShares = weights.map((weight) => (distributable * weight) / totalWeight);
+  const allocated = exactShares.map(Math.floor);
+  let remaining = distributable - allocated.reduce((sum, value) => sum + value, 0);
+  const remainderOrder = exactShares
+    .map((share, index) => ({ index, fraction: share - allocated[index] }))
+    .filter(({ index }) => weights[index] > 0)
+    .sort((first, second) => second.fraction - first.fraction || first.index - second.index);
+
+  for (const { index } of remainderOrder) {
+    if (remaining <= 0) break;
+    if (allocated[index] >= weights[index]) continue;
+    allocated[index] += 1;
+    remaining -= 1;
+  }
+
+  return allocated.map((cents) => cents / 100);
+}
+
+function accommodationReceiptOutbox(stay, method, amount, config, paymentId) {
+  if (method === "voucher") return { receiptDirectory: "", receiptContent: "", infoLine: "" };
+  const paymentCode = method === "card" ? String(config.cardPaymentCode || "1") : String(config.cashPaymentCode || "0");
+  const normalizedAmount = receiptAmount(amount);
+  const vat = receiptVat(config.receiptVat);
+  const receiptContent = [
+    `S,1,______,_,__;CAZARE;${normalizedAmount};1.000;1;1;${vat};0;0;buc`,
+    `T,1,______,_,__;${paymentCode};${normalizedAmount};;;;`
+  ].join(os.EOL) + os.EOL;
+  const { date, time } = receiptTimestampLabel();
+  const methodLabel = method === "card" ? "cardul" : "numerar";
+  const infoLine = `${String(stay.guest || "Client")} a plătit ~${normalizedAmount}~ lei cu ${methodLabel} la '${date}' +${time}+ (inițial ${receiptAmount(stay.price || amount)} lei)`;
+  return { receiptDirectory: config.receiptDirectory, receiptContent, infoLine, paymentId };
+}
+
+function barReceiptOutbox(sale, method, config, paymentId) {
+  if (method === "voucher") return { receiptDirectory: "", receiptContent: "", infoLine: "" };
+  const paymentCode = method === "card" ? String(config.cardPaymentCode || "1") : String(config.cashPaymentCode || "0");
+  const receiptLines = sale.items.map(
+    (item) => `S,1,______,_,__;${cleanReceiptText(item.name)};${receiptAmount(item.price)};${receiptQuantity(item.quantity)};1;1;${receiptVatRate(item.vatRate)};0;0;buc`
+  );
+  if (sale.sgrQuantity > 0) {
+    receiptLines.push(`S,1,______,_,__;AMBALAJ SGR;0.50;${receiptQuantity(sale.sgrQuantity)};1;1;0%;0;0;buc`);
+  }
+  receiptLines.push(`T,1,______,_,__;${paymentCode};${receiptAmount(sale.total)};;;;`);
+  const { date, time } = receiptTimestampLabel();
+  const methodLabel = method === "card" ? "cardul" : "numerar";
+  const itemLabel = sale.items.map((item) => `${cleanReceiptText(item.name)} x${item.quantity}`).join(", ");
+  return {
+    receiptDirectory: config.receiptDirectory,
+    receiptContent: `${receiptLines.join(os.EOL)}${os.EOL}`,
+    infoLine: `Bar: ${itemLabel} - total ~${receiptAmount(sale.total)}~ lei cu ${methodLabel} la '${date}' +${time}+`,
+    paymentId
+  };
+}
+
+function prepareBarPayment(payload, context) {
+  const requestedItems = Array.isArray(payload.items) ? payload.items : [];
+  if (!requestedItems.length) throw requestError(400, "Checkout-ul de bar este gol");
+  const articleMap = new Map(barArticleRows().map((article) => [String(article.key || ""), article]));
+  const seen = new Set();
+  const items = requestedItems.map((requested) => {
+    const key = String(requested.key || "");
+    if (!key || seen.has(key)) throw requestError(400, "Articole duplicate sau fără identificator în checkout");
+    seen.add(key);
+    const article = articleMap.get(key);
+    if (!article) throw requestError(404, `Articolul ${key} nu mai există`);
+    const quantity = Number(requested.quantity);
+    if (!Number.isInteger(quantity) || quantity <= 0) throw requestError(400, `Cantitate invalidă pentru ${article.name}`);
+    const stock = Math.max(0, Math.floor(Number(article.stock || 0)));
+    if (quantity > stock) throw requestError(409, `Stoc insuficient pentru ${article.name}`);
+    const price = receiptNumber(article.price);
+    if (price <= 0) throw requestError(400, `Preț invalid pentru ${article.name}`);
+    const vatRate = Number(article.vatRate || article.vat_rate);
+    if (![11, 21].includes(vatRate)) throw requestError(400, `TVA invalid pentru ${article.name}`);
+    const hasSgr = article.hasSgr === true || article.hasSgr === "true" || article.hasSgr === 1;
+    return {
+      key,
+      name: String(article.name || "Articol"),
+      price,
+      quantity,
+      vatRate,
+      hasSgr,
+      subtotal: Math.round(price * quantity * 100) / 100,
+      sgrTotal: hasSgr ? Math.round(0.5 * quantity * 100) / 100 : 0,
+      previousStock: stock,
+      newStock: stock - quantity,
+      article
+    };
+  });
+  const productsTotal = Math.round(items.reduce((sum, item) => sum + item.subtotal, 0) * 100) / 100;
+  const sgrTotal = Math.round(items.reduce((sum, item) => sum + item.sgrTotal, 0) * 100) / 100;
+  const sgrQuantity = items.reduce((sum, item) => sum + (item.hasSgr ? item.quantity : 0), 0);
+  const total = Math.round((productsTotal + sgrTotal) * 100) / 100;
+  if (payload.amount != null && Math.abs(receiptNumber(payload.amount) - total) > 0.001) {
+    throw requestError(409, "Totalul barului s-a schimbat. Reîncarcă checkout-ul.");
+  }
+
+  const updatedArticles = items.map((item) => {
+    const next = { ...item.article, stock: item.newStock, updatedAt: context.now };
+    db.prepare("UPDATE bar_articles SET stock = ?, updated_at = ?, data = ? WHERE key = ?")
+      .run(item.newStock, context.now, JSON.stringify(next), item.key);
+    return next;
+  });
+  const sale = { items: items.map(({ article, previousStock, newStock, ...item }) => item), productsTotal, sgrTotal, sgrQuantity, total };
+  const stockChanges = items.map((item) => ({ key: item.key, name: item.name, quantity: item.quantity, previousStock: item.previousStock, newStock: item.newStock }));
+  const activity = normalizeActivityLogEntry({
+    id: `payment-${context.paymentId}`,
+    timestamp: context.now,
+    eventType: "payment",
+    entityType: "bar",
+    entityKey: "bar-checkout",
+    entityLabel: "Checkout bar",
+    amount: total,
+    method: context.method,
+    message: `Bar a încasat ${money(total)} lei prin ${context.method}.`,
+    data: { method: context.method, items: sale.items, productsTotal, sgrTotal, total, stockChanges, voucherOnly: context.method === "voucher" }
+  });
+  return {
+    entityKey: "bar-checkout",
+    amount: total,
+    result: { type: "bar", sale, stockChanges, barArticles: updatedArticles },
+    activity,
+    outbox: barReceiptOutbox(sale, context.method, context.config, context.paymentId)
+  };
+}
+
+function prepareStayPayment(payload, context) {
+  const linkedKeys = Array.isArray(payload.linkedKeys) ? [...new Set(payload.linkedKeys.map(String).filter(Boolean))] : [];
+  const isLinked = linkedKeys.length > 0;
+  const keys = isLinked ? linkedKeys : [String(payload.stayKey || "")];
+  if (!keys[0]) throw requestError(400, "Rezervarea lipsește din plată");
+  const currentStays = keys.map((key) => reservationByKey(key));
+  if (currentStays.some((stay) => !stay || stay.guest === "Disponibil")) throw requestError(404, "Una dintre rezervări nu mai există");
+
+  const paymentStays = currentStays.map((current, index) => {
+    if (isLinked || index > 0 || !payload.draftStay) return { ...current };
+    const draft = payload.draftStay && typeof payload.draftStay === "object" ? payload.draftStay : {};
+    return {
+      ...current,
+      ...draft,
+      key: current.key,
+      actualPaidAmount: current.actualPaidAmount,
+      settledPrice: current.settledPrice,
+      paid: current.paid,
+      paymentMethod: current.paymentMethod
+    };
+  });
+  const outstanding = paymentStays.map(reservationOutstanding);
+  const totalOutstanding = Math.round(outstanding.reduce((sum, value) => sum + value, 0) * 100) / 100;
+  if (totalOutstanding <= 0) throw requestError(409, "Rezervarea este deja achitată");
+  const amount = receiptNumber(payload.amount == null ? totalOutstanding : payload.amount);
+  if (amount <= 0 || amount - totalOutstanding > 0.001) throw requestError(400, "Suma depășește restul de plată");
+  const allocations = allocateProportionally(amount, outstanding);
+
+  const updatedStays = paymentStays.map((stay, index) => {
+    const price = Math.round(receiptNumber(stay.price) * 100) / 100;
+    if (price <= 0) throw requestError(400, `Preț invalid pentru rezervarea ${stay.id || stay.key}`);
+    const next = {
+      ...stay,
+      paymentMethod: context.method,
+      settledPrice: price,
+      actualPaidAmount: Math.round((receiptNumber(stay.actualPaidAmount) + allocations[index]) * 100) / 100,
+      balance: 0,
+      deposit: price,
+      paid: true
+    };
+    updateReservationRow(next, context.now);
+    return next;
+  });
+  const first = updatedStays[0];
+  const activity = normalizeActivityLogEntry({
+    id: `payment-${context.paymentId}`,
+    timestamp: context.now,
+    eventType: "payment",
+    entityType: "client",
+    entityKey: first.key,
+    entityLabel: isLinked ? `${first.guest} (${updatedStays.length} rezervări)` : `${first.guest} (${first.id})`,
+    amount,
+    method: context.method,
+    message: isLinked
+      ? `${first.guest} a plătit în total ${money(amount)} lei pentru ${updatedStays.length} rezervări prin ${context.method}.`
+      : `${first.guest} a plătit ${money(amount)} lei prin ${context.method}.`,
+    data: {
+      method: context.method,
+      amount,
+      linkedPayment: isLinked,
+      allocations: updatedStays.map((stay, index) => ({ key: stay.key, id: stay.id, outstanding: outstanding[index], allocatedAmount: allocations[index] }))
+    }
+  });
+  const receiptStay = { ...first, price: paymentStays.reduce((sum, stay) => sum + receiptNumber(stay.price), 0) };
+  return {
+    entityKey: first.key,
+    amount,
+    result: { type: "stay", stays: updatedStays, allocations: activity.data.allocations },
+    activity,
+    outbox: accommodationReceiptOutbox(receiptStay, context.method, amount, context.config, context.paymentId)
+  };
+}
+
+function normalizeStationingPaymentRecord(record) {
+  const prepaidNights = Math.max(1, Math.min(1095, Math.round(Number(record.prepaidNights || 1))));
+  const nightlyPrice = Math.max(0, Math.round(receiptNumber(record.nightlyPrice) * 100) / 100);
+  const deductions = Array.isArray(record.deductions) ? record.deductions : [];
+  const deductedNights = Math.min(prepaidNights, deductions.reduce((sum, item) => sum + Math.max(0, Math.round(Number(item.nights || 0))), 0));
+  const billableNights = Math.max(0, prepaidNights - deductedNights);
+  const totalPrice = Math.round((deductions.length ? nightlyPrice * billableNights : receiptNumber(record.totalPrice) || nightlyPrice * prepaidNights) * 100) / 100;
+  const paidAmount = Math.min(totalPrice, Math.max(0, Math.round(receiptNumber(record.paidAmount) * 100) / 100));
+  return { ...record, prepaidNights, nightlyPrice, totalPrice, paidAmount, balance: Math.max(0, Math.round((totalPrice - paidAmount) * 100) / 100), deductions };
+}
+
+function prepareStationingPayment(payload, context) {
+  const current = stationingByKey(payload.stationingKey);
+  if (!current) throw requestError(404, "Staționarea nu mai există");
+  const draft = payload.draftStationing && typeof payload.draftStationing === "object" ? payload.draftStationing : {};
+  const source = normalizeStationingPaymentRecord({ ...current, ...draft, key: current.key });
+  const amount = receiptNumber(payload.amount == null ? source.balance : payload.amount);
+  if (amount <= 0 || amount - source.balance > 0.001) throw requestError(400, "Suma depășește restul staționării");
+  const next = normalizeStationingPaymentRecord({ ...source, paidAmount: source.paidAmount + amount });
+  updateStationingRow(next, context.now);
+  const activity = normalizeActivityLogEntry({
+    id: `payment-${context.paymentId}`,
+    timestamp: context.now,
+    eventType: "payment",
+    entityType: "stationing",
+    entityKey: next.key,
+    entityLabel: `${next.owner} (${next.caravan})`,
+    amount,
+    method: context.method,
+    message: `${next.owner} a plătit ${money(amount)} lei pentru staționare prin ${context.method}.`,
+    data: { method: context.method, amount, previousPaidAmount: source.paidAmount, newPaidAmount: next.paidAmount, previousBalance: source.balance, newBalance: next.balance }
+  });
+  return {
+    entityKey: next.key,
+    amount,
+    result: { type: "stationing", stationing: next },
+    activity,
+    outbox: accommodationReceiptOutbox({ guest: next.owner, price: next.totalPrice }, context.method, amount, context.config, context.paymentId)
+  };
+}
+
+async function commitPayment(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw requestError(400, "Payload de plată invalid");
+  const paymentId = paymentRequestId(payload.paymentId);
+  const method = normalizedPaymentMethod(payload.method);
+  const type = String(payload.type || "").trim();
+  if (!["stay", "stationing", "bar"].includes(type)) throw requestError(400, "Tipul plății este invalid");
+
+  let existing = paymentTransactionRow(paymentId);
+  if (existing) {
+    if (existing.type !== type || existing.method !== method) throw requestError(409, "Identificatorul plății a fost deja folosit pentru altă operațiune");
+    existing = await publishPaymentOutbox(paymentId);
+    return { ok: true, committed: true, receiptPending: existing.status !== "completed", paymentId, status: existing.status, ...parsePaymentResult(existing) };
+  }
+
+  const config = payload.receiptConfig && typeof payload.receiptConfig === "object" ? payload.receiptConfig : {};
+  if (method !== "voucher") {
+    config.receiptDirectory = await receiptDirectoryFor(config);
+  }
+  const now = new Date().toISOString();
+  let mutation;
+  let activityResult;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    existing = paymentTransactionRow(paymentId);
+    if (existing) throw requestError(409, "Plata este deja în curs");
+    const context = { paymentId, method, config, now };
+    mutation = type === "bar"
+      ? prepareBarPayment(payload, context)
+      : type === "stationing"
+        ? prepareStationingPayment(payload, context)
+        : prepareStayPayment(payload, context);
+    const savedAt = bumpPaymentSavedAt(now);
+    mutation.result.savedAt = savedAt;
+    activityResult = addActivityLogEntry(mutation.activity);
+    const initialStatus = method === "voucher" ? "completed" : "committed";
+    db.prepare(`
+      INSERT INTO payment_transactions
+        (id, type, entity_key, method, amount, status, receipt_directory, receipt_content, info_line, result, last_error, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
+    `).run(
+      paymentId,
+      type,
+      mutation.entityKey,
+      method,
+      mutation.amount,
+      initialStatus,
+      mutation.outbox.receiptDirectory || "",
+      mutation.outbox.receiptContent || "",
+      mutation.outbox.infoLine || "",
+      JSON.stringify(mutation.result),
+      now,
+      now
+    );
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  if (activityResult?.inserted) {
+    await writeActivityLogLocalFiles([activityResult.entry], { refreshSnapshot: true }).catch(() => {});
+  }
+  await enqueueDatabaseBackup({ afterMutation: true });
+  const published = await publishPaymentOutbox(paymentId);
+  return {
+    ok: true,
+    committed: true,
+    receiptPending: published.status !== "completed",
+    paymentId,
+    status: published.status,
+    warning: published.status !== "completed" ? published.last_error || "Bonul este în așteptare și va fi reîncercat automat" : "",
+    ...mutation.result
+  };
+}
+
 function removeDiacritics(value) {
   return String(value || "")
     .normalize("NFD")
@@ -1458,8 +1950,13 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.url.startsWith("/api/payment") && request.method === "POST") {
+      send(response, 200, JSON.stringify(await commitPayment(JSON.parse(await requestBody(request)))));
+      return;
+    }
+
     if (request.url.startsWith("/api/receipt") && request.method === "POST") {
-      send(response, 200, JSON.stringify(await writeReceipt(JSON.parse(await requestBody(request)))));
+      throw requestError(410, "Endpoint retras: folosește /api/payment pentru plată și persistență atomică");
       return;
     }
 
@@ -1497,26 +1994,49 @@ const server = http.createServer(async (request, response) => {
 
 let backupInterval = null;
 
-function startServer(options = {}) {
-  const listenPort = Number(options.port ?? port);
-  const listenHost = String(options.host || process.env.HOST || "127.0.0.1");
-
+function listenOnPort(listenPort, listenHost) {
   return new Promise((resolve, reject) => {
-    const onError = (error) => reject(error);
-    server.once("error", onError);
-    server.listen(listenPort, listenHost, () => {
+    const onError = (error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
       server.off("error", onError);
-      const address = server.address();
-      const activePort = typeof address === "object" && address ? address.port : listenPort;
-      const url = `http://${listenHost}:${activePort}`;
-      console.log(`Marina Park app: ${url}`);
-      console.log(`Database: ${databasePath}`);
-      enqueueDatabaseBackup({ reason: "startup" });
-      backupInterval = setInterval(() => enqueueDatabaseBackup({ reason: "interval" }), 60 * 60 * 1000);
-      backupInterval.unref?.();
-      resolve({ server, port: activePort, host: listenHost, url });
-    });
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(listenPort, listenHost);
   });
+}
+
+async function startServer(options = {}) {
+  const firstPort = Number(options.port ?? port);
+  const listenHost = String(options.host || process.env.HOST || "127.0.0.1");
+  const portAttempts = Math.max(1, Math.floor(Number(options.portAttempts || 1)));
+  let listenPort = firstPort;
+
+  for (let attempt = 0; attempt < portAttempts; attempt += 1) {
+    try {
+      await listenOnPort(listenPort, listenHost);
+      break;
+    } catch (error) {
+      const canTryNextPort = error.code === "EADDRINUSE" && listenPort > 0 && listenPort < 65535 && attempt + 1 < portAttempts;
+      if (!canTryNextPort) throw error;
+      listenPort += 1;
+    }
+  }
+
+  const address = server.address();
+  const activePort = typeof address === "object" && address ? address.port : listenPort;
+  const url = `http://${listenHost}:${activePort}`;
+  console.log(`Marina Park app: ${url}`);
+  console.log(`Database: ${databasePath}`);
+  retryPendingPaymentOutbox().catch((error) => console.error("Pending receipt retry failed:", error.message));
+  enqueueDatabaseBackup({ reason: "startup" });
+  backupInterval = setInterval(() => enqueueDatabaseBackup({ reason: "interval" }), 60 * 60 * 1000);
+  backupInterval.unref?.();
+  return { server, port: activePort, host: listenHost, url };
 }
 
 function stopServer() {

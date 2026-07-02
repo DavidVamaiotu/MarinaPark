@@ -109,6 +109,8 @@ h3 {
 .log-actions {
   justify-content: flex-end;
   gap: 10px;
+  flex: 1;
+  flex-wrap: wrap;
 }
 
 .search-box {
@@ -349,6 +351,19 @@ button:hover {
 
 #exportDatabase:hover {
   background: #eef2f0;
+}
+
+.filter-button {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--line);
+}
+
+.filter-button:hover,
+.filter-button[aria-pressed="true"] {
+  color: #173d25;
+  background: #dff3e5;
+  border-color: #91d3a6;
 }
 
 input:focus,

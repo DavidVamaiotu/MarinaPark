@@ -2,11 +2,13 @@ const activityLogStorageKey = "marinaParkActivityLog";
 const logFeed = document.querySelector("#logFeed");
 const summaryGrid = document.querySelector("#summaryGrid");
 const searchInput = document.querySelector("#logSearch");
+const dailyTotalsFilterButton = document.querySelector("#dailyTotalsFilter");
 const refreshButton = document.querySelector("#refreshLog");
 const exportDatabaseButton = document.querySelector("#exportDatabase");
 const clearActivityLogButton = document.querySelector("#clearActivityLog");
 
 let entries = [];
+let dailyTotalsOnly = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -226,13 +228,16 @@ function renderSummary(currentEntries) {
 function renderLog() {
   const currentEntries = filteredEntries();
   renderSummary(currentEntries);
+  const visibleEntries = dailyTotalsOnly
+    ? currentEntries.filter((entry) => entry.eventType === "payment" && Number(entry.amount || 0) > 0)
+    : currentEntries;
 
-  if (!currentEntries.length) {
-    logFeed.innerHTML = `<p class="empty-state">Nu există activitate pentru filtrul curent.</p>`;
+  if (!visibleEntries.length) {
+    logFeed.innerHTML = `<p class="empty-state">${dailyTotalsOnly ? "Nu există plăți pentru filtrul curent." : "Nu există activitate pentru filtrul curent."}</p>`;
     return;
   }
 
-  const groups = currentEntries.reduce((map, entry) => {
+  const groups = visibleEntries.reduce((map, entry) => {
     const key = localDateKey(entry.timestamp);
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(entry);
@@ -245,9 +250,9 @@ function renderLog() {
         <section class="day-group">
           <div class="day-heading">
             <h2>${escapeHtml(dateLabel(day))}</h2>
-            <span>${dayEntries.length} evenimente</span>
+            <span>${dayEntries.length} ${dailyTotalsOnly ? (dayEntries.length === 1 ? "plată" : "plăți") : "evenimente"}</span>
           </div>
-          <div class="log-list">${dayEntries.map(logCard).join("")}</div>
+          ${dailyTotalsOnly ? "" : `<div class="log-list">${dayEntries.map(logCard).join("")}</div>`}
           ${dailyPaymentSummary(dayEntries)}
         </section>
       `
@@ -313,6 +318,11 @@ async function clearActivityLog() {
 }
 
 searchInput.addEventListener("input", renderLog);
+dailyTotalsFilterButton.addEventListener("click", () => {
+  dailyTotalsOnly = !dailyTotalsOnly;
+  dailyTotalsFilterButton.setAttribute("aria-pressed", String(dailyTotalsOnly));
+  renderLog();
+});
 refreshButton.addEventListener("click", loadLog);
 exportDatabaseButton.addEventListener("click", exportDatabase);
 clearActivityLogButton.addEventListener("click", clearActivityLog);
