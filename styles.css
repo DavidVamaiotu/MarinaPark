@@ -6190,13 +6190,9 @@ button:focus-visible {
   box-shadow: 0 1px 3px rgba(47, 112, 69, 0.3);
 }
 
-/* Client progress status colors; urgency takes priority over payment. */
+/* Client progress status colors. Paid controls the bar color, not sorting. */
 .client-card .progress-fill {
   background: #cbd5e1;
-}
-
-.client-card.is-paid:not(.is-overdue):not(.is-leaving-today):not(.is-leaving-tomorrow):not(.is-current-stay) .progress-fill {
-  background: #72c58d;
 }
 
 .client-card.is-overdue .progress-fill {
@@ -6217,6 +6213,10 @@ button:focus-visible {
 
 .client-card.is-leaving-today .progress-fill {
   background: #df5c5c;
+}
+
+.client-card.is-paid .progress-fill {
+  background: #72c58d;
 }
 
 /* Calm typography hierarchy. */
