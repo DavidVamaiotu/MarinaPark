@@ -1,6 +1,6 @@
 {
   "name": "marina-park",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "description": "Aplicație desktop pentru administrarea Marina Park",
   "main": "electron-main.js",
   "author": "Marina Park",
@@ -10,6 +10,7 @@
     "test": "node --test test/*.test.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis --x64 --publish never",
+    "migrate:legacy": "node scripts/Migrate-LegacyToSqlite.js",
     "verify:release": "node scripts/verify-electron-release.js",
     "bump": "bash ./bump"
   },

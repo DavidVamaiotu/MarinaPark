@@ -322,6 +322,10 @@ const closeBooking = document.querySelector("#closeBooking");
 const appShell = document.querySelector("#appShell");
 const sidebarToggle = document.querySelector("#sidebarToggle");
 const appVersion = document.querySelector("#appVersion");
+const sidebarOccupancyTotal = document.querySelector("#sidebarOccupancyTotal");
+const sidebarOccupancyRooms = document.querySelector("#sidebarOccupancyRooms");
+const sidebarOccupancyTents = document.querySelector("#sidebarOccupancyTents");
+const sidebarOccupancyRvs = document.querySelector("#sidebarOccupancyRvs");
 const timelineContextMenu = document.querySelector("#timelineContextMenu");
 const toast = document.querySelector("#toast");
 const settingsForm = document.querySelector("#settingsForm");
@@ -3397,7 +3401,7 @@ function linkedReservationsCountFor(stay) {
 }
 
 function shouldShowClientInList(stay) {
-  return stayOverlapsVisibleMonth(stay) || clientUrgency(stay).priority < 0;
+  return Boolean(searchTerm) || stayOverlapsVisibleMonth(stay) || clientUrgency(stay).priority < 0;
 }
 
 function timelineRowHeight(laneCount) {
@@ -3415,10 +3419,18 @@ function timelineLaneItems(unit) {
   if (cachedLayout) return cachedLayout;
 
   const laneEnds = [];
+  const laneLastStayKeys = [];
   const sorted = [...unit.stays].sort((first, second) => {
     const startCompare = String(first.start || "").localeCompare(String(second.start || ""));
     if (startCompare !== 0) return startCompare;
     return String(first.end || "").localeCompare(String(second.end || ""));
+  });
+  const handoffStaysByEndTime = new Map();
+  sorted.forEach((stay) => {
+    const endTime = stayEndDate(stay)?.getTime();
+    if (!Number.isFinite(endTime)) return;
+    if (!handoffStaysByEndTime.has(endTime)) handoffStaysByEndTime.set(endTime, []);
+    handoffStaysByEndTime.get(endTime).push(stay);
   });
 
   const items = sorted.map((stay) => {
@@ -3426,17 +3438,26 @@ function timelineLaneItems(unit) {
     const end = stayEndDate(stay) || addDays(start, 1);
     // Reservations that meet on checkout/check-in day can share one row.
     let laneIndex = laneEnds.findIndex((laneEnd) => start >= laneEnd);
+    const sameLanePredecessorKey =
+      laneIndex >= 0 && start.getTime() === laneEnds[laneIndex].getTime()
+        ? laneLastStayKeys[laneIndex]
+        : "";
+    const handoffPredecessorKey =
+      sameLanePredecessorKey || handoffStaysByEndTime.get(start.getTime())?.[0]?.key || "";
 
     if (laneIndex === -1) {
       laneIndex = laneEnds.length;
       laneEnds.push(end);
+      laneLastStayKeys.push(stay.key);
     } else {
       laneEnds[laneIndex] = end;
+      laneLastStayKeys[laneIndex] = stay.key;
     }
 
     return {
       stay,
-      lane: laneIndex + 1
+      lane: laneIndex + 1,
+      handoffPredecessorKey
     };
   });
 
@@ -3449,7 +3470,7 @@ function timelineLaneItems(unit) {
   return layout;
 }
 
-function timelineBarHtml(stay, lane, dayCount) {
+function timelineBarHtml(stay, lane, dayCount, handoffPredecessorKey = "") {
   const startColumn = timelineColumn(stay.start, 2);
   const endColumn = stay.end ? timelineEndColumn(stay.end, dayCount + 2) : dayCount + 2;
   const start = stayStartDate(stay);
@@ -3458,10 +3479,14 @@ function timelineBarHtml(stay, lane, dayCount) {
   const compactClass = duration <= 2 ? "is-compact" : duration <= 4 ? "is-tight" : "";
   const paymentClass = isStayFullyPaid(stay) ? "is-paid" : "is-unpaid";
   const typeClass = stay.group === "camping" ? "is-camping-stay" : "is-room-stay";
-  const renderSignature = timelineBarRenderSignature(stay, lane);
+  const adjacentClass = handoffPredecessorKey ? "has-adjacent-start" : "";
+  const handoffData = handoffPredecessorKey
+    ? `data-handoff-predecessor-key="${escapeHtml(handoffPredecessorKey)}"`
+    : "";
+  const renderSignature = timelineBarRenderSignature(stay, lane, handoffPredecessorKey);
 
   return `
-    <div class="timeline-bar ${compactClass} ${typeClass} ${paymentClass}" data-stay-key="${escapeHtml(stay.key)}" data-render-signature="${escapeHtml(renderSignature)}" style="grid-column: ${startColumn} / ${endColumn}; grid-row: ${lane};" title="${escapeHtml(stay.guest)} · ${escapeHtml(stay.dates)} · trage pentru mutare sau redimensionare">
+    <div class="timeline-bar ${compactClass} ${typeClass} ${paymentClass} ${adjacentClass}" data-stay-key="${escapeHtml(stay.key)}" ${handoffData} data-render-signature="${escapeHtml(renderSignature)}" style="grid-column: ${startColumn} / ${endColumn}; grid-row: ${lane};" title="${escapeHtml(stay.guest)} · ${escapeHtml(stay.dates)} · trage pentru mutare sau redimensionare">
       <button class="timeline-handle" type="button" data-drag-mode="resize-start" aria-label="Mută începutul"></button>
       <div class="timeline-bar-content" data-drag-mode="move">
         <div class="timeline-bar-label">
@@ -3477,7 +3502,7 @@ function timelineBarHtml(stay, lane, dayCount) {
   `;
 }
 
-function timelineBarRenderSignature(stay, lane) {
+function timelineBarRenderSignature(stay, lane, handoffPredecessorKey = "") {
   return JSON.stringify([
     toISODate(timelineWindowStart),
     daysInTimelineWindow(),
@@ -3489,7 +3514,8 @@ function timelineBarRenderSignature(stay, lane) {
     stay.party,
     stay.group,
     isStayFullyPaid(stay),
-    lane
+    lane,
+    handoffPredecessorKey
   ]);
 }
 
@@ -3519,9 +3545,9 @@ function createTimelineRowElement() {
   return rowElement;
 }
 
-function createTimelineBarElement(stay, lane, dayCount) {
+function createTimelineBarElement(stay, lane, dayCount, handoffPredecessorKey = "") {
   const template = document.createElement("template");
-  template.innerHTML = timelineBarHtml(stay, lane, dayCount).trim();
+  template.innerHTML = timelineBarHtml(stay, lane, dayCount, handoffPredecessorKey).trim();
   return template.content.firstElementChild;
 }
 
@@ -3549,14 +3575,14 @@ function syncTimelineRowElement(rowElement, row, virtualized, dayBounds) {
     [...rowElement.querySelectorAll(":scope > .timeline-bar")].map((bar) => [bar.dataset.stayKey, bar])
   );
 
-  visibleItems.forEach(({ stay, lane }) => {
-    const signature = timelineBarRenderSignature(stay, lane);
+  visibleItems.forEach(({ stay, lane, handoffPredecessorKey }) => {
+    const signature = timelineBarRenderSignature(stay, lane, handoffPredecessorKey);
     let bar = existingBars.get(stay.key);
     if (!bar) {
-      bar = createTimelineBarElement(stay, lane, dayCount);
+      bar = createTimelineBarElement(stay, lane, dayCount, handoffPredecessorKey);
       rowElement.append(bar);
     } else if (bar.dataset.renderSignature !== signature && dragState?.stay?.key !== stay.key) {
-      const replacement = createTimelineBarElement(stay, lane, dayCount);
+      const replacement = createTimelineBarElement(stay, lane, dayCount, handoffPredecessorKey);
       bar.replaceWith(replacement);
       bar = replacement;
     }
@@ -3567,6 +3593,39 @@ function syncTimelineRowElement(rowElement, row, virtualized, dayBounds) {
     if (dragState?.stay?.key !== stayKey) bar.remove();
   });
   rowElement.classList.toggle("is-empty", visibleItems.length === 0);
+}
+
+function updateTimelineHandoffLabelShifts(rowElement) {
+  const bars = [...rowElement.querySelectorAll(":scope > .timeline-bar")];
+  const barsByKey = new Map(bars.map((bar) => [bar.dataset.stayKey, bar]));
+  bars.forEach((bar) => bar.style.setProperty("--timeline-label-shift", "0px"));
+
+  const measurements = new Map(
+    bars.map((bar) => {
+      const label = bar.querySelector(".timeline-bar-guest");
+      const bounds = label?.getBoundingClientRect();
+      return [bar.dataset.stayKey, bounds ? { left: bounds.left, right: bounds.right, row: bar.style.gridRow } : null];
+    })
+  );
+  const shifts = new Map();
+
+  bars.forEach((bar) => {
+    const predecessorKey = bar.dataset.handoffPredecessorKey;
+    if (!predecessorKey) return;
+    const predecessorBar = barsByKey.get(predecessorKey);
+    const predecessorBounds = measurements.get(predecessorKey);
+    const currentBounds = measurements.get(bar.dataset.stayKey);
+    let shift = 12;
+    if (predecessorBar && predecessorBounds && currentBounds && predecessorBar.style.gridRow === bar.style.gridRow) {
+      const predecessorRight = predecessorBounds.right + (shifts.get(predecessorKey) || 0);
+      shift = Math.min(48, Math.max(12, Math.ceil(predecessorRight - currentBounds.left + 6)));
+    }
+    shifts.set(bar.dataset.stayKey, shift);
+  });
+
+  shifts.forEach((shift, stayKey) => {
+    barsByKey.get(stayKey)?.style.setProperty("--timeline-label-shift", `${shift}px`);
+  });
 }
 
 function updateTimelineDateGridBackground(dayCount) {
@@ -3658,6 +3717,7 @@ function renderVisibleTimelineRows(force = false) {
       if (currentElement !== rowElement) guestTimeline.insertBefore(rowElement, currentElement || null);
     });
   }
+  desiredElements.forEach(updateTimelineHandoffLabelShifts);
   if (dragState) {
     dragState.bar = findTimelineBarByStayKey(dragState.stay.key);
     dragState.row = dragState.bar?.closest(".timeline-row") || dragState.row;
@@ -3825,7 +3885,28 @@ function setMode(mode) {
   showToast(`${unitTypeLabel(activeMode)} activ`);
 }
 
+function renderSidebarOccupancy() {
+  const counts = { total: 0, room: 0, tent: 0, rv: 0 };
+  stays.forEach((stay) => {
+    if (stay.guest === "Disponibil") return;
+    const start = stayStartDate(stay);
+    const end = stayEndDate(stay);
+    if (!start || !end || start > today || end <= today) return;
+
+    const guests = Math.max(0, Number(stay.party || 0));
+    const category = stay.group === "room" ? "room" : campingModeForUnit(unitById(stay.id) || stay);
+    counts.total += guests;
+    counts[category] += guests;
+  });
+
+  sidebarOccupancyTotal.textContent = counts.total;
+  sidebarOccupancyRooms.textContent = counts.room;
+  sidebarOccupancyTents.textContent = counts.tent;
+  sidebarOccupancyRvs.textContent = counts.rv;
+}
+
 function renderMetrics() {
+  renderSidebarOccupancy();
   const reservations = stays.filter((stay) => stay.guest !== "Disponibil" && stayOverlapsVisibleMonth(stay) && matchesSearch(stay));
   const units = unitOptions();
   const occupiedUnitIds = new Set(reservations.map((stay) => stay.id));
@@ -4160,13 +4241,10 @@ function renderStationingMetrics() {
     const remaining = stationingDetails(record).remainingNights;
     return remaining > 0 && remaining <= 7;
   }).length;
-  const unpaidBalance = records.reduce((sum, record) => sum + Number(record.balance || 0), 0);
-
   const metrics = [
     { label: "S-01", value: activeRecords.length, detail: "lot deschis", icon: "caravan" },
     { label: "S-02", value: totalRemaining, detail: "rezervă timp", icon: "hourglass" },
-    { label: "S-03", value: expiringSoon, detail: "atenție scurtă", icon: "triangle-alert" },
-    { label: "Rest de plată", value: formatCompactMoney(unpaidBalance), detail: "lei neachitați", icon: "wallet-cards" }
+    { label: "S-03", value: expiringSoon, detail: "atenție scurtă", icon: "triangle-alert" }
   ];
 
   stationingMetricGrid.innerHTML = metrics
@@ -7088,12 +7166,16 @@ function updateTimelineDrag(event) {
 
 function finishTimelineDrag(event) {
   if (!dragState || dragState.pointerId !== event.pointerId) return;
-  dragState.bar?.classList.remove("is-dragging");
-  dragState.row?.classList.remove("is-drop-target");
-  if (dragState.changed) {
-    const priceRecalculated = recalculateStayPricingFromUnit(dragState.stay, { paidAmount: dragState.originalPaidAmount });
+  const completedDrag = dragState;
+  completedDrag.bar?.classList.remove("is-dragging");
+  completedDrag.row?.classList.remove("is-drop-target");
+  dragState = null;
+  if (completedDrag.changed) {
+    const priceRecalculated = recalculateStayPricingFromUnit(completedDrag.stay, { paidAmount: completedDrag.originalPaidAmount });
     if (!priceRecalculated) {
-      restoreTimelineDragPrice();
+      completedDrag.stay.price = completedDrag.originalPrice;
+      completedDrag.stay.deposit = completedDrag.originalDeposit;
+      completedDrag.stay.balance = completedDrag.originalBalance;
     }
     saveStays();
     updateVisibleMonthFromScroll();
@@ -7106,27 +7188,26 @@ function finishTimelineDrag(event) {
     logActivity({
       eventType: "update",
       entityType: "client",
-      entityKey: dragState.stay.key,
-      entityLabel: activityStayLabel(dragState.stay),
-      message: `Rezervarea ${dragState.stay.guest} a fost mutată/redimensionată din calendar: ${formatStayDates(toISODate(dragState.originalStart), toISODate(dragState.originalEnd))} -> ${dragState.stay.dates}.`,
+      entityKey: completedDrag.stay.key,
+      entityLabel: activityStayLabel(completedDrag.stay),
+      message: `Rezervarea ${completedDrag.stay.guest} a fost mutată/redimensionată din calendar: ${formatStayDates(toISODate(completedDrag.originalStart), toISODate(completedDrag.originalEnd))} -> ${completedDrag.stay.dates}.`,
       data: {
-        previousStart: toISODate(dragState.originalStart),
-        previousEnd: toISODate(dragState.originalEnd),
-        newStart: dragState.stay.start,
-        newEnd: dragState.stay.end,
-        previousPrice: dragState.originalPrice,
-        newPrice: Number(dragState.stay.price || 0),
-        previousBalance: dragState.originalBalance,
-        newBalance: Number(dragState.stay.balance || 0)
+        previousStart: toISODate(completedDrag.originalStart),
+        previousEnd: toISODate(completedDrag.originalEnd),
+        newStart: completedDrag.stay.start,
+        newEnd: completedDrag.stay.end,
+        previousPrice: completedDrag.originalPrice,
+        newPrice: Number(completedDrag.stay.price || 0),
+        previousBalance: completedDrag.originalBalance,
+        newBalance: Number(completedDrag.stay.balance || 0)
       }
     });
     showToast(
       priceRecalculated
-        ? `Rezervare actualizata: ${dragState.stay.id}, ${dragState.stay.dates}`
+        ? `Rezervare actualizata: ${completedDrag.stay.id}, ${completedDrag.stay.dates}`
         : "Tarif calendar 0 sau lipsa; totalul vechi a fost pastrat."
     );
   }
-  dragState = null;
 }
 
 function openBookingFromTimeline(event) {

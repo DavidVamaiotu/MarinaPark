@@ -15,6 +15,25 @@ Pentru a porni doar serverul local în browser:
 npm run server
 ```
 
+## Import din aplicația veche
+
+Pune `dbField-2.json`, `Stationare.json` și baza țintă `marina-park.sqlite2`
+în rădăcina proiectului. Verifică mai întâi importul fără modificări:
+
+```powershell
+npm run migrate:legacy -- --dry-run
+```
+
+Apoi execută migrarea:
+
+```powershell
+npm run migrate:legacy
+```
+
+Scriptul creează automat un backup, actualizează rezervările cu același GUID,
+adaugă rezervările și staționările noi și păstrează nemodificate articolele,
+stocurile și produsele de bar deja atașate rezervărilor.
+
 ## Fișiere păstrate la actualizare
 
 Instalarea Electron separă aplicația de fișierele care trebuie păstrate:

@@ -6219,6 +6219,10 @@ button:focus-visible {
   background: #72c58d;
 }
 
+.client-card.is-paid .progress-track {
+  background: #ccebd6;
+}
+
 /* Calm typography hierarchy. */
 body {
   font-weight: 400;
@@ -6765,6 +6769,37 @@ textarea,
 
 .timeline-bar.is-paid .timeline-bar-guest {
   color: #315c3f;
+}
+
+.timeline-bar,
+.timeline-bar.is-tight,
+.timeline-bar.is-compact,
+.timeline-bar:hover {
+  z-index: auto;
+}
+
+.timeline-bar-content {
+  z-index: auto;
+}
+
+.timeline-bar-label {
+  z-index: 20;
+}
+
+.timeline-unit {
+  z-index: 30;
+}
+
+.timeline-scale {
+  z-index: 40;
+}
+
+.timeline-scale .timeline-corner {
+  z-index: 41;
+}
+
+.timeline-bar.has-adjacent-start .timeline-bar-guest {
+  transform: translateX(var(--timeline-label-shift, 12px));
 }
 
 .timeline-bar .timeline-bar-meta {
@@ -7567,6 +7602,57 @@ label,
   color: #b9d0c8;
 }
 
+.sidebar-occupancy {
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+.sidebar-occupancy .eyebrow {
+  margin: 0 0 7px;
+  font-size: 10px;
+}
+
+.sidebar-occupancy h2 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 6px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.sidebar-occupancy h2 strong {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.sidebar .sidebar-occupancy h2,
+.sidebar .sidebar-occupancy h2 > span,
+.sidebar .sidebar-occupancy h2 > strong,
+.sidebar .sidebar-occupancy dd {
+  color: #f7fbf9;
+}
+
+.sidebar-occupancy dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-occupancy-code {
+  min-width: 30px;
+  color: #b9d0c8;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.sidebar-occupancy + .app-version {
+  margin-top: 0;
+}
+
 /* Keep the bar inventory dense on displays with higher OS scaling. */
 .bar-shell {
   grid-template-columns: minmax(0, 1fr) clamp(270px, 24vw, 320px);
@@ -7683,7 +7769,7 @@ label,
 .timeline-bar.is-new-highlight.is-unpaid {
   --timeline-booking-bg: #73b8ff;
   --timeline-booking-border: #247bd6;
-  z-index: 10;
+  z-index: auto;
   outline: 3px solid #247bd6;
   outline-offset: 2px;
   animation: timeline-new-stay-highlight 700ms ease-in-out 4;
