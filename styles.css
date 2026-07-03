@@ -7657,6 +7657,63 @@ label,
   z-index: 100;
 }
 
+@media (min-width: 881px) {
+  .sidebar {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100dvh;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .workspace:has(.details-grid.page-section.is-active-page) {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .details-grid.page-section.is-active-page {
+    align-self: stretch;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #reservations-section {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #reservationCards {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    align-content: start;
+    padding-right: 4px;
+  }
+
+  #reservationCards .client-card > * {
+    flex-shrink: 0;
+  }
+
+  #reservationCards .client-card {
+    min-height: 330px;
+  }
+
+  #reservationCards .client-unit-tag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+  }
+}
+
 /* Keep the bar inventory dense on displays with higher OS scaling. */
 .bar-shell {
   grid-template-columns: minmax(0, 1fr) clamp(270px, 24vw, 320px);
