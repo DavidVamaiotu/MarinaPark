@@ -2332,7 +2332,7 @@ function openReceiptModal(stayKey) {
     : "";
   receiptSummary.innerHTML = `
     <strong>Plata cu numerar, card sau voucher</strong>
-    <span>${receiptDraft.stay.guest}</span>
+    <span class="person-name">${receiptDraft.stay.guest}</span>
     <span>${receiptDraft.stay.id} - ${receiptDraft.stay.kind}</span>
     ${stationingDeductionLine}
     <span>Sumă bon: ${formatCurrency(amount)}</span>
@@ -2373,7 +2373,7 @@ function openLinkedReceiptModal(personId) {
 
   receiptSummary.innerHTML = `
     <strong>Plată totală – ${linked.length} rezervări</strong>
-    <span>${escapeHtml(firstStay.guest)}</span>
+    <span class="person-name">${escapeHtml(firstStay.guest)}</span>
     ${stayLines}
     <span style="margin-top:4px;font-weight:800;font-size:14px">Total de plată: ${formatCurrency(totalBalance)}</span>
   `;
@@ -2403,7 +2403,7 @@ function openStationingReceiptModal(recordKey) {
   const details = stationingDetails(receiptDraft.stationing);
   receiptSummary.innerHTML = `
     <strong>Plata cu numerar, card sau voucher</strong>
-    <span>${receiptDraft.stationing.owner}</span>
+    <span class="person-name">${receiptDraft.stationing.owner}</span>
     <span>${receiptDraft.stationing.caravan} - staționare rulotă</span>
     <span>${details.paidNights} nopți plătite din ${details.prepaidNights}; rest curent ${formatCurrency(receiptDraft.stationing.balance)}</span>
   `;
@@ -3490,7 +3490,7 @@ function timelineBarHtml(stay, lane, dayCount, handoffPredecessorKey = "") {
       <button class="timeline-handle" type="button" data-drag-mode="resize-start" aria-label="Mută începutul"></button>
       <div class="timeline-bar-content" data-drag-mode="move">
         <div class="timeline-bar-label">
-          <strong class="timeline-bar-guest">${escapeHtml(stay.guest)}</strong>
+          <strong class="timeline-bar-guest person-name">${escapeHtml(stay.guest)}</strong>
           <span class="timeline-bar-meta">
             <span class="timeline-bar-dates">${escapeHtml(stay.dates)}</span>
             <span class="timeline-bar-party">${escapeHtml(stay.party)} pers.</span>
@@ -3946,7 +3946,7 @@ function renderReviewsPanel(message) {
     .map(
       (review) => `
         <article class="review-card">
-          <strong>${review.author}</strong>
+          <strong class="person-name">${review.author}</strong>
           <p>${review.text}</p>
         </article>
       `
@@ -4095,7 +4095,7 @@ function renderReservations() {
 
         return `
           <article class="client-card ${urgency.className} ${paid ? "is-paid" : "is-unpaid"}" data-client-key="${escapeHtml(stay.key)}" aria-label="${escapeHtml(stay.guest)}, ${paid ? "achitat" : "neachitat"}">
-            <h3>${stay.guest}</h3>
+            <h3 class="person-name">${stay.guest}</h3>
             <dl class="client-card-facts">
               <div>
                 <dt>Cost</dt>
@@ -4278,7 +4278,7 @@ function renderStationing() {
         <article class="stationing-card ${details.status.className}">
           <header>
             <div>
-              <h3>${record.owner}</h3>
+              <h3 class="person-name">${record.owner}</h3>
               <p>${record.phone || "fără telefon"}</p>
             </div>
           </header>
@@ -5045,7 +5045,7 @@ function renderBarAttachChoices() {
       return `
         <button class="bar-reservation-choice ${paid ? "is-paid" : ""}" type="button" data-attach-bar-reservation="${escapeHtml(stay.key)}">
           <span>
-            <strong>${escapeHtml(stay.guest)}</strong>
+            <strong class="person-name">${escapeHtml(stay.guest)}</strong>
             <small>${escapeHtml(stay.id)} · ${escapeHtml(stay.kind)} · ${escapeHtml(stay.dates || "")}</small>
           </span>
           <span>
@@ -6006,7 +6006,7 @@ function renderBookingStationingLink() {
   bookingStationingLinkStatus.innerHTML = selectedRecord
     ? `
       <div class="stationing-link-selected">
-        <span><strong>${escapeHtml(stationingRecordLabel(selectedRecord))}</strong> ${selectedAlreadyApplied ? "are deducerea aplicata" : "selectata pentru deducere"}</span>
+        <span><strong class="person-name">${escapeHtml(stationingRecordLabel(selectedRecord))}</strong> ${selectedAlreadyApplied ? "are deducerea aplicata" : "selectata pentru deducere"}</span>
         <span>${selectedDeduction.nights} ${selectedDeduction.nights === 1 ? "noapte" : "nopti"} ${selectedAlreadyApplied ? "au fost scazute din stationare." : "se vor scadea la plata."}</span>
         ${selectedAlreadyApplied ? "" : `<button class="ghost-button compact-text" type="button" data-clear-stationing-deduction>
           <i data-lucide="x" aria-hidden="true"></i>
@@ -6033,7 +6033,7 @@ function renderBookingStationingLink() {
           return `
             <button class="stationing-link-card ${selected ? "is-selected" : ""}" type="button" data-stationing-deduction="${escapeHtml(record.key)}">
               <span>
-                <strong>${escapeHtml(stationingRecordLabel(record))}</strong>
+                <strong class="person-name">${escapeHtml(stationingRecordLabel(record))}</strong>
                 <small>${details.remainingNights} nopti ramase · rest ${formatCurrency(record.balance)}</small>
               </span>
               <em>${selected ? "selectata" : "alege"}</em>
@@ -6529,7 +6529,7 @@ function renderSourceBookings() {
     return `
     <tr class="source-record-row" data-source-index="${index}">
       <td class="source-record-client" data-label="Nume">
-        <strong>${escapeHtml(booking.guest)}</strong>
+        <strong class="person-name">${escapeHtml(booking.guest)}</strong>
         <span>${escapeHtml(booking.phone || "fără telefon")}</span>
       </td>
       <td class="source-record-period" data-label="Perioadă">

@@ -5,9 +5,22 @@ const { copyMissingFiles, pathExists } = require("./persistent-files");
 
 app.setName("Marina Park");
 
+const COMPACT_UI_SCALE = 0.92;
+
 let mainWindow = null;
 let serverController = null;
 let updateTimer = null;
+
+function syncWindowZoom() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  const display = screen.getDisplayMatching(mainWindow.getBounds());
+  const displayScale = Math.max(display.scaleFactor || 1, 0.25);
+  const zoomFactor = Number((COMPACT_UI_SCALE / displayScale).toFixed(4));
+  if (Math.abs(mainWindow.webContents.getZoomFactor() - zoomFactor) < 0.0001) return;
+
+  mainWindow.webContents.setZoomFactor(zoomFactor);
+}
 
 function bundledCustomDefaultsPath() {
   return app.isPackaged
@@ -98,6 +111,10 @@ async function createWindow(url, customDir) {
   });
 
   mainWindow.setMenuBarVisibility(false);
+  syncWindowZoom();
+  mainWindow.on("move", syncWindowZoom);
+  mainWindow.webContents.on("did-finish-load", syncWindowZoom);
+  screen.on("display-metrics-changed", syncWindowZoom);
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     if (/^https?:\/\//i.test(targetUrl)) void shell.openExternal(targetUrl);
@@ -109,6 +126,7 @@ async function createWindow(url, customDir) {
     if (/^https?:\/\//i.test(targetUrl)) void shell.openExternal(targetUrl);
   });
   mainWindow.on("closed", () => {
+    screen.removeListener("display-metrics-changed", syncWindowZoom);
     mainWindow = null;
   });
 

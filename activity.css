@@ -547,6 +547,20 @@ button,
   font-weight: 600;
 }
 
+/* Flat typography: only people's names receive a small amount of emphasis. */
+body,
+body *,
+body::before,
+body::after,
+body *::before,
+body *::after {
+  font-weight: 400 !important;
+}
+
+.person-name {
+  font-weight: 500 !important;
+}
+
 .eyebrow,
 .search-box,
 .summary-card span,

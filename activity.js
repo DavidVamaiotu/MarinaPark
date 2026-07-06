@@ -147,11 +147,12 @@ function logCard(entry) {
   const amount = Number(entry.amount || 0);
   const method = entry.method ? `<span class="chip">${escapeHtml(entry.method)}</span>` : "";
   const amountChip = amount > 0 ? `<span class="chip">${formatCurrency(amount)}</span>` : "";
+  const entityNameClass = entry.entityType === "client" || entry.entityType === "stationing" ? " class=\"person-name\"" : "";
   return `
     <article class="log-card is-${escapeHtml(entry.eventType)}">
       <header>
         <div>
-          <h3>${escapeHtml(entry.entityLabel || entityLabel(entry))}</h3>
+          <h3${entityNameClass}>${escapeHtml(entry.entityLabel || entityLabel(entry))}</h3>
           <div class="log-meta">
             <span>${escapeHtml(exactTimeLabel(entry.timestamp))}</span>
             <span class="chip">${escapeHtml(eventLabel(entry))}</span>
@@ -195,7 +196,7 @@ function dailyPaymentSummary(dayEntries) {
           .map((entry) => {
             const name = entry.data?.client || entry.data?.owner || entry.entityLabel || "Client";
             const method = entry.method ? `, ${entry.method}` : "";
-            return `<li>${escapeHtml(timeLabel(entry.timestamp))} · ${escapeHtml(name)} - ${formatCurrency(entry.amount)}${escapeHtml(method)}</li>`;
+            return `<li>${escapeHtml(timeLabel(entry.timestamp))} · <span class="person-name">${escapeHtml(name)}</span> - ${formatCurrency(entry.amount)}${escapeHtml(method)}</li>`;
           })
           .join("")}
       </ul>

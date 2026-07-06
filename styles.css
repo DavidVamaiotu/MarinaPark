@@ -7865,3 +7865,17 @@ label,
   outline-offset: 3px;
   animation: client-new-highlight 700ms ease-in-out 4;
 }
+
+/* Flat typography: only people's names receive a small amount of emphasis. */
+body,
+body *,
+body::before,
+body::after,
+body *::before,
+body *::after {
+  font-weight: 400 !important;
+}
+
+.person-name {
+  font-weight: 500 !important;
+}
