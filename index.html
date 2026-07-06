@@ -946,86 +946,41 @@
         </button>
       </div>
       <form id="stationingForm">
-        <section class="form-section">
-          <div class="form-section-head">
-            <div>
-              <p class="eyebrow">Proprietar</p>
-              <h3>Contact și rulotă</h3>
-            </div>
-          </div>
-          <div class="field-grid">
-            <label>
-              Nume proprietar
-              <input name="owner" type="text" placeholder="Nume complet" required />
-            </label>
-            <label>
-              Telefon
-              <input name="phone" type="tel" placeholder="+40 ..." required />
-            </label>
-          </div>
+        <div class="stationing-form-fields">
           <label>
+            Nume proprietar
+            <input name="owner" type="text" placeholder="Nume complet" required />
+          </label>
+          <label>
+            Telefon
+            <input name="phone" type="tel" placeholder="+40 ..." required />
+          </label>
+          <label class="stationing-caravan-field">
             Rulotă / număr
             <input name="caravan" type="text" placeholder="Adria, Hobby, număr auto" required />
           </label>
-        </section>
-        <section class="form-section">
-          <div class="form-section-head">
-            <div>
-              <p class="eyebrow">Perioadă</p>
-              <h3>Nopți preplătite</h3>
-            </div>
-          </div>
-          <div class="field-grid three">
-            <label>
-              Data început
-              <input name="startDate" type="date" required />
-            </label>
-            <label>
-              Nopți
-              <input name="prepaidNights" type="number" min="1" max="1095" value="30" required />
-            </label>
-            <label>
-              Final estimat
-              <input name="endDate" type="text" readonly />
-            </label>
-          </div>
-          <p class="calendar-summary" id="stationingRangeSummary"></p>
-        </section>
-        <section class="form-section">
-          <div class="form-section-head">
-            <div>
-              <p class="eyebrow">Plată</p>
-              <h3>Tarif staționare</h3>
-            </div>
-          </div>
-          <div class="field-grid">
-            <label>
-              Preț pe noapte
-              <input name="nightlyPrice" type="number" min="0" step="0.01" value="0.00" required />
-            </label>
-            <label>
-              Total
-              <input name="totalPrice" type="number" min="0" step="0.01" value="0.00" readonly />
-            </label>
-          </div>
-          <div class="field-grid">
-            <label>
-              Plătit
-              <input name="paidAmount" type="number" min="0" step="0.01" value="0.00" />
-            </label>
-            <label>
-              Rest de plată
-              <input name="balance" type="number" min="0" step="0.01" value="0.00" readonly />
-            </label>
-          </div>
-        </section>
-        <section class="form-section">
-          <div class="form-section-head">
-            <div>
-              <p class="eyebrow">Observații</p>
-              <h3>Detalii interne</h3>
-            </div>
-          </div>
+          <label>
+            Data început
+            <input name="startDate" type="date" required />
+          </label>
+          <label>
+            Nopți preplătite
+            <input name="prepaidNights" type="number" min="1" max="1095" value="30" required />
+          </label>
+          <label>
+            Preț pe noapte
+            <input name="nightlyPrice" type="number" min="0" step="0.01" value="0.00" required />
+          </label>
+          <label>
+            Plătit
+            <input name="paidAmount" type="number" min="0" step="0.01" value="0.00" />
+          </label>
+          <input name="endDate" type="hidden" />
+          <input name="totalPrice" type="hidden" value="0.00" />
+          <input name="balance" type="hidden" value="0.00" />
+          <p class="calendar-summary stationing-form-summary" id="stationingRangeSummary"></p>
+        </div>
+        <section class="stationing-notes-section">
           <label>
             Observații
             <textarea name="note" rows="3" placeholder="Chei, stare rulotă, acces, instrucțiuni"></textarea>

@@ -1286,15 +1286,22 @@ function prepareStayPayment(payload, context) {
   const outstanding = paymentStays.map(reservationOutstanding);
   const totalOutstanding = Math.round(outstanding.reduce((sum, value) => sum + value, 0) * 100) / 100;
   const repeatPayment = !isLinked && totalOutstanding <= 0 && receiptNumber(paymentStays[0].price) > 0;
-  if (totalOutstanding <= 0 && !repeatPayment) throw requestError(409, "Rezervarea este deja achitată");
+  const zeroPriceMarkPaid =
+    !isLinked &&
+    context.method === "voucher" &&
+    receiptNumber(paymentStays[0].price) === 0 &&
+    paymentStays[0].paid !== true;
+  if (totalOutstanding <= 0 && !repeatPayment && !zeroPriceMarkPaid) throw requestError(409, "Rezervarea este deja achitată");
   const availableAmount = repeatPayment ? receiptNumber(paymentStays[0].price) : totalOutstanding;
   const amount = receiptNumber(payload.amount == null ? availableAmount : payload.amount);
-  if (amount <= 0 || amount - availableAmount > 0.001) throw requestError(400, "Suma depășește suma disponibilă pentru plată");
-  const allocations = repeatPayment ? [amount] : allocateProportionally(amount, outstanding);
+  if ((zeroPriceMarkPaid ? amount !== 0 : amount <= 0) || amount - availableAmount > 0.001) {
+    throw requestError(400, "Suma depășește suma disponibilă pentru plată");
+  }
+  const allocations = repeatPayment || zeroPriceMarkPaid ? [amount] : allocateProportionally(amount, outstanding);
 
   const updatedStays = paymentStays.map((stay, index) => {
     const price = Math.round(receiptNumber(stay.price) * 100) / 100;
-    if (price <= 0) throw requestError(400, `Preț invalid pentru rezervarea ${stay.id || stay.key}`);
+    if (price <= 0 && !zeroPriceMarkPaid) throw requestError(400, `Preț invalid pentru rezervarea ${stay.id || stay.key}`);
     const next = {
       ...stay,
       paymentMethod: context.method,
@@ -1318,13 +1325,16 @@ function prepareStayPayment(payload, context) {
     entityLabel: isLinked ? `${first.guest} (${updatedStays.length} rezervări)` : `${first.guest} (${first.id})`,
     amount,
     method: context.method,
-    message: isLinked
+    message: zeroPriceMarkPaid
+      ? `${first.guest} a fost marcat ca achitat prin voucher.`
+      : isLinked
       ? `${first.guest} a plătit în total ${money(amount)} lei pentru ${updatedStays.length} rezervări prin ${context.method}.`
       : `${first.guest} a plătit ${money(amount)} lei prin ${context.method}.`,
     data: {
       method: context.method,
       amount,
       repeatPayment,
+      zeroPriceMarkPaid,
       linkedPayment: isLinked,
       allocations: updatedStays.map((stay, index) => ({ key: stay.key, id: stay.id, outstanding: outstanding[index], allocatedAmount: allocations[index] }))
     }

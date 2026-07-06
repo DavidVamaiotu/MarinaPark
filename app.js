@@ -1196,7 +1196,7 @@ function recalculateStayPricingFromUnit(stay, options = {}) {
   stay.settledPrice = Math.min(stay.price, coveredPrice);
   stay.deposit = stay.settledPrice;
   stay.balance = normalizeMoneyValue(stay.price - stay.settledPrice);
-  stay.paid = stay.price > 0 && stay.balance === 0;
+  stay.paid = stay.price === 0 ? stay.paid === true : stay.balance === 0;
   return true;
 }
 
@@ -1649,7 +1649,7 @@ function paymentCoveredPriceForStay(stay) {
 function isStayFullyPaid(stay) {
   if (!stay || stay.guest === "Disponibil") return false;
   const price = normalizeMoneyValue(stay.price);
-  if (price <= 0) return false;
+  if (price === 0) return stay.paid === true || stay.isPaid === true || stay.paymentStatus === "paid";
   return paymentCoveredPriceForStay(stay) >= price;
 }
 
@@ -1933,7 +1933,7 @@ function normalizeStay(stay, index) {
   const explicitlyPaid = stay.paid === true || stay.isPaid === true || stay.paymentStatus === "paid";
   const legacyReceiptPaid = String(stay.paidAt || "").trim() !== "" || String(stay.receiptId || "").trim() !== "";
   const coveredPrice = Math.min(price, explicitlyPaid || legacyReceiptPaid ? price : settledPrice > 0 ? settledPrice : actualPaidAmount);
-  const paid = guest !== "Disponibil" && price > 0 && coveredPrice >= price;
+  const paid = guest !== "Disponibil" && (price === 0 ? explicitlyPaid : coveredPrice >= price);
 
   return {
     id,
@@ -2334,7 +2334,8 @@ function openReceiptModal(stayKey) {
   receiptStayKey = stay.key;
   receiptDraft = receiptDraftForStay(stay);
   const amount = receiptDraft.amount;
-  if (amount <= 0) {
+  const canMarkZeroPricePaid = normalizeMoneyValue(receiptDraft.stay.price) === 0 && !isStayFullyPaid(receiptDraft.stay);
+  if (amount <= 0 && !canMarkZeroPricePaid) {
     showToast("Prețul rezervării trebuie să fie mai mare decât 0");
     receiptStayKey = null;
     receiptDraft = null;
@@ -3248,7 +3249,9 @@ async function generateCommittedReceipt(stayKey, method) {
         : receiptDraftForStay(stay);
     const availableAmount = normalizeMoneyValue(draft.amount);
     const enteredAmount = receiptAmountInput.value === "" ? availableAmount : Number(receiptAmountInput.value);
-    if (!Number.isFinite(enteredAmount) || enteredAmount <= 0) {
+    const canMarkZeroPricePaid =
+      isVoucher && targetType === "stay" && normalizeMoneyValue(draft.stay.price) === 0;
+    if (!Number.isFinite(enteredAmount) || enteredAmount < 0 || (enteredAmount === 0 && !canMarkZeroPricePaid)) {
       showToast("Suma trebuie să fie mai mare decât 0");
       return false;
     }
@@ -3413,10 +3416,6 @@ function linkedReservationsForPerson(personId) {
 
 function linkedReservationsCountFor(stay) {
   return linkedReservationsForPerson(stay?.personId).length;
-}
-
-function shouldShowClientInList(stay) {
-  return Boolean(searchTerm) || stayOverlapsVisibleMonth(stay) || clientUrgency(stay).priority < 0;
 }
 
 function timelineRowHeight(laneCount) {
@@ -4068,7 +4067,6 @@ function visibleClientStays() {
       (stay) =>
         stay.guest !== "Disponibil" &&
         unitMatchesTimelineMode(stay) &&
-        shouldShowClientInList(stay) &&
         matchesSearch(stay)
     )
     .sort((first, second) => {
@@ -4292,57 +4290,25 @@ function renderStationing() {
   stationingCards.innerHTML = records
     .map((record) => {
       const details = stationingDetails(record);
-      const paid = Number(record.balance || 0) <= 0;
-      const note = record.note ? `<p>${record.note}</p>` : "";
 
       return `
         <article class="stationing-card ${details.status.className}">
           <header>
-            <div>
-              <h3 class="person-name">${record.owner}</h3>
-              <p>${record.phone || "fără telefon"}</p>
-            </div>
+            <h3 class="person-name">${record.owner}</h3>
           </header>
           <div class="stationing-card-main">
             <span class="unit-tag">${record.caravan}</span>
-            <span class="stationing-status ${details.status.className}">${details.status.label}</span>
-          </div>
-          <div class="stay-progress">
-            <div class="progress-meta">
-              <span>${details.remainingNights} din ${details.prepaidNights} nopți rămase · ${details.paidNights} nopți plătite</span>
-              <strong>${details.paidProgress}% plătit</strong>
-            </div>
-            <div class="progress-track stationing-payment-track" aria-label="Nopți plătite din staționare">
-              <span class="progress-fill" style="--progress: ${details.paidProgress}%"></span>
-            </div>
           </div>
           <dl class="stationing-facts">
-            <div class="stationing-paid-fact">
-              <dt>Plătit</dt>
-              <dd>${formatCurrency(record.paidAmount)}</dd>
-            </div>
             <div>
               <dt>Început</dt>
               <dd>${formatDateLabel(record.startDate)}</dd>
             </div>
             <div>
-              <dt>Final estimat</dt>
-              <dd>${formatDateLabel(details.endDate)}</dd>
-            </div>
-            <div>
-              <dt>Rest</dt>
-              <dd>${formatCurrency(record.balance)}</dd>
-            </div>
-            <div>
               <dt>Deduse</dt>
-              <dd>${details.deductedNights} nopti</dd>
+              <dd>${details.deductedNights} ${details.deductedNights === 1 ? "noapte" : "nopți"}</dd>
             </div>
           </dl>
-          <div class="payment-row">
-            <span class="payment-chip ${paid ? "is-paid" : "is-unpaid"}">${paid ? "Achitat" : "Neachitat"}</span>
-            <span>${formatCurrency(record.totalPrice)} total · ${formatCurrency(record.nightlyPrice)} / noapte</span>
-          </div>
-          ${note}
           <div class="client-card-actions">
             <button class="icon-button compact client-edit-button" type="button" data-edit-stationing="${record.key}" title="Editează staționarea" aria-label="Editează staționarea ${record.owner}">
               <i data-lucide="pencil" aria-hidden="true"></i>
@@ -5321,7 +5287,8 @@ function syncStationingTotals() {
   }
   stationingForm.elements.balance.value = balance.toFixed(2);
   stationingForm.elements.endDate.value = formatDateLabel(endDate);
-  stationingRangeSummary.textContent = `${details.usedNights} nopți folosite · ${details.remainingNights} nopți rămase · ${details.paidNights} nopți plătite · final estimat ${formatDateLabel(endDate)}.`;
+  const deductedLabel = details.deductedNights > 0 ? ` · ${details.deductedNights} ${details.deductedNights === 1 ? "noapte dedusă" : "nopți deduse"}` : "";
+  stationingRangeSummary.textContent = `Final ${formatDateLabel(endDate)} · Total ${formatCurrency(totalPrice)} · Rest ${formatCurrency(balance)}${deductedLabel}`;
 }
 
 function openStationingModal(recordKey = null) {
@@ -8060,7 +8027,7 @@ bookingForm.addEventListener("submit", (event) => {
   const facilities = refreshFacilityNights(bookingFacilityDraft, data.get("arrival"), data.get("departure"));
   const barItems = normalizeStayBarItems(existingStay?.barItems);
   const coveredPrice = existingStay ? Math.min(price, paymentCoveredPriceForStay(existingStay)) : 0;
-  const paid = Boolean(existingStay && price > 0 && coveredPrice >= price);
+  const paid = Boolean(existingStay && (price === 0 ? existingStay.paid === true : coveredPrice >= price));
   const settledPrice = coveredPrice;
   const balance = normalizeMoneyValue(price - coveredPrice);
   const deposit = coveredPrice;

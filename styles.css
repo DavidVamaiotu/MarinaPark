@@ -1419,7 +1419,7 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-height: 210px;
+  min-height: 0;
   padding: 12px;
   background:
     linear-gradient(135deg, rgba(47, 92, 75, 0.07), transparent 38%),
@@ -3055,6 +3055,31 @@ h3 {
   grid-template-columns: 1fr;
 }
 
+.stationing-form-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.stationing-caravan-field,
+.stationing-form-summary {
+  grid-column: 1 / -1;
+}
+
+.stationing-form-summary {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+}
+
+.stationing-notes-section {
+  display: grid;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -4277,6 +4302,7 @@ button:focus-visible {
     .bar-product-grid,
     .field-grid,
     .field-grid.three,
+    .stationing-form-fields,
     .stationing-facts,
     .unit-price-tools,
   .receipt-method-actions {
@@ -5267,7 +5293,7 @@ button:focus-visible {
 }
 
 .booking-modal {
-  background: rgba(31, 41, 58, 0.38);
+  background: rgba(8, 12, 18, 0.58);
 }
 
 #bookingForm .form-section-head::before {
@@ -7931,36 +7957,80 @@ body *::after {
   font-weight: 500 !important;
 }
 
-/* Slightly larger client-card content while preserving the five-column grid. */
+/* Larger, higher-contrast client-card content while preserving the five-column grid. */
 #reservationCards .client-card {
-  min-height: 342px;
+  min-height: 450px;
+  gap: 10px;
+  padding: 22px;
 }
 
 #reservationCards .client-card h3 {
-  font-size: 20px;
+  font-size: 24px;
 }
 
 #reservationCards .client-card-facts dt {
-  font-size: 14px;
+  color: #667085;
+  font-size: 16px;
 }
 
 #reservationCards .client-card-facts dd,
 #reservationCards .client-unit-tag {
-  font-size: 16px;
-}
-
-#reservationCards .client-card .client-card-message {
-  font-size: 15px;
-}
-
-#reservationCards .client-remaining > span {
-  font-size: 13px;
-}
-
-#reservationCards .client-remaining > span strong {
   font-size: 18px;
 }
 
+#reservationCards .client-card .client-card-message {
+  font-size: 17px;
+}
+
+#reservationCards .client-remaining > span {
+  color: #667085;
+  font-size: 15px;
+}
+
+#reservationCards .client-remaining > span strong {
+  font-size: 21px;
+}
+
+#reservationCards .client-card .progress-track {
+  height: 13px;
+}
+
 #reservationCards .client-card-actions .icon-button.compact {
-  min-height: 42px;
+  min-height: 50px;
+}
+
+#reservationCards .client-card-actions .icon-button.compact svg {
+  width: 25px;
+  height: 25px;
+}
+
+#reservationCards .client-unit-tag {
+  padding: 9px 16px;
+}
+
+#reservationCards .client-unit-status {
+  gap: 10px;
+}
+
+#reservationCards .client-paid-dot {
+  width: 28px;
+  height: 13px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  box-shadow: 0 0 0 4px rgba(47, 158, 83, 0.18);
+}
+
+/* Show the complete add-client workspace 20% larger without exceeding the window. */
+#guest-form-section {
+  --add-client-scale: 1.2;
+}
+
+#guest-form-section .booking-modal-content {
+  width: min(1400px, calc((100vw - 24px) / var(--add-client-scale)));
+  height: min(900px, calc((100dvh - 24px) / var(--add-client-scale)));
+  zoom: var(--add-client-scale);
+}
+
+#guest-form-section.has-reservation-tabs .booking-modal-content {
+  width: min(1400px, calc(((100vw - 20px) / var(--add-client-scale)) - 194px));
 }
