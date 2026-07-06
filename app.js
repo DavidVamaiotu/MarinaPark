@@ -1622,6 +1622,13 @@ function actualPaidAmountForStay(stay) {
   return normalizeMoneyValue(stay?.actualPaidAmount ?? 0);
 }
 
+function lastPaidAmountForStay(stay) {
+  const price = normalizeMoneyValue(stay?.price);
+  const recordedAmount = normalizeMoneyValue(stay?.lastPaidAmount ?? 0);
+  if (recordedAmount > 0) return Math.min(price, recordedAmount);
+  return Math.min(price, actualPaidAmountForStay(stay) || settledPriceForStay(stay));
+}
+
 function hasStayPaymentEvidence(stay) {
   if (!stay) return false;
   return (
@@ -1657,6 +1664,7 @@ function applyStayPayment(stay, requestedAmount, method) {
   const settledPrice = Math.min(price, normalizeMoneyValue(paymentCoveredPriceForStay(stay) + appliedAmount));
   stay.settledPrice = settledPrice;
   stay.actualPaidAmount = normalizeMoneyValue(actualPaidAmountForStay(stay) + appliedAmount);
+  stay.lastPaidAmount = appliedAmount;
   stay.balance = normalizeMoneyValue(price - settledPrice);
   stay.deposit = settledPrice;
   stay.paid = settledPrice >= price;
@@ -1952,6 +1960,7 @@ function normalizeStay(stay, index) {
     paid,
     settledPrice: coveredPrice,
     actualPaidAmount,
+    lastPaidAmount: Math.min(price, normalizeMoneyValue(stay.lastPaidAmount ?? (actualPaidAmount || coveredPrice))),
     paymentMethod: String(stay.paymentMethod || ""),
     stationingDeduction: normalizeStayStationingDeduction(stay.stationingDeduction),
     note: String(stay.note || "")
@@ -2218,6 +2227,12 @@ function receiptAmountFor(stay) {
   return normalizeMoneyValue(price - Math.min(price, paymentCoveredPriceForStay(stay)));
 }
 
+function receiptPaymentAmountFor(stay) {
+  const outstanding = receiptAmountFor(stay);
+  if (outstanding > 0) return outstanding;
+  return lastPaidAmountForStay(stay) || normalizeMoneyValue(stay?.price);
+}
+
 function receiptDraftFromBookingForm(stay) {
   if (!bookingModal.classList.contains("is-open") || editingStayKey !== stay.key) {
     return null;
@@ -2228,7 +2243,7 @@ function receiptDraftFromBookingForm(stay) {
   const group = selectedUnit?.group || groupFromKind(kind);
   const price = normalizeMoneyValue(bookingForm.elements.price.value || stay.price);
   const formBalance = normalizeMoneyValue(bookingForm.elements.balance.value || stay.balance || price);
-  const amount = normalizeMoneyValue(receiptAmountFor({ ...stay, price, balance: formBalance }));
+  const amount = normalizeMoneyValue(receiptPaymentAmountFor({ ...stay, price, balance: formBalance }));
 
   return {
     amount,
@@ -2266,7 +2281,7 @@ function receiptDraftForStay(stay) {
   if (formDraft) return formDraft;
 
   return {
-    amount: normalizeMoneyValue(receiptAmountFor(stay)),
+    amount: normalizeMoneyValue(receiptPaymentAmountFor(stay)),
     stay: { ...stay },
     source: "saved"
   };
@@ -2320,7 +2335,7 @@ function openReceiptModal(stayKey) {
   receiptDraft = receiptDraftForStay(stay);
   const amount = receiptDraft.amount;
   if (amount <= 0) {
-    showToast("Rezervarea este deja achitată");
+    showToast("Prețul rezervării trebuie să fie mai mare decât 0");
     receiptStayKey = null;
     receiptDraft = null;
     return;
@@ -3239,7 +3254,7 @@ async function generateCommittedReceipt(stayKey, method) {
     }
     const amount = normalizeMoneyValue(enteredAmount);
     if (amount > availableAmount) {
-      showToast("Suma depășește restul de plată");
+      showToast("Suma depășește suma disponibilă pentru plată");
       return false;
     }
 
@@ -3275,7 +3290,7 @@ async function generateCommittedReceipt(stayKey, method) {
 
     applyCommittedPaymentResult(result);
     receiptPaymentRequestId = null;
-    closeReceiptModal();
+    if (targetType !== "stay") closeReceiptModal();
     renderAll({ force: true });
     if (targetType === "stay" && bookingModal.classList.contains("is-open")) {
       const currentStay = editingStayKey ? stays.find((item) => item.key === editingStayKey) : null;
@@ -4057,6 +4072,9 @@ function visibleClientStays() {
         matchesSearch(stay)
     )
     .sort((first, second) => {
+      const paymentCompare = Number(isStayFullyPaid(first)) - Number(isStayFullyPaid(second));
+      if (paymentCompare !== 0) return paymentCompare;
+
       if (searchTerm) {
         const scoreCompare = staySearchScore(first) - staySearchScore(second);
         if (scoreCompare !== 0) return scoreCompare;
@@ -4124,7 +4142,10 @@ function renderReservations() {
                 <i data-lucide="trash-2" aria-hidden="true"></i>
               </button>
             </div>
-            <span class="client-unit-tag" title="${stay.kind}">${stay.id}</span>
+            <div class="client-unit-status">
+              <span class="client-unit-tag" title="${stay.kind}">${stay.id}</span>
+              ${paid ? '<span class="client-paid-dot" title="Achitat" aria-hidden="true"></span>' : ""}
+            </div>
           </article>
         `;
       }
@@ -5773,10 +5794,16 @@ function syncNightsFromDates() {
   renderBookingStationingLink();
 }
 
-function syncDepartureFromNights() {
-  const arrival = bookingForm.elements.arrival.value;
+function syncDepartureFromNights(options = {}) {
+  let arrival = bookingForm.elements.arrival.value;
   const nights = Number(bookingForm.elements.nights.value || 1);
   if (!arrival || nights < 1) return;
+
+  if (options.startTodayForExpiredSource && oldSourceBookingWarning && !oldSourceBookingWarning.hidden) {
+    arrival = toISODate(today);
+    bookingForm.elements.arrival.value = arrival;
+    showOldSourceBookingWarning();
+  }
 
   bookingForm.elements.departure.value = toISODate(addDays(dateFromISO(arrival), nights));
   renderBookingStationingLink();
@@ -6122,7 +6149,12 @@ function renderLinkedReservations() {
     return;
   }
 
-  const currentKeys = linked.map((stay) => `${stay.key}|${stay.isDraft ? "draft" : "saved"}`);
+  const currentKeys = linked.map((stay) => [
+    stay.key,
+    stay.isDraft ? "draft" : "saved",
+    stay.id || "Nou",
+    isStayFullyPaid(stay) ? "paid" : "unpaid"
+  ].join("|"));
   const keysMatch = currentKeys.length === _lastLinkedTabKeys.length && currentKeys.every((k, i) => k === _lastLinkedTabKeys[i]);
 
   if (keysMatch) {
@@ -6154,10 +6186,15 @@ function renderLinkedReservations() {
     .map((stay, index) => {
       const current = index === currentIndex;
       const reservationNumber = index + 1;
+      const unitId = stay.id || "Nou";
+      const paid = isStayFullyPaid(stay);
+      const paymentLabel = paid ? "Achitat" : "Neachitat";
 
       return `
-        <button class="linked-reservation-tab is-entering ${current ? "is-current" : ""} ${stay.isDraft ? "is-draft" : ""}" type="button" role="tab" aria-label="Rezervarea ${reservationNumber}" title="Deschide rezervarea ${reservationNumber}" aria-selected="${current}" data-linked-reservation="${escapeHtml(stay.key)}" style="--tab-index:${index}">
+        <button class="linked-reservation-tab is-entering ${current ? "is-current" : ""} ${paid ? "is-paid" : "is-unpaid"} ${stay.isDraft ? "is-draft" : ""}" type="button" role="tab" aria-label="Rezervarea ${reservationNumber}, camera ${escapeHtml(unitId)}, ${paymentLabel.toLowerCase()}" title="Rezervarea ${reservationNumber} · Camera ${escapeHtml(unitId)} · ${paymentLabel}" aria-selected="${current}" data-linked-reservation="${escapeHtml(stay.key)}" style="--tab-index:${index}">
           <span class="linked-tab-number">${reservationNumber}</span>
+          <span class="linked-tab-room">${escapeHtml(unitId)}</span>
+          <span class="linked-tab-payment-dot ${paid ? "is-paid" : "is-unpaid"}" title="${paymentLabel}" aria-hidden="true"></span>
         </button>
       `;
     })
@@ -7538,6 +7575,12 @@ const syncDepartureAndPricing = () => {
   recalculateBookingPriceAfterUserChange();
 };
 
+const syncExpiredSourceDepartureAndPricing = () => {
+  syncDepartureFromNights({ startTodayForExpiredSource: true });
+  syncBookingCalendarMonthToArrival();
+  recalculateBookingPriceAfterUserChange();
+};
+
 const syncNightsAndPricing = () => {
   syncNightsFromDates();
   syncBookingCalendarMonthToArrival();
@@ -7545,8 +7588,8 @@ const syncNightsAndPricing = () => {
 };
 
 bookingForm.elements.arrival.addEventListener("change", syncDepartureAndPricing);
-bookingForm.elements.nights.addEventListener("input", syncDepartureAndPricing);
-bookingForm.elements.nights.addEventListener("change", syncDepartureAndPricing);
+bookingForm.elements.nights.addEventListener("input", syncExpiredSourceDepartureAndPricing);
+bookingForm.elements.nights.addEventListener("change", syncExpiredSourceDepartureAndPricing);
 bookingForm.elements.departure.addEventListener("change", syncNightsAndPricing);
 bookingForm.elements.guest.addEventListener("input", searchSourceBookingsFromName);
 bookingForm.elements.price.addEventListener("input", syncBasePriceFromTotalInput);
@@ -8056,6 +8099,7 @@ bookingForm.addEventListener("submit", (event) => {
     paid,
     settledPrice,
     actualPaidAmount: existingStay ? actualPaidAmountForStay(existingStay) : 0,
+    lastPaidAmount: existingStay ? lastPaidAmountForStay(existingStay) : 0,
     paymentMethod,
     stationingDeduction,
     note: String(data.get("note") || "").trim()

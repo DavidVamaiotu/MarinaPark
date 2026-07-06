@@ -121,6 +121,28 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
   const linkedLog = activity.body.entries.find((entry) => entry.id === "payment-linked-valid-test");
   assert.equal(linkedLog.message, "Linked a plătit în total 500.00 lei pentru 2 rezervări prin voucher.");
 
+  const repeated = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({ paymentId: "stay-repeat-test", type: "stay", method: "voucher", amount: 1, stayKey: "stay-e" })
+  });
+  assert.equal(repeated.status, 200);
+  assert.equal(repeated.body.stays[0].paid, true);
+  assert.equal(repeated.body.stays[0].balance, 0);
+  assert.equal(repeated.body.stays[0].actualPaidAmount, 2);
+  assert.equal(repeated.body.stays[0].lastPaidAmount, 1);
+  assert.equal(repeated.body.allocations[0].allocatedAmount, 1);
+  const repeatedRetry = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({ paymentId: "stay-repeat-test", type: "stay", method: "voucher", amount: 1, stayKey: "stay-e" })
+  });
+  assert.equal(repeatedRetry.body.stays[0].actualPaidAmount, 2);
+
+  const repeatedOverpayment = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({ paymentId: "stay-repeat-over-test", type: "stay", method: "voucher", amount: 1.01, stayKey: "stay-e" })
+  });
+  assert.equal(repeatedOverpayment.status, 400);
+
   const overpayment = await request(server.url, "/api/payment", {
     method: "POST",
     body: JSON.stringify({ paymentId: "station-over-test", type: "stationing", method: "voucher", amount: 150, stationingKey: "station-a" })
@@ -130,6 +152,7 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
   const data = await request(server.url, "/api/data");
   assert.equal(data.body.barArticles[0].stock, 3);
   assert.deepEqual(data.body.stays.filter((stay) => ["stay-a", "stay-b"].includes(stay.key)).map((stay) => stay.actualPaidAmount), [50, 450]);
+  assert.deepEqual(data.body.stays.filter((stay) => ["stay-a", "stay-b"].includes(stay.key)).map((stay) => stay.lastPaidAmount), [50, 450]);
   assert.equal(data.body.stationing[0].paidAmount, 0);
 
   const retiredEndpoint = await request(server.url, "/api/receipt", { method: "POST", body: "{}" });

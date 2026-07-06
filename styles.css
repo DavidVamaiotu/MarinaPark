@@ -5403,6 +5403,29 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+.client-unit-status {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+  margin-top: auto;
+}
+
+.client-unit-status .client-unit-tag {
+  margin-top: 0;
+}
+
+.client-paid-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  background: #2f9e53;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(47, 158, 83, 0.16);
+}
+
 .client-card.is-overdue .client-card-message,
 .client-card.is-leaving-today .client-card-message {
   color: #15171c;
@@ -6190,7 +6213,7 @@ button:focus-visible {
   box-shadow: 0 1px 3px rgba(47, 112, 69, 0.3);
 }
 
-/* Client progress status colors. Paid controls the bar color, not sorting. */
+/* Client progress status colors. Paid green always wins over urgency colors. */
 .client-card .progress-fill {
   background: #cbd5e1;
 }
@@ -6216,7 +6239,7 @@ button:focus-visible {
 }
 
 .client-card.is-paid .progress-fill {
-  background: #72c58d;
+  background: #72c58d !important;
 }
 
 .client-card.is-paid .progress-track {
@@ -7101,15 +7124,15 @@ textarea,
 
 /* Compact linked-reservation tabs: the reservation opens on click. */
 #guest-form-section.has-reservation-tabs .booking-modal-content {
-  width: min(1400px, calc(100vw - 104px));
-  margin-right: 76px;
+  width: min(1400px, calc(100vw - 194px));
+  margin-right: 166px;
   overflow: visible;
 }
 
 #guest-form-section .booking-reservation-tabs {
   top: 62px;
   right: 0;
-  width: 72px;
+  width: 166px;
   gap: 8px;
   transform: translateX(calc(100% - 10px));
 }
@@ -7119,7 +7142,7 @@ textarea,
 }
 
 #guest-form-section .linked-reservations-track {
-  width: 72px;
+  width: 166px;
   gap: 8px;
   justify-items: start;
 }
@@ -7131,11 +7154,13 @@ textarea,
   --tab-text: #12363a;
   position: relative;
   display: grid;
-  width: 60px;
+  grid-template-columns: 29px minmax(0, 1fr) 8px;
+  gap: 7px;
+  align-items: center;
+  width: 154px;
   height: 48px;
   min-height: 48px;
   padding: 0 10px 0 14px;
-  place-items: center;
   overflow: hidden;
   color: var(--tab-text);
   background: linear-gradient(135deg, #ffffff 0%, var(--tab-bg) 100%);
@@ -7220,7 +7245,7 @@ textarea,
 
 #guest-form-section .linked-reservation-tab:hover,
 #guest-form-section .linked-reservation-tab:focus-visible {
-  width: 68px;
+  width: 160px;
   outline: none;
   box-shadow: 0 10px 24px color-mix(in srgb, var(--tab-accent) 25%, transparent);
   filter: saturate(1.08);
@@ -7230,7 +7255,7 @@ textarea,
 #guest-form-section .linked-reservation-tab.is-current,
 #guest-form-section .linked-reservation-tab.is-paid.is-current {
   z-index: 2;
-  width: 72px;
+  width: 166px;
   height: 54px;
   color: var(--tab-text);
   background: linear-gradient(135deg, #ffffff 0%, var(--tab-bg) 72%);
@@ -7268,6 +7293,32 @@ textarea,
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24);
   font-size: 14px;
   font-weight: 800;
+}
+
+#guest-form-section .linked-tab-room {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tab-text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.1;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#guest-form-section .linked-tab-payment-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  background: #aeb8b3;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(174, 184, 179, 0.18);
+}
+
+#guest-form-section .linked-tab-payment-dot.is-paid {
+  background: #2f9e53;
+  box-shadow: 0 0 0 2px rgba(47, 158, 83, 0.18);
 }
 
 @keyframes compact-reservation-tab-enter {
@@ -7878,4 +7929,38 @@ body *::after {
 
 .person-name {
   font-weight: 500 !important;
+}
+
+/* Slightly larger client-card content while preserving the five-column grid. */
+#reservationCards .client-card {
+  min-height: 342px;
+}
+
+#reservationCards .client-card h3 {
+  font-size: 20px;
+}
+
+#reservationCards .client-card-facts dt {
+  font-size: 14px;
+}
+
+#reservationCards .client-card-facts dd,
+#reservationCards .client-unit-tag {
+  font-size: 16px;
+}
+
+#reservationCards .client-card .client-card-message {
+  font-size: 15px;
+}
+
+#reservationCards .client-remaining > span {
+  font-size: 13px;
+}
+
+#reservationCards .client-remaining > span strong {
+  font-size: 18px;
+}
+
+#reservationCards .client-card-actions .icon-button.compact {
+  min-height: 42px;
 }
