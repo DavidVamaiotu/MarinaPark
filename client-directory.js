@@ -163,7 +163,7 @@ function sqlDirectoryEntry(booking = {}) {
   return {
     ...booking,
     key: directoryKey("sql", [booking.source, booking.guest, booking.phone, booking.start, booking.end, booking.unitHint]),
-    id: booking.unitHint || (booking.group === "camping" ? "Camping SQL" : "SQL"),
+    id: booking.unitHint || "-",
     kind: booking.kind || (booking.group === "camping" ? "Camping" : "Camere"),
     directorySource: "sql",
     directoryReadOnly: true,

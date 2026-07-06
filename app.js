@@ -4073,7 +4073,7 @@ function normalizeDirectoryClient(client, index) {
   const normalized = normalizeStay({
     ...client,
     key: client.key || `directory-${index}`,
-    id: client.id || client.unitHint || (client.directorySource === "sql" ? "SQL" : "Istoric local"),
+    id: client.id || client.unitHint || "-",
     guest: client.guest || "Client",
     group: client.group === "camping" ? "camping" : "room",
     kind: client.kind || (client.group === "camping" ? "Camping" : "Camere"),
@@ -4170,7 +4170,6 @@ function renderReservations() {
         const paid = isStayFullyPaid(stay);
         const urgency = clientUrgency(stay);
         const directorySource = stay.directorySource || "";
-        const sourceLabel = directorySource === "sql" ? "SQL" : directorySource === "local-history" ? "Istoric local" : "";
         const originalStay = directorySource === "local-history"
           ? stays.find((item) => item.key === stay.originalStayKey)
           : null;
@@ -4184,67 +4183,51 @@ function renderReservations() {
         const remainingDays = checkoutDate ? Math.max(0, daysBetween(today, checkoutDate)) : 0;
         const remainingLabel = remainingDays === 1 ? "zi rămasă" : "zile rămase";
         const timelineLabel = formatDateRangeLabel(stay.start, stay.end) || stay.dates || "-";
-        const actions = originalStay || !directorySource
+        const localKey = escapeHtml(originalStay?.key || stay.key);
+        const actions = directorySource && !originalStay
           ? `
-              <button class="icon-button compact client-edit-button" type="button" data-edit-client="${escapeHtml(originalStay?.key || stay.key)}" title="Editează clientul" aria-label="Editează clientul ${escapeHtml(stay.guest)}">
-                <i data-lucide="pencil" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button compact client-receipt-button" type="button" data-receipt-client="${escapeHtml(originalStay?.key || stay.key)}" title="Generează bon" aria-label="Generează bon pentru ${escapeHtml(stay.guest)}">
-                <i data-lucide="receipt-text" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button compact client-delete-button" type="button" data-delete-client="${escapeHtml(originalStay?.key || stay.key)}" title="Șterge clientul" aria-label="Șterge clientul ${escapeHtml(stay.guest)}">
-                <i data-lucide="trash-2" aria-hidden="true"></i>
+              <button class="icon-button compact client-edit-button" type="button" data-rebook-client="${escapeHtml(stay.key)}" title="${stationingLinkAvailable ? "Leagă staționarea în formular" : "Rezervare nouă pentru acest client"}" aria-label="${stationingLinkAvailable ? "Leagă staționarea în formular pentru" : "Rezervare nouă pentru"} ${escapeHtml(stay.guest)}">
+                <i data-lucide="calendar-plus" aria-hidden="true"></i>
               </button>
             `
           : `
-              <button class="icon-button compact client-edit-button" type="button" data-rebook-client="${escapeHtml(stay.key)}" title="${stationingLinkAvailable ? "Leagă automat staționarea" : "Rezervare nouă pentru acest client"}" aria-label="${stationingLinkAvailable ? "Leagă staționarea pentru" : "Rezervare nouă pentru"} ${escapeHtml(stay.guest)}">
-                <i data-lucide="${stationingLinkAvailable ? "link" : "calendar-plus"}" aria-hidden="true"></i>
+              <button class="icon-button compact client-edit-button" type="button" data-edit-client="${localKey}" title="Editează clientul" aria-label="Editează clientul ${escapeHtml(stay.guest)}">
+                <i data-lucide="pencil" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button compact client-receipt-button" type="button" data-receipt-client="${localKey}" title="Generează bon" aria-label="Generează bon pentru ${escapeHtml(stay.guest)}">
+                <i data-lucide="receipt-text" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button compact client-delete-button" type="button" data-delete-client="${localKey}" title="Șterge clientul" aria-label="Șterge clientul ${escapeHtml(stay.guest)}">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
               </button>
             `;
-        const stateContent = directorySource
-          ? `
-            <div class="client-directory-details">
-              <span>${escapeHtml(stay.phone || "fără telefon")}</span>
-              ${stay.car ? `<span>${escapeHtml(stay.car)}</span>` : ""}
-            </div>
-          `
-          : `
-            <div class="client-remaining">
-              <span><strong>${remainingDays}</strong> ${remainingLabel}</span>
-              <div class="progress-track" aria-label="Progres cazare: ${details.progress}%">
-                <span class="progress-fill" style="--progress: ${details.progress}%"></span>
-              </div>
-            </div>
-          `;
-        const cardMessage = stationingLinkAvailable
-          ? "Rezervare viitoare · staționare găsită automat."
-          : directorySource === "sql"
-          ? "Rezervare din baza SQL."
-          : directorySource === "local-history"
-            ? "Client păstrat în istoricul local."
-            : clientCardMessage(urgency.className);
 
         return `
-          <article class="client-card ${directorySource ? `is-directory-client is-source-${directorySource}` : urgency.className} ${paid ? "is-paid" : "is-unpaid"}" data-client-key="${escapeHtml(stay.key)}" aria-label="${escapeHtml(stay.guest)}${sourceLabel ? `, ${sourceLabel}` : `, ${paid ? "achitat" : "neachitat"}`}">
-            <h3 class="person-name">${escapeHtml(stay.guest)}</h3>
+          <article class="client-card ${urgency.className} ${paid ? "is-paid" : "is-unpaid"}" data-client-key="${escapeHtml(stay.key)}" aria-label="${escapeHtml(stay.guest)}, ${paid ? "achitat" : "neachitat"}">
+            <h3 class="person-name">${stay.guest}</h3>
             <dl class="client-card-facts">
               <div>
                 <dt>Cost</dt>
                 <dd>${formatCurrency(stay.price)}</dd>
               </div>
               <div>
-                <dt>${directorySource ? "Perioadă" : "Timeline"}</dt>
-                <dd>${escapeHtml(timelineLabel)}</dd>
+                <dt>Timeline</dt>
+                <dd>${timelineLabel}</dd>
               </div>
             </dl>
-            <p class="client-card-message">${cardMessage}</p>
-            ${stateContent}
+            <p class="client-card-message">${clientCardMessage(urgency.className)}</p>
+            <div class="client-remaining">
+              <span><strong>${remainingDays}</strong> ${remainingLabel}</span>
+              <div class="progress-track" aria-label="Progres cazare: ${details.progress}%">
+                <span class="progress-fill" style="--progress: ${details.progress}%"></span>
+              </div>
+            </div>
             <div class="client-card-actions">
               ${actions}
             </div>
             <div class="client-unit-status">
-              <span class="client-unit-tag" title="${escapeHtml(stay.kind)}">${escapeHtml(sourceLabel || stay.id)}</span>
-              ${paid && !directorySource ? '<span class="client-paid-dot" title="Achitat" aria-hidden="true"></span>' : ""}
+              <span class="client-unit-tag" title="${stay.kind}">${stay.id}</span>
+              ${paid ? '<span class="client-paid-dot" title="Achitat" aria-hidden="true"></span>' : ""}
             </div>
           </article>
         `;
