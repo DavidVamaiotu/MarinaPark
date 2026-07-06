@@ -1896,6 +1896,30 @@ h3 {
   gap: 8px;
 }
 
+#bookingForm > .booking-side-column > .booking-stationing-link-section {
+  flex: 0 0 auto;
+  order: 0;
+}
+
+#bookingForm > .booking-side-column .stationing-link-status,
+#bookingForm > .booking-side-column .stationing-link-results {
+  gap: 6px;
+}
+
+#bookingForm > .booking-side-column .stationing-link-selected {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#bookingForm > .booking-side-column .stationing-link-selected .ghost-button {
+  grid-row: auto;
+  grid-column: auto;
+  width: 100%;
+}
+
+#bookingForm > .booking-side-column .stationing-link-card {
+  padding: 8px;
+}
+
 .stationing-link-selected {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -6962,11 +6986,6 @@ textarea,
   gap: 8px;
   padding: 10px;
   overflow: hidden;
-}
-
-#guest-form-section #bookingForm .booking-stationing-link-section:not([hidden]) {
-  grid-column: 1 / -1;
-  grid-row: 3;
 }
 
 #guest-form-section #bookingForm > .booking-side-column {

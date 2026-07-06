@@ -2894,7 +2894,7 @@ async function applyStationingDeductionForStay(stay, options = {}) {
   const nights = Math.min(remainingDeductibleNights, Math.max(1, Number(deduction.nights || stayDetails(stay).nights || 1)));
   if (options.ask !== false) {
     const confirmed = window.confirm(
-      `Inregistrezi ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationarea pentru ${stationingRecordLabel(record)}, fara scadere din pret?`
+      `Inregistrezi ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationarea pentru ${stationingRecordLabel(record)}?`
     );
     if (!confirmed) return null;
   }
@@ -6061,7 +6061,7 @@ function renderBookingStationingLink() {
       if (second.key === selectedDeduction?.recordKey) return 1;
       return stationingRecordLabel(first).localeCompare(stationingRecordLabel(second), "ro-RO", { numeric: true });
     })
-    .slice(0, 6);
+    .slice(0, 3);
 
   bookingStationingLinkResults.innerHTML = matches.length
     ? matches
@@ -6088,7 +6088,7 @@ function selectBookingStationingDeduction(recordKey) {
   if (!record) return;
   const nights = bookingDeductionNights();
   const confirmed = window.confirm(
-    `Folosesti ${stationingRecordLabel(record)} pentru a inregistra ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationare, fara scadere din pret?`
+    `Folosesti ${stationingRecordLabel(record)} pentru a inregistra ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationare?`
   );
   if (!confirmed) return;
   bookingStationingDeductionDraft = normalizeStayStationingDeduction({
