@@ -81,7 +81,21 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
       { key: "stay-zero", id: "D-6", guest: "Complimentary", personId: "person-3", group: "room", kind: "Room", price: 0, balance: 0, paid: false }
     ],
     units: [{ id: "D-1", group: "room", kind: "Room" }, { id: "D-2", group: "room", kind: "Room" }],
-    stationing: [{ key: "station-a", owner: "Owner", caravan: "RV", startDate: "2026-07-01", prepaidNights: 10, nightlyPrice: 10, totalPrice: 100, paidAmount: 0, balance: 100 }],
+    stationing: [
+      { key: "station-a", owner: "Owner", caravan: "RV", startDate: "2026-07-01", prepaidNights: 10, nightlyPrice: 10, totalPrice: 100, paidAmount: 0, balance: 100 },
+      {
+        key: "station-deducted",
+        owner: "Linked Nights",
+        caravan: "RV Linked",
+        startDate: "2026-07-01",
+        prepaidNights: 10,
+        nightlyPrice: 10,
+        totalPrice: 100,
+        paidAmount: 0,
+        balance: 100,
+        deductions: [{ key: "deduction-a", stayKey: "stay-a", guest: "Linked", unitId: "RV-1", start: "2026-08-01", end: "2026-08-03", nights: 2, amount: 0, appliedAt: "2026-07-01T00:00:00.000Z" }]
+      }
+    ],
     barArticles: [{ key: "water", name: "Water", price: 5, stock: 5, vatRate: 11, hasSgr: true }],
     config: { savedAt: "seed", roomUnitCatalogSeeded: true }
   };
@@ -159,12 +173,23 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
   });
   assert.equal(overpayment.status, 400);
 
+  const stationingWithLinkedNights = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({ paymentId: "station-linked-nights-test", type: "stationing", method: "voucher", amount: 100, stationingKey: "station-deducted" })
+  });
+  assert.equal(stationingWithLinkedNights.status, 200);
+  assert.equal(stationingWithLinkedNights.body.stationing.totalPrice, 100);
+  assert.equal(stationingWithLinkedNights.body.stationing.paidAmount, 100);
+  assert.equal(stationingWithLinkedNights.body.stationing.balance, 0);
+  assert.equal(stationingWithLinkedNights.body.stationing.deductions[0].amount, 0);
+
   const data = await request(server.url, "/api/data");
   assert.equal(data.body.barArticles[0].stock, 3);
   assert.deepEqual(data.body.stays.filter((stay) => ["stay-a", "stay-b"].includes(stay.key)).map((stay) => stay.actualPaidAmount), [50, 450]);
   assert.deepEqual(data.body.stays.filter((stay) => ["stay-a", "stay-b"].includes(stay.key)).map((stay) => stay.lastPaidAmount), [50, 450]);
   assert.equal(data.body.stays.find((stay) => stay.key === "stay-zero").paid, true);
-  assert.equal(data.body.stationing[0].paidAmount, 0);
+  assert.equal(data.body.stationing.find((record) => record.key === "station-a").paidAmount, 0);
+  assert.equal(data.body.stationing.find((record) => record.key === "station-deducted").balance, 0);
 
   const retiredEndpoint = await request(server.url, "/api/receipt", { method: "POST", body: "{}" });
   assert.equal(retiredEndpoint.status, 410);

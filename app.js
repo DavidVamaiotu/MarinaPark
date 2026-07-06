@@ -234,6 +234,10 @@ const TIMELINE_LANE_HEIGHT = 34;
 const TIMELINE_ROW_GAP = 1;
 const TIMELINE_ROW_OVERSCAN = 10;
 let reservationPage = 1;
+let clientDirectory = [];
+let clientDirectoryLoaded = false;
+let clientDirectoryRequestId = 0;
+let clientDirectoryNeedsRefresh = false;
 let staysByUnitIndex = new Map();
 let timelineLayoutCache = new Map();
 let reservationAutoLoadObserver = null;
@@ -280,6 +284,7 @@ const prevMonthButton = document.querySelector("#prevMonth");
 const nextMonthButton = document.querySelector("#nextMonth");
 const currentMonthButton = document.querySelector("#currentMonth");
 const reservationCards = document.querySelector("#reservationCards");
+const clientDirectoryStatus = document.querySelector("#clientDirectoryStatus");
 const availableUnitsToday = document.querySelector("#availableUnitsToday");
 const availableUnitsTodayLabel = document.querySelector("#availableUnitsTodayLabel");
 const availableUnitsTodayList = document.querySelector("#availableUnitsTodayList");
@@ -1431,9 +1436,7 @@ function normalizeStationingRecord(record = {}, index = 0) {
   const prepaidNights = Math.max(1, Math.min(1095, Math.round(Number(record.prepaidNights || 30))));
   const nightlyPrice = normalizeMoneyValue(record.nightlyPrice);
   const deductions = normalizeStationingDeductions(record.deductions);
-  const deductedNights = Math.min(prepaidNights, deductions.reduce((sum, deduction) => sum + Number(deduction.nights || 0), 0));
-  const billableNights = Math.max(0, prepaidNights - deductedNights);
-  const totalPrice = normalizeMoneyValue(deductions.length ? nightlyPrice * billableNights : record.totalPrice || nightlyPrice * prepaidNights);
+  const totalPrice = normalizeMoneyValue(nightlyPrice > 0 ? nightlyPrice * prepaidNights : record.totalPrice);
   const paidAmount = Math.min(totalPrice, normalizeMoneyValue(record.paidAmount));
   const balance = Math.max(0, normalizeMoneyValue(totalPrice - paidAmount));
 
@@ -1458,20 +1461,20 @@ function stationingDetails(record) {
   const prepaidNights = Math.max(1, Number(record.prepaidNights || 1));
   const nightlyPrice = normalizeMoneyValue(record.nightlyPrice);
   const deductedNights = stationingDeductedNights(record);
-  const billableNights = Math.max(0, prepaidNights - deductedNights);
-  const totalPrice = normalizeMoneyValue(record.totalPrice || billableNights * nightlyPrice);
+  const remainingBillableNights = Math.max(0, prepaidNights - deductedNights);
+  const totalPrice = normalizeMoneyValue(record.totalPrice || prepaidNights * nightlyPrice);
   const paidAmount = Math.min(totalPrice, normalizeMoneyValue(record.paidAmount));
   const paidNights =
     nightlyPrice > 0
-      ? Math.min(billableNights, Math.floor(paidAmount / nightlyPrice))
+      ? Math.min(prepaidNights, Math.floor(paidAmount / nightlyPrice))
       : paidAmount >= totalPrice && totalPrice > 0
-        ? billableNights
+        ? prepaidNights
         : 0;
   const usedNights = Math.min(prepaidNights, Math.max(0, daysBetween(start, today)));
   const billableUsedNights = Math.max(0, usedNights - deductedNights);
-  const remainingNights = Math.max(0, billableNights - billableUsedNights);
+  const remainingNights = Math.max(0, remainingBillableNights - billableUsedNights);
   const progress = Math.round((usedNights / prepaidNights) * 100);
-  const paidProgress = billableNights > 0 ? Math.round((paidNights / billableNights) * 100) : 100;
+  const paidProgress = prepaidNights > 0 ? Math.round((paidNights / prepaidNights) * 100) : 100;
   const unpaidProgress = Math.max(0, 100 - paidProgress);
   const endDate = stationingEndDate(record);
   const status =
@@ -1487,7 +1490,7 @@ function stationingDetails(record) {
     paidNights,
     prepaidNights,
     deductedNights,
-    billableNights,
+    billableNights: remainingBillableNights,
     progress,
     paidProgress,
     unpaidProgress,
@@ -1849,7 +1852,7 @@ function stayChangeList(previous, next) {
   if (String(previousDeduction?.recordKey || "") !== String(nextDeduction?.recordKey || "")) {
     changes.push(`stationare: ${previousDeduction?.recordLabel || "fara"} -> ${nextDeduction?.recordLabel || "fara"}`);
   } else if (String(previousDeduction?.appliedAt || "") !== String(nextDeduction?.appliedAt || "")) {
-    changes.push(`stationare: deducere aplicata ${nextDeduction?.appliedNights || 0} nopti`);
+    changes.push(`stationare: ${nextDeduction?.appliedNights || 0} nopti inregistrate`);
   }
 
   return changes;
@@ -1910,6 +1913,7 @@ function normalizeStayStationingDeduction(deduction = {}) {
     appliedAt: String(deduction.appliedAt || ""),
     appliedNights: Math.max(0, Math.round(Number(deduction.appliedNights || 0))),
     appliedAmount: normalizeMoneyValue(deduction.appliedAmount || 0),
+    autoLinked: deduction.autoLinked === true,
     nights
   };
 }
@@ -2106,6 +2110,7 @@ function ensureStayKeys() {
 
 function saveStays() {
   markPagesDirty();
+  clientDirectoryNeedsRefresh = true;
   ensureStayKeys();
   try {
     localStorage.setItem(staysStorageKey, JSON.stringify(stays));
@@ -2148,6 +2153,10 @@ async function saveStaysToFiles(options = {}) {
       const result = await response.json().catch(() => ({}));
       if (!response.ok || result.ok === false) throw new Error(result.error || `HTTP ${response.status}`);
       lastDatabaseSavedAt = result.savedAt || config.savedAt;
+      if (clientDirectoryNeedsRefresh) {
+        clientDirectoryNeedsRefresh = false;
+        void loadClientDirectory();
+      }
       if (options.showMessage) {
         showToast("Baza de date locală a fost actualizată");
       }
@@ -2344,7 +2353,7 @@ function openReceiptModal(stayKey) {
   receiptPaymentRequestId = null;
   const stationingDeduction = normalizeStayStationingDeduction(receiptDraft.stay.stationingDeduction);
   const stationingDeductionLine = stationingDeduction && !stationingDeduction.appliedAt
-    ? `<span>Deducere stationare pregatita: ${stationingDeduction.nights} ${stationingDeduction.nights === 1 ? "noapte" : "nopti"}.</span>`
+    ? `<span>Nopti stationare pregatite: ${stationingDeduction.nights} ${stationingDeduction.nights === 1 ? "noapte" : "nopti"}, fara scadere din pret.</span>`
     : "";
   receiptSummary.innerHTML = `
     <strong>Plata cu numerar, card sau voucher</strong>
@@ -2869,7 +2878,6 @@ function stationingDeductionEntryForStay(stay, record) {
     Math.max(1, Number(stay?.stationingDeduction?.nights || stayDetails(stay).nights || 1)),
     Math.max(1, remainingDeductibleNights)
   );
-  const amount = normalizeMoneyValue(nights * Number(record?.nightlyPrice || 0));
   return {
     key: `stationing-deduction-${stay.key}-${Date.now()}`,
     stayKey: stay.key,
@@ -2878,7 +2886,7 @@ function stationingDeductionEntryForStay(stay, record) {
     start: stay.start,
     end: stay.end,
     nights,
-    amount,
+    amount: 0,
     appliedAt: new Date().toISOString()
   };
 }
@@ -2896,7 +2904,7 @@ async function applyStationingDeductionForStay(stay, options = {}) {
   const nights = Math.min(remainingDeductibleNights, Math.max(1, Number(deduction.nights || stayDetails(stay).nights || 1)));
   if (options.ask !== false) {
     const confirmed = window.confirm(
-      `Deduci ${nights} ${nights === 1 ? "noapte" : "nopti"} din stationarea pentru ${stationingRecordLabel(record)} inainte de plata?`
+      `Inregistrezi ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationarea pentru ${stationingRecordLabel(record)}, fara scadere din pret?`
     );
     if (!confirmed) return null;
   }
@@ -2924,7 +2932,7 @@ async function applyStationingDeductionForStay(stay, options = {}) {
     entityLabel: activityStationingLabel(nextRecord),
     amount: entry.amount,
     method: "client-rv-deduction",
-    message: `${entry.nights} ${entry.nights === 1 ? "noapte" : "nopti"} au fost deduse din stationarea ${stationingRecordLabel(nextRecord)} pentru clientul ${stay.guest}.`,
+    message: `${entry.nights} ${entry.nights === 1 ? "noapte" : "nopti"} au fost inregistrate in stationarea ${stationingRecordLabel(nextRecord)} pentru clientul ${stay.guest}, fara scadere din pret.`,
     data: {
       previous: previousRecord,
       current: nextRecord,
@@ -3273,7 +3281,7 @@ async function generateCommittedReceipt(stayKey, method) {
       if (deductionApplied) {
         saveStays();
         const saved = await saveStaysToFiles({ showMessage: true });
-        if (!saved) throw new Error("Deducerea de staționare nu a putut fi salvată înainte de plată");
+        if (!saved) throw new Error("Nopțile de staționare nu au putut fi salvate înainte de plată");
       }
     }
 
@@ -4061,8 +4069,65 @@ function renderAvailableUnitsToday() {
     : `<span class="available-units-empty">Niciuna</span>`;
 }
 
+function normalizeDirectoryClient(client, index) {
+  const normalized = normalizeStay({
+    ...client,
+    key: client.key || `directory-${index}`,
+    id: client.id || client.unitHint || (client.directorySource === "sql" ? "SQL" : "Istoric local"),
+    guest: client.guest || "Client",
+    group: client.group === "camping" ? "camping" : "room",
+    kind: client.kind || (client.group === "camping" ? "Camping" : "Camere"),
+    start: client.start || null,
+    end: client.end || null,
+    price: client.price || 0,
+    balance: client.balance ?? client.price ?? 0
+  }, index);
+  return {
+    ...normalized,
+    directorySource: client.directorySource,
+    directoryReadOnly: true,
+    normalizedName: client.normalizedName || "",
+    originalStayKey: client.originalStayKey || ""
+  };
+}
+
+async function loadClientDirectory() {
+  const requestId = ++clientDirectoryRequestId;
+  if (clientDirectoryStatus) clientDirectoryStatus.textContent = "Se sincronizează SQL + istoric local...";
+  try {
+    const response = await fetch("/api/client-directory", { cache: "no-store" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok === false) throw new Error(result.error || `HTTP ${response.status}`);
+    if (requestId !== clientDirectoryRequestId) return false;
+    clientDirectory = (Array.isArray(result.clients) ? result.clients : []).map(normalizeDirectoryClient);
+    clientDirectoryLoaded = true;
+    reservationPage = 1;
+    markPagesDirty("clients");
+    if (clientDirectoryStatus) {
+      const sqlCount = Number(result.sources?.sql || 0);
+      const localCount = Number(result.sources?.local || 0);
+      clientDirectoryStatus.textContent = result.sqlAvailable
+        ? `${sqlCount} SQL · ${localCount} istoric local`
+        : `SQL indisponibil · ${localCount} istoric local`;
+    }
+    if (activePage === "clients") {
+      renderReservations();
+      refreshIcons(reservationCards);
+      dirtyPages.delete("clients");
+    }
+    return true;
+  } catch {
+    if (requestId !== clientDirectoryRequestId) return false;
+    clientDirectoryLoaded = false;
+    if (clientDirectoryStatus) clientDirectoryStatus.textContent = "Fuziunea SQL nu este disponibilă; sunt afișate datele locale active.";
+    if (activePage === "clients") renderReservations();
+    return false;
+  }
+}
+
 function visibleClientStays() {
-  return stays
+  const clients = clientDirectoryLoaded ? clientDirectory : stays;
+  return clients
     .filter(
       (stay) =>
         stay.guest !== "Disponibil" &&
@@ -4104,45 +4169,82 @@ function renderReservations() {
         const details = stayDetails(stay);
         const paid = isStayFullyPaid(stay);
         const urgency = clientUrgency(stay);
+        const directorySource = stay.directorySource || "";
+        const sourceLabel = directorySource === "sql" ? "SQL" : directorySource === "local-history" ? "Istoric local" : "";
+        const originalStay = directorySource === "local-history"
+          ? stays.find((item) => item.key === stay.originalStayKey)
+          : null;
+        const stationingLinkAvailable = Boolean(
+          directorySource &&
+          stay.group === "camping" &&
+          reservationIsFuture(stay) &&
+          exactAvailableStationingMatches(stay.guest).length === 1
+        );
         const checkoutDate = stayEndDate(stay);
         const remainingDays = checkoutDate ? Math.max(0, daysBetween(today, checkoutDate)) : 0;
         const remainingLabel = remainingDays === 1 ? "zi rămasă" : "zile rămase";
         const timelineLabel = formatDateRangeLabel(stay.start, stay.end) || stay.dates || "-";
-
-        return `
-          <article class="client-card ${urgency.className} ${paid ? "is-paid" : "is-unpaid"}" data-client-key="${escapeHtml(stay.key)}" aria-label="${escapeHtml(stay.guest)}, ${paid ? "achitat" : "neachitat"}">
-            <h3 class="person-name">${stay.guest}</h3>
-            <dl class="client-card-facts">
-              <div>
-                <dt>Cost</dt>
-                <dd>${formatCurrency(stay.price)}</dd>
-              </div>
-              <div>
-                <dt>Timeline</dt>
-                <dd>${timelineLabel}</dd>
-              </div>
-            </dl>
-            <p class="client-card-message">${clientCardMessage(urgency.className)}</p>
+        const actions = originalStay || !directorySource
+          ? `
+              <button class="icon-button compact client-edit-button" type="button" data-edit-client="${escapeHtml(originalStay?.key || stay.key)}" title="Editează clientul" aria-label="Editează clientul ${escapeHtml(stay.guest)}">
+                <i data-lucide="pencil" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button compact client-receipt-button" type="button" data-receipt-client="${escapeHtml(originalStay?.key || stay.key)}" title="Generează bon" aria-label="Generează bon pentru ${escapeHtml(stay.guest)}">
+                <i data-lucide="receipt-text" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button compact client-delete-button" type="button" data-delete-client="${escapeHtml(originalStay?.key || stay.key)}" title="Șterge clientul" aria-label="Șterge clientul ${escapeHtml(stay.guest)}">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
+              </button>
+            `
+          : `
+              <button class="icon-button compact client-edit-button" type="button" data-rebook-client="${escapeHtml(stay.key)}" title="${stationingLinkAvailable ? "Leagă automat staționarea" : "Rezervare nouă pentru acest client"}" aria-label="${stationingLinkAvailable ? "Leagă staționarea pentru" : "Rezervare nouă pentru"} ${escapeHtml(stay.guest)}">
+                <i data-lucide="${stationingLinkAvailable ? "link" : "calendar-plus"}" aria-hidden="true"></i>
+              </button>
+            `;
+        const stateContent = directorySource
+          ? `
+            <div class="client-directory-details">
+              <span>${escapeHtml(stay.phone || "fără telefon")}</span>
+              ${stay.car ? `<span>${escapeHtml(stay.car)}</span>` : ""}
+            </div>
+          `
+          : `
             <div class="client-remaining">
               <span><strong>${remainingDays}</strong> ${remainingLabel}</span>
               <div class="progress-track" aria-label="Progres cazare: ${details.progress}%">
                 <span class="progress-fill" style="--progress: ${details.progress}%"></span>
               </div>
             </div>
+          `;
+        const cardMessage = stationingLinkAvailable
+          ? "Rezervare viitoare · staționare găsită automat."
+          : directorySource === "sql"
+          ? "Rezervare din baza SQL."
+          : directorySource === "local-history"
+            ? "Client păstrat în istoricul local."
+            : clientCardMessage(urgency.className);
+
+        return `
+          <article class="client-card ${directorySource ? `is-directory-client is-source-${directorySource}` : urgency.className} ${paid ? "is-paid" : "is-unpaid"}" data-client-key="${escapeHtml(stay.key)}" aria-label="${escapeHtml(stay.guest)}${sourceLabel ? `, ${sourceLabel}` : `, ${paid ? "achitat" : "neachitat"}`}">
+            <h3 class="person-name">${escapeHtml(stay.guest)}</h3>
+            <dl class="client-card-facts">
+              <div>
+                <dt>Cost</dt>
+                <dd>${formatCurrency(stay.price)}</dd>
+              </div>
+              <div>
+                <dt>${directorySource ? "Perioadă" : "Timeline"}</dt>
+                <dd>${escapeHtml(timelineLabel)}</dd>
+              </div>
+            </dl>
+            <p class="client-card-message">${cardMessage}</p>
+            ${stateContent}
             <div class="client-card-actions">
-              <button class="icon-button compact client-edit-button" type="button" data-edit-client="${stay.key}" title="Editează clientul" aria-label="Editează clientul ${stay.guest}">
-                <i data-lucide="pencil" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button compact client-receipt-button" type="button" data-receipt-client="${stay.key}" title="Generează bon" aria-label="Generează bon pentru ${stay.guest}">
-                <i data-lucide="receipt-text" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button compact client-delete-button" type="button" data-delete-client="${stay.key}" title="Șterge clientul" aria-label="Șterge clientul ${stay.guest}">
-                <i data-lucide="trash-2" aria-hidden="true"></i>
-              </button>
+              ${actions}
             </div>
             <div class="client-unit-status">
-              <span class="client-unit-tag" title="${stay.kind}">${stay.id}</span>
-              ${paid ? '<span class="client-paid-dot" title="Achitat" aria-hidden="true"></span>' : ""}
+              <span class="client-unit-tag" title="${escapeHtml(stay.kind)}">${escapeHtml(sourceLabel || stay.id)}</span>
+              ${paid && !directorySource ? '<span class="client-paid-dot" title="Achitat" aria-hidden="true"></span>' : ""}
             </div>
           </article>
         `;
@@ -4174,13 +4276,14 @@ function jumpToClientCard(stayKey) {
   if (activePage !== "clients") setActivePage("clients");
 
   const visible = visibleClientStays();
-  const clientIndex = visible.findIndex((item) => item.key === stayKey);
+  const clientIndex = visible.findIndex((item) => item.key === stayKey || item.originalStayKey === stayKey);
   if (clientIndex < 0) return false;
   reservationPage = Math.max(1, Math.ceil((clientIndex + 1) / RESERVATION_PAGE_SIZE));
   renderReservations();
   refreshIcons(reservationCards);
 
-  const card = reservationCards.querySelector(`[data-client-key="${timelineBarSelectorValue(stayKey)}"]`);
+  const client = visible[clientIndex];
+  const card = reservationCards.querySelector(`[data-client-key="${timelineBarSelectorValue(client.key)}"]`);
   if (!card) return false;
   reservationCards.querySelectorAll(".client-card.is-new-highlight").forEach((item) => item.classList.remove("is-new-highlight"));
   window.clearTimeout(clientCardHighlightTimer);
@@ -5273,9 +5376,7 @@ function syncStationingTotals() {
   const prepaidNights = Math.max(1, Number(stationingForm.elements.prepaidNights.value || 1));
   const nightlyPrice = normalizeMoneyValue(stationingForm.elements.nightlyPrice.value);
   const existingRecord = editingStationingKey ? stationing.find((item) => item.key === editingStationingKey) : null;
-  const deductedNights = stationingDeductedNights({ prepaidNights, deductions: existingRecord?.deductions || [] });
-  const billableNights = Math.max(0, prepaidNights - deductedNights);
-  const totalPrice = normalizeMoneyValue(billableNights * nightlyPrice);
+  const totalPrice = normalizeMoneyValue(prepaidNights * nightlyPrice);
   const paidAmount = Math.min(totalPrice, normalizeMoneyValue(stationingForm.elements.paidAmount.value));
   const balance = Math.max(0, totalPrice - paidAmount);
   const endDate = stationingEndDate({ startDate, prepaidNights });
@@ -5287,7 +5388,7 @@ function syncStationingTotals() {
   }
   stationingForm.elements.balance.value = balance.toFixed(2);
   stationingForm.elements.endDate.value = formatDateLabel(endDate);
-  const deductedLabel = details.deductedNights > 0 ? ` · ${details.deductedNights} ${details.deductedNights === 1 ? "noapte dedusă" : "nopți deduse"}` : "";
+  const deductedLabel = details.deductedNights > 0 ? ` · ${details.deductedNights} ${details.deductedNights === 1 ? "noapte înregistrată" : "nopți înregistrate"}` : "";
   stationingRangeSummary.textContent = `Final ${formatDateLabel(endDate)} · Total ${formatCurrency(totalPrice)} · Rest ${formatCurrency(balance)}${deductedLabel}`;
 }
 
@@ -5873,6 +5974,13 @@ function openBookingModal(defaults = {}) {
   sourceBookingSearchPending = false;
   showOldSourceBookingWarning();
   window.clearTimeout(sourceBookingSearchTimer);
+  autoLinkStationingForFutureBooking({
+    ...defaults,
+    guest: bookingForm.elements.guest.value,
+    group: currentBookingGroup(),
+    start: bookingForm.elements.arrival.value,
+    end: bookingForm.elements.departure.value
+  });
   syncSourceModeFromKind();
   renderSourceBookings();
   sourceRecordStatus.textContent = "Se încarcă ultimele 300 rezervări.";
@@ -5950,6 +6058,45 @@ function stationingRecordLabel(record) {
   return `${record.owner || "Client"} - ${record.caravan || "rulota"}`;
 }
 
+function reservationIsFuture(reservation = {}) {
+  const start = validDateFromISO(reservation.start || reservation.arrival);
+  return Boolean(start && start >= today);
+}
+
+function exactAvailableStationingMatches(guest) {
+  const normalizedGuest = normalizeSearchText(guest);
+  if (!normalizedGuest) return [];
+  return stationing.filter((record) => {
+    if (normalizeSearchText(record.owner) !== normalizedGuest) return false;
+    return stationingDetails(record).remainingNights > 0;
+  });
+}
+
+function autoLinkStationingForFutureBooking(booking = {}) {
+  if (bookingStationingDeductionDraft || !reservationIsFuture(booking)) return false;
+  if ((booking.group || currentBookingGroup()) !== "camping") return false;
+  const matches = exactAvailableStationingMatches(booking.guest || bookingForm.elements.guest.value);
+  if (matches.length !== 1) return false;
+
+  if (currentBookingMode() !== "rv") {
+    ensureKindOption("rv");
+    bookingForm.elements.kind.value = "rv";
+    bookingUnitId = null;
+    renderUnitSelect();
+    syncBookingPaymentFields();
+  }
+
+  const record = matches[0];
+  bookingStationingDeductionDraft = normalizeStayStationingDeduction({
+    recordKey: record.key,
+    recordLabel: stationingRecordLabel(record),
+    selectedAt: new Date().toISOString(),
+    nights: bookingDeductionNights(),
+    autoLinked: true
+  });
+  return true;
+}
+
 function bookingDeductionNights() {
   return stayNightCount(bookingForm.elements.arrival.value, bookingForm.elements.departure.value);
 }
@@ -5997,11 +6144,12 @@ function renderBookingStationingLink() {
   }
 
   const selectedAlreadyApplied = Boolean(selectedDeduction?.appliedAt);
+  const selectedAutomatically = selectedDeduction?.autoLinked === true;
   bookingStationingLinkStatus.innerHTML = selectedRecord
     ? `
       <div class="stationing-link-selected">
-        <span><strong class="person-name">${escapeHtml(stationingRecordLabel(selectedRecord))}</strong> ${selectedAlreadyApplied ? "are deducerea aplicata" : "selectata pentru deducere"}</span>
-        <span>${selectedDeduction.nights} ${selectedDeduction.nights === 1 ? "noapte" : "nopti"} ${selectedAlreadyApplied ? "au fost scazute din stationare." : "se vor scadea la plata."}</span>
+        <span><strong class="person-name">${escapeHtml(stationingRecordLabel(selectedRecord))}</strong> ${selectedAlreadyApplied ? "are nopțile înregistrate" : selectedAutomatically ? "legata automat dupa numele clientului" : "selectata pentru inregistrare"}</span>
+        <span>${selectedDeduction.nights} ${selectedDeduction.nights === 1 ? "noapte" : "nopti"} ${selectedAlreadyApplied ? "au fost inregistrate in stationare, fara scadere din pret." : selectedAutomatically ? "se vor inregistra automat la salvarea rezervarii, fara scadere din pret." : "se vor inregistra la plata, fara scadere din pret."}</span>
         ${selectedAlreadyApplied ? "" : `<button class="ghost-button compact-text" type="button" data-clear-stationing-deduction>
           <i data-lucide="x" aria-hidden="true"></i>
           <span>Elimina</span>
@@ -6044,7 +6192,7 @@ function selectBookingStationingDeduction(recordKey) {
   if (!record) return;
   const nights = bookingDeductionNights();
   const confirmed = window.confirm(
-    `Folosesti ${stationingRecordLabel(record)} pentru deducere stationare (${nights} ${nights === 1 ? "noapte" : "nopti"}) la plata?`
+    `Folosesti ${stationingRecordLabel(record)} pentru a inregistra ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationare, fara scadere din pret?`
   );
   if (!confirmed) return;
   bookingStationingDeductionDraft = normalizeStayStationingDeduction({
@@ -6639,6 +6787,7 @@ function showOldSourceBookingWarning(booking = null) {
 
 function applySourceBooking(booking) {
   if (!booking) return;
+  bookingStationingDeductionDraft = null;
 
   const hintedUnit = booking.unitHint ? unitById(booking.unitHint) : null;
   const bookingKind = hintedUnit ? unitTypeOptionForUnit(hintedUnit) : normalizeTimelineMode(sourceRecordsMode || booking.kind || booking.group);
@@ -6668,6 +6817,7 @@ function applySourceBooking(booking) {
   setMoneyField("price", booking.price);
   setMoneyField("deposit", 0);
   setMoneyField("balance", booking.price);
+  autoLinkStationingForFutureBooking(booking);
   renderBookingFacilities();
   renderBookingRangeCalendar();
   renderBookingStationingLink();
@@ -7519,6 +7669,7 @@ window.addEventListener("resize", () => {
   updateTimelineDayWidth.resizeTimer = window.setTimeout(() => setVisibleMonth(visibleMonth), 120);
 });
 window.setInterval(refreshTodayIfNeeded, 60000);
+window.setInterval(() => void loadClientDirectory(), 5 * 60 * 1000);
 
 bookingForm.elements.kind.addEventListener("change", () => {
   renderUnitSelect();
@@ -7614,6 +7765,31 @@ jumpToFormButton.addEventListener("click", () => {
   openBookingModal();
 });
 
+function openDirectoryClientBooking(clientKey) {
+  const client = clientDirectory.find((item) => item.key === clientKey);
+  if (!client) return false;
+  const futureReservation = reservationIsFuture(client);
+  const hasExactStationing = client.group === "camping" && exactAvailableStationingMatches(client.guest).length === 1;
+  const mode = client.group === "camping" ? (hasExactStationing ? "rv" : campingModeForUnit(client)) : "room";
+  openBookingModal({
+    guest: client.guest,
+    phone: client.phone,
+    car: client.car,
+    adults: client.adults,
+    children: client.children,
+    kind: mode,
+    group: client.group,
+    arrival: futureReservation ? client.start : undefined,
+    departure: futureReservation ? client.end : undefined,
+    price: futureReservation ? client.price : undefined,
+    balance: futureReservation ? client.balance : undefined,
+    basePrice: futureReservation ? client.basePrice : undefined,
+    facilities: futureReservation ? client.facilities : undefined,
+    note: client.directorySource === "sql" ? "Client selectat din baza SQL." : "Client selectat din istoricul local."
+  });
+  return true;
+}
+
 reservationCards.addEventListener("click", (event) => {
   const barItemButton = event.target.closest("[data-client-bar-item]");
   if (barItemButton) {
@@ -7624,6 +7800,12 @@ reservationCards.addEventListener("click", (event) => {
       Number(barItemButton.dataset.delta || 0),
       { remove: barItemButton.dataset.remove === "true" }
     );
+    return;
+  }
+
+  const rebookButton = event.target.closest("[data-rebook-client]");
+  if (rebookButton) {
+    openDirectoryClientBooking(rebookButton.dataset.rebookClient);
     return;
   }
 
@@ -8003,7 +8185,7 @@ timelineContextMenu.addEventListener("click", (event) => {
   }
 });
 
-bookingForm.addEventListener("submit", (event) => {
+bookingForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const pageAtSubmit = activePage;
   const shouldOpenLinkedDraftAfterSave = openLinkedDraftAfterSave;
@@ -8089,6 +8271,9 @@ bookingForm.addEventListener("submit", (event) => {
     }
   }
 
+  const automaticDeduction = nextStay.stationingDeduction?.autoLinked && reservationIsFuture(nextStay)
+    ? await applyStationingDeductionForStay(nextStay, { ask: false })
+    : null;
   saveStays();
   const linkedAfterSave = linkedReservationsForPerson(nextStay.personId);
   const createdForSameClient = !previousStay && linkedAfterSave.length >= 2;
@@ -8141,22 +8326,26 @@ bookingForm.addEventListener("submit", (event) => {
   applySelectedUnitPricing();
   editingStayKey = null;
   bookingUnitId = null;
+  const savedToast = existingStay ? `Client actualizat: ${nextStay.guest}` : `Rezervarea ${id} a fost adăugată`;
+  const deductionToast = automaticDeduction
+    ? `${savedToast} · ${automaticDeduction.deduction.appliedNights} ${automaticDeduction.deduction.appliedNights === 1 ? "noapte înregistrată" : "nopți înregistrate"} în staționare`
+    : savedToast;
 
   if (shouldOpenLinkedDraftAfterSave) {
     renderAll();
     setVisibleMonth(arrival);
     openBookingModal(linkedReservationDraftDefaultsFromStay(nextStay));
-    showToast(`Rezervarea ${id} a fost salvatÄƒ. Alege urmÄƒtoarea unitate pentru acelaÈ™i client.`);
+    showToast(`${deductionToast}. Alege următoarea unitate pentru același client.`);
   } else if (linkedAfterSave.length >= 2) {
     renderAll();
     setVisibleMonth(arrival);
     openEditClient(nextStay.key);
-    showToast(existingStay ? `Client actualizat: ${nextStay.guest}` : `Rezervarea ${id} a fost adăugată`);
+    showToast(deductionToast);
   } else {
     closeBookingModal();
     renderAll();
     setVisibleMonth(arrival);
-    showToast(existingStay ? `Client actualizat: ${nextStay.guest}` : `Rezervarea ${id} a fost adăugată`);
+    showToast(deductionToast);
     if (!existingStay) {
       window.requestAnimationFrame(() => {
         if (pageAtSubmit === "clients") jumpToClientCard(nextStay.key);
@@ -8177,6 +8366,7 @@ async function initializeApp() {
   rebuildStaysByUnitIndex();
   timelineShell.removeAttribute("aria-busy");
   setVisibleMonth(today, { save: false });
+  void loadClientDirectory();
   syncLocalActivityLog();
   warmHiddenPages();
   loadAppVersion();

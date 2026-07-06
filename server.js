@@ -6,14 +6,23 @@ const path = require("path");
 const { execFile } = require("child_process");
 const { DatabaseSync } = require("node:sqlite");
 const mysql = require("mysql2/promise");
+const { ClientHistoryStore, mergeClientDirectory, normalizeClientName } = require("./client-directory");
 
 const rootDir = path.resolve(process.env.MARINA_APP_ROOT || __dirname);
 const dataDir = path.resolve(process.env.MARINA_DATA_DIR || path.join(rootDir, "data"));
 const runtimeDir = path.resolve(process.env.MARINA_RUNTIME_DIR || rootDir);
 const databasePath = path.join(dataDir, "marina-park.sqlite");
+const clientHistoryDatabasePath = path.resolve(
+  process.env.MARINA_CLIENT_HISTORY_DATABASE || path.join(dataDir, "client-history.sqlite")
+);
+const sourceBookingsFixturePath = process.env.MARINA_SOURCE_BOOKINGS_FIXTURE
+  ? path.resolve(process.env.MARINA_SOURCE_BOOKINGS_FIXTURE)
+  : "";
 const backupDir = path.join(dataDir, "backups");
 const dailyBackupPath = path.join(backupDir, "marina-park-daily.sqlite");
 const weeklyBackupPath = path.join(backupDir, "marina-park-weekly.sqlite");
+const clientHistoryDailyBackupPath = path.join(backupDir, "client-history-daily.sqlite");
+const clientHistoryWeeklyBackupPath = path.join(backupDir, "client-history-weekly.sqlite");
 const backupMetaPath = path.join(backupDir, "backup-meta.json");
 const activityLogJsonPath = path.join(dataDir, "activity-log.json");
 const activityLogJsonlPath = path.join(dataDir, "activity-log.jsonl");
@@ -40,6 +49,10 @@ const contentTypes = {
 fsSync.mkdirSync(dataDir, { recursive: true });
 fsSync.mkdirSync(backupDir, { recursive: true });
 const db = new DatabaseSync(databasePath);
+if (clientHistoryDatabasePath === databasePath) {
+  throw new Error("Baza istoricului de clienți trebuie să fie un fișier SQLite separat.");
+}
+const clientHistoryStore = new ClientHistoryStore(clientHistoryDatabasePath);
 db.exec(`
   PRAGMA journal_mode = WAL;
   CREATE TABLE IF NOT EXISTS reservations (
@@ -577,6 +590,12 @@ async function copyCurrentDatabase(targetPath) {
   await fs.copyFile(databasePath, targetPath);
 }
 
+async function copyClientHistoryDatabase(targetPath) {
+  await fs.mkdir(backupDir, { recursive: true });
+  clientHistoryStore.checkpoint();
+  await fs.copyFile(clientHistoryDatabasePath, targetPath);
+}
+
 async function refreshDatabaseBackups(options = {}) {
   const now = new Date();
   const today = localDateText(now);
@@ -591,16 +610,20 @@ async function refreshDatabaseBackups(options = {}) {
 
   if (shouldWriteDaily) {
     await copyCurrentDatabase(dailyBackupPath);
+    await copyClientHistoryDatabase(clientHistoryDailyBackupPath);
     nextMeta.dailyDate = today;
     nextMeta.dailySavedAt = now.toISOString();
     nextMeta.dailyFile = path.relative(dataDir, dailyBackupPath);
+    nextMeta.clientHistoryDailyFile = path.relative(dataDir, clientHistoryDailyBackupPath);
   }
 
   if (shouldWriteWeekly) {
     await copyCurrentDatabase(weeklyBackupPath);
+    await copyClientHistoryDatabase(clientHistoryWeeklyBackupPath);
     nextMeta.weeklyWeek = week;
     nextMeta.weeklySavedAt = now.toISOString();
     nextMeta.weeklyFile = path.relative(dataDir, weeklyBackupPath);
+    nextMeta.clientHistoryWeeklyFile = path.relative(dataDir, clientHistoryWeeklyBackupPath);
   }
 
   if (shouldWriteDaily || shouldWriteWeekly) {
@@ -1353,9 +1376,7 @@ function normalizeStationingPaymentRecord(record) {
   const prepaidNights = Math.max(1, Math.min(1095, Math.round(Number(record.prepaidNights || 1))));
   const nightlyPrice = Math.max(0, Math.round(receiptNumber(record.nightlyPrice) * 100) / 100);
   const deductions = Array.isArray(record.deductions) ? record.deductions : [];
-  const deductedNights = Math.min(prepaidNights, deductions.reduce((sum, item) => sum + Math.max(0, Math.round(Number(item.nights || 0))), 0));
-  const billableNights = Math.max(0, prepaidNights - deductedNights);
-  const totalPrice = Math.round((deductions.length ? nightlyPrice * billableNights : receiptNumber(record.totalPrice) || nightlyPrice * prepaidNights) * 100) / 100;
+  const totalPrice = Math.round((nightlyPrice > 0 ? nightlyPrice * prepaidNights : receiptNumber(record.totalPrice)) * 100) / 100;
   const paidAmount = Math.min(totalPrice, Math.max(0, Math.round(receiptNumber(record.paidAmount) * 100) / 100));
   return { ...record, prepaidNights, nightlyPrice, totalPrice, paidAmount, balance: Math.max(0, Math.round((totalPrice - paidAmount) * 100) / 100), deductions };
 }
@@ -1770,9 +1791,31 @@ const bookingTypeMap = {
   27: { kind: "Bungalou", unitHint: "bungalow 21" }
 };
 
-async function fetchSourceBookings(mode, query = "") {
+async function sourceBookingFixture(mode) {
+  if (!sourceBookingsFixturePath) return null;
+  const fixture = await readJson(sourceBookingsFixturePath, {});
+  const bookings = fixture?.[mode];
+  if (!Array.isArray(bookings)) throw new Error(`Fixture SQL invalid pentru '${mode}'`);
+  return bookings;
+}
+
+function filteredSourceBookings(bookings, query, limit) {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return [...bookings].sort(sortSourceBookings).slice(0, limit);
+  return bookings
+    .map((booking) => ({ booking, score: fuzzyMatchScore(query, booking.guest) }))
+    .filter((match) => Number.isFinite(match.score))
+    .sort((first, second) => first.score - second.score || sortSourceBookings(first.booking, second.booking))
+    .slice(0, limit)
+    .map((match) => match.booking);
+}
+
+async function fetchSourceBookings(mode, query = "", options = {}) {
   const isCamping = mode === "camping";
-  const searchAllRows = Boolean(normalizeSearchText(query));
+  const readAllRows = Boolean(normalizeSearchText(query)) || options.all === true;
+  const limit = Math.max(1, Math.min(50000, Number(options.limit || 300)));
+  const fixtureBookings = await sourceBookingFixture(isCamping ? "camping" : "room");
+  if (fixtureBookings) return filteredSourceBookings(fixtureBookings, query, limit);
   const connection = await mysql.createConnection({
     host: mysqlHost,
     user: mysqlUser,
@@ -1784,8 +1827,8 @@ async function fetchSourceBookings(mode, query = "") {
   try {
     const [rows] = await connection.execute(
       isCamping
-        ? `SELECT form, modification_date FROM wp_booking ORDER BY modification_date DESC${searchAllRows ? "" : " LIMIT 5000"}`
-        : `SELECT remark, form, cost, booking_type, modification_date FROM wp_booking ORDER BY modification_date DESC${searchAllRows ? "" : " LIMIT 5000"}`
+        ? `SELECT form, modification_date FROM wp_booking ORDER BY modification_date DESC${readAllRows ? "" : " LIMIT 5000"}`
+        : `SELECT remark, form, cost, booking_type, modification_date FROM wp_booking ORDER BY modification_date DESC${readAllRows ? "" : " LIMIT 5000"}`
     );
 
     const bookings = rows
@@ -1838,17 +1881,44 @@ async function fetchSourceBookings(mode, query = "") {
       })
       .filter(Boolean);
 
-    if (!normalizeSearchText(query)) return bookings.sort(sortSourceBookings).slice(0, 300);
-
-    return bookings
-      .map((booking) => ({ booking, score: fuzzyMatchScore(query, booking.guest) }))
-      .filter((match) => Number.isFinite(match.score))
-      .sort((first, second) => first.score - second.score || sortSourceBookings(first.booking, second.booking))
-      .slice(0, 300)
-      .map((match) => match.booking);
+    return filteredSourceBookings(bookings, query, limit);
   } finally {
     await connection.end();
   }
+}
+
+async function fetchClientDirectory() {
+  const sources = await Promise.allSettled([
+    fetchSourceBookings("room", "", { all: true, limit: 50000 }),
+    fetchSourceBookings("camping", "", { all: true, limit: 50000 })
+  ]);
+  const sqlBookings = sources.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  const warnings = sources
+    .filter((result) => result.status === "rejected")
+    .map((result) => String(result.reason?.message || result.reason || "SQL indisponibil"));
+  if (!warnings.length) {
+    const sqlNames = new Set(sqlBookings.map((booking) => normalizeClientName(booking.guest)).filter(Boolean));
+    const unmatchedLocalReservations = reservationRows().filter((stay) => {
+      const normalizedName = normalizeClientName(stay.guest);
+      return normalizedName && !sqlNames.has(normalizedName);
+    });
+    const historyChanges = clientHistoryStore.syncReservations(unmatchedLocalReservations);
+    if (historyChanges > 0) await enqueueDatabaseBackup({ afterMutation: true });
+  }
+  const localClients = warnings.length
+    ? reservationRows().map((stay) => ({ normalizedName: normalizeClientName(stay.guest), ...stay }))
+    : clientHistoryStore.clients();
+  const clients = mergeClientDirectory(sqlBookings, localClients);
+  return {
+    ok: true,
+    clients,
+    sqlAvailable: warnings.length === 0,
+    warnings,
+    sources: {
+      sql: sqlBookings.length,
+      local: clients.filter((client) => client.directorySource === "local-history").length
+    }
+  };
 }
 
 function pickReceiptDirectory() {
@@ -2021,6 +2091,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.url.startsWith("/api/client-directory") && request.method === "GET") {
+      send(response, 200, JSON.stringify(await fetchClientDirectory()));
+      return;
+    }
+
     if (request.url.startsWith("/api/pick-receipt-directory") && request.method === "POST") {
       send(response, 200, JSON.stringify(await pickReceiptDirectory()));
       return;
@@ -2079,6 +2154,7 @@ async function startServer(options = {}) {
   console.log(`Marina Park app: ${url}`);
   for (const logUrl of logUrls) console.log(`Jurnal în rețea: ${logUrl}`);
   console.log(`Database: ${databasePath}`);
+  console.log(`Client history: ${clientHistoryDatabasePath}`);
   retryPendingPaymentOutbox().catch((error) => console.error("Pending receipt retry failed:", error.message));
   enqueueDatabaseBackup({ reason: "startup" });
   backupInterval = setInterval(() => enqueueDatabaseBackup({ reason: "interval" }), 60 * 60 * 1000);

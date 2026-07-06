@@ -11,6 +11,7 @@ directories:
 files:
   - electron-main.js
   - persistent-files.js
+  - client-directory.js
   - server.js
   - app.js
   - index.html

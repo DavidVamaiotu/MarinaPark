@@ -42,6 +42,27 @@ Instalarea Electron separă aplicația de fișierele care trebuie păstrate:
 - `%APPDATA%\Marina Park\runtime` — fișiere generate în timpul rulării;
 - `%APPDATA%\Marina Park\custom` — fișiere adăugate sau modificate de utilizator.
 
+## Fuziunea registrului de clienți
+
+Pagina Clienți combină rezervările citite din bazele SQL Marina Park cu
+istoricul local. Aplicația păstrează istoricul într-un fișier SQLite separat:
+
+- `%APPDATA%\Marina Park\data\client-history.sqlite`
+
+La sincronizare, numele sunt comparate fără diferențe de majuscule, diacritice,
+semne sau spații multiple. Rezervările SQL au prioritate. Un client local este
+adăugat în istoricul separat și afișat alături de SQL numai dacă numele lui nu
+există în bazele SQL. Detaliile locale rămân în fișier chiar dacă rezervarea
+activă este eliminată ulterior. Dacă SQL nu este disponibil, istoricul nu este
+rescris pe baza unor date incomplete.
+
+Pentru o rezervare viitoare de camping, butonul de legare caută o staționare
+cu același nume normalizat și cu nopți rămase. Dacă există exact una, formularul
+este deschis automat pe Rulote, iar nopțile rezervării sunt înregistrate o
+singură dată în contorul de staționare când rezervarea este salvată, fără să
+scadă din preț sau din restul de plată. Dacă există mai multe potriviri,
+alegerea rămâne manuală pentru a evita legarea staționării greșite.
+
 Actualizatorul înlocuiește numai fișierele administrate ale aplicației. Nu șterge datele de mai sus, nici la actualizare, nici la dezinstalare.
 
 Fișierele puse de dezvoltator în `custom-defaults/` sunt copiate în directorul persistent `custom` la pornire. Copierea este de tip **missing-only**: un fișier nou este adăugat, dar un fișier existent cu același nume nu este înlocuit.

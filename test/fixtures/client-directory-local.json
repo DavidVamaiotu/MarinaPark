@@ -1,0 +1,62 @@
+{
+  "stays": [
+    {
+      "key": "local-alice",
+      "id": "D-1",
+      "guest": "ÁLICE POPESCU",
+      "phone": "0701",
+      "group": "room",
+      "kind": "Cameră",
+      "start": "2026-05-01",
+      "end": "2026-05-03"
+    },
+    {
+      "key": "local-only",
+      "id": "D-2",
+      "guest": "Local Only",
+      "phone": "0733",
+      "car": "B-01-LOCAL",
+      "group": "room",
+      "kind": "Cameră",
+      "start": "2025-05-01",
+      "end": "2025-05-03"
+    }
+  ],
+  "units": [
+    {
+      "id": "D-1",
+      "group": "room",
+      "kind": "Cameră"
+    },
+    {
+      "id": "D-2",
+      "group": "room",
+      "kind": "Cameră"
+    },
+    {
+      "id": "RV-1",
+      "group": "camping",
+      "kind": "Campare rulotă"
+    }
+  ],
+  "stationing": [
+    {
+      "key": "station-camp-guest",
+      "owner": "Camp Guest",
+      "phone": "0722",
+      "caravan": "Rulotă test",
+      "startDate": "2026-07-01",
+      "prepaidNights": 10,
+      "nightlyPrice": 50,
+      "totalPrice": 500,
+      "paidAmount": 0,
+      "balance": 500,
+      "deductions": []
+    }
+  ],
+  "barArticles": [],
+  "config": {
+    "savedAt": "browser-fixture",
+    "roomUnitCatalogSeeded": true
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "room": [
+    {
+      "guest": "Alice Popescu",
+      "phone": "0700",
+      "group": "room",
+      "kind": "Camere",
+      "source": "camere",
+      "start": "2026-08-01",
+      "end": "2026-08-03",
+      "price": 500
+    },
+    {
+      "guest": "SQL Only",
+      "phone": "0711",
+      "group": "room",
+      "kind": "Camere",
+      "source": "camere",
+      "start": "2026-08-04",
+      "end": "2026-08-06",
+      "price": 600
+    }
+  ],
+  "camping": [
+    {
+      "guest": "Camp Guest",
+      "phone": "0722",
+      "group": "camping",
+      "kind": "Campare cort",
+      "source": "camping",
+      "start": "2026-08-07",
+      "end": "2026-08-09",
+      "price": 200
+    }
+  ]
+}
