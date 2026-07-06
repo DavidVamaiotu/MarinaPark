@@ -126,4 +126,17 @@ test("client directory fuses SQL bookings with persistent unmatched local client
   assert.equal(afterClear.body.sources.local, 2);
   assert.ok(afterClear.body.clients.some((client) => client.normalizedName === "local only"));
   assert.ok(afterClear.body.clients.some((client) => client.normalizedName === "camp local"));
+
+  const localSourceSearch = await request(server.url, "/api/source-bookings?mode=room&query=Local%20Only");
+  assert.equal(localSourceSearch.status, 200);
+  const localSourceClient = localSourceSearch.body.bookings.find((booking) => booking.guest === "Local Only");
+  assert.equal(localSourceClient.directorySource, "local-history");
+  assert.equal(localSourceClient.detailsOnly, true);
+  assert.equal(localSourceClient.phone, "0733");
+  assert.equal(localSourceClient.car, "B-01-OLD");
+  assert.equal(localSourceClient.price, 0);
+
+  const sqlSourceSearch = await request(server.url, "/api/source-bookings?mode=room&query=Alice");
+  assert.equal(sqlSourceSearch.status, 200);
+  assert.ok(sqlSourceSearch.body.bookings.some((booking) => booking.normalizedName === "alice popescu" && booking.directorySource === "sql"));
 });

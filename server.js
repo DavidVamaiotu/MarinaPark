@@ -53,6 +53,8 @@ if (clientHistoryDatabasePath === databasePath) {
   throw new Error("Baza istoricului de clienți trebuie să fie un fișier SQLite separat.");
 }
 const clientHistoryStore = new ClientHistoryStore(clientHistoryDatabasePath);
+const clientDirectoryCacheMs = 60 * 1000;
+let clientDirectoryCache = null;
 db.exec(`
   PRAGMA journal_mode = WAL;
   CREATE TABLE IF NOT EXISTS reservations (
@@ -459,6 +461,7 @@ async function writeData(payload) {
     savedAt: config.savedAt || new Date().toISOString()
   };
   replaceDatabaseData(stays, nextConfig, units, stationing, barArticles);
+  clientDirectoryCache = null;
   await enqueueDatabaseBackup({ afterMutation: true });
   return { savedAt: nextConfig.savedAt };
 }
@@ -1887,7 +1890,12 @@ async function fetchSourceBookings(mode, query = "", options = {}) {
   }
 }
 
-async function fetchClientDirectory() {
+async function fetchClientDirectory(options = {}) {
+  const now = Date.now();
+  if (!options.force && clientDirectoryCache && clientDirectoryCache.expiresAt > now) {
+    return clientDirectoryCache.result;
+  }
+
   const sources = await Promise.allSettled([
     fetchSourceBookings("room", "", { all: true, limit: 50000 }),
     fetchSourceBookings("camping", "", { all: true, limit: 50000 })
@@ -1909,7 +1917,7 @@ async function fetchClientDirectory() {
     ? reservationRows().map((stay) => ({ normalizedName: normalizeClientName(stay.guest), ...stay }))
     : clientHistoryStore.clients();
   const clients = mergeClientDirectory(sqlBookings, localClients);
-  return {
+  const result = {
     ok: true,
     clients,
     sqlAvailable: warnings.length === 0,
@@ -1917,6 +1925,56 @@ async function fetchClientDirectory() {
     sources: {
       sql: sqlBookings.length,
       local: clients.filter((client) => client.directorySource === "local-history").length
+    }
+  };
+  clientDirectoryCache = { expiresAt: now + clientDirectoryCacheMs, result };
+  return result;
+}
+
+function sourceBookingFromDirectoryClient(client = {}) {
+  const localHistory = client.directorySource === "local-history";
+  const start = client.start || client.lastStart || client.last_start || "";
+  const end = client.end || client.lastEnd || client.last_end || "";
+  const price = localHistory ? 0 : Number(client.price || 0);
+  const adults = Math.max(0, Number(client.adults || 0));
+  const children = Math.max(0, Number(client.children || 0));
+  return {
+    ...client,
+    source: localHistory ? "istoric local" : client.source || (client.group === "camping" ? "camping" : "camere"),
+    guest: client.guest || "",
+    phone: client.phone || "",
+    car: client.car || "",
+    adults,
+    children,
+    party: Math.max(0, Number(client.party || adults + children || 0)),
+    start,
+    end,
+    basePrice: price,
+    price,
+    deposit: "0.00",
+    balance: price,
+    group: client.group === "camping" ? "camping" : "room",
+    kind: client.kind || (client.group === "camping" ? "Camping" : "Camere"),
+    unitHint: localHistory ? "" : client.unitHint || "",
+    note: localHistory ? "" : client.note || "",
+    modifiedAt: client.modifiedAt || client.historyUpdatedAt || client.updatedAt || "",
+    detailsOnly: localHistory
+  };
+}
+
+async function fetchFusedSourceBookings(mode, query = "") {
+  const directory = await fetchClientDirectory();
+  const bookings = directory.clients
+    .map(sourceBookingFromDirectoryClient)
+    .filter((booking) => booking.group === mode);
+  return {
+    ok: true,
+    bookings: filteredSourceBookings(bookings, query, 300),
+    sqlAvailable: directory.sqlAvailable,
+    warnings: directory.warnings,
+    sources: {
+      sql: bookings.filter((booking) => booking.directorySource === "sql").length,
+      local: bookings.filter((booking) => booking.directorySource === "local-history").length
     }
   };
 }
@@ -2087,7 +2145,7 @@ const server = http.createServer(async (request, response) => {
       const url = new URL(request.url, `http://${request.headers.host}`);
       const mode = url.searchParams.get("mode") === "camping" ? "camping" : "room";
       const query = String(url.searchParams.get("query") || "").trim().slice(0, 120);
-      send(response, 200, JSON.stringify({ ok: true, bookings: await fetchSourceBookings(mode, query) }));
+      send(response, 200, JSON.stringify(await fetchFusedSourceBookings(mode, query)));
       return;
     }
 

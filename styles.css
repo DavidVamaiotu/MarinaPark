@@ -8020,16 +8020,6 @@ body *::after {
   box-shadow: 0 0 0 4px rgba(47, 158, 83, 0.18);
 }
 
-.client-directory-status {
-  margin: 5px 0 0;
-  color: #667085;
-  font-size: 12px;
-}
-
-#reservationCards [data-rebook-client] {
-  grid-column: 1 / -1;
-}
-
 /* Show the complete add-client workspace 20% larger without exceeding the window. */
 #guest-form-section {
   --add-client-scale: 1.2;

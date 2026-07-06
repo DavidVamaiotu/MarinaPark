@@ -234,10 +234,6 @@ const TIMELINE_LANE_HEIGHT = 34;
 const TIMELINE_ROW_GAP = 1;
 const TIMELINE_ROW_OVERSCAN = 10;
 let reservationPage = 1;
-let clientDirectory = [];
-let clientDirectoryLoaded = false;
-let clientDirectoryRequestId = 0;
-let clientDirectoryNeedsRefresh = false;
 let staysByUnitIndex = new Map();
 let timelineLayoutCache = new Map();
 let reservationAutoLoadObserver = null;
@@ -284,7 +280,6 @@ const prevMonthButton = document.querySelector("#prevMonth");
 const nextMonthButton = document.querySelector("#nextMonth");
 const currentMonthButton = document.querySelector("#currentMonth");
 const reservationCards = document.querySelector("#reservationCards");
-const clientDirectoryStatus = document.querySelector("#clientDirectoryStatus");
 const availableUnitsToday = document.querySelector("#availableUnitsToday");
 const availableUnitsTodayLabel = document.querySelector("#availableUnitsTodayLabel");
 const availableUnitsTodayList = document.querySelector("#availableUnitsTodayList");
@@ -2110,7 +2105,6 @@ function ensureStayKeys() {
 
 function saveStays() {
   markPagesDirty();
-  clientDirectoryNeedsRefresh = true;
   ensureStayKeys();
   try {
     localStorage.setItem(staysStorageKey, JSON.stringify(stays));
@@ -2153,10 +2147,6 @@ async function saveStaysToFiles(options = {}) {
       const result = await response.json().catch(() => ({}));
       if (!response.ok || result.ok === false) throw new Error(result.error || `HTTP ${response.status}`);
       lastDatabaseSavedAt = result.savedAt || config.savedAt;
-      if (clientDirectoryNeedsRefresh) {
-        clientDirectoryNeedsRefresh = false;
-        void loadClientDirectory();
-      }
       if (options.showMessage) {
         showToast("Baza de date locală a fost actualizată");
       }
@@ -4069,65 +4059,8 @@ function renderAvailableUnitsToday() {
     : `<span class="available-units-empty">Niciuna</span>`;
 }
 
-function normalizeDirectoryClient(client, index) {
-  const normalized = normalizeStay({
-    ...client,
-    key: client.key || `directory-${index}`,
-    id: client.id || client.unitHint || "-",
-    guest: client.guest || "Client",
-    group: client.group === "camping" ? "camping" : "room",
-    kind: client.kind || (client.group === "camping" ? "Camping" : "Camere"),
-    start: client.start || null,
-    end: client.end || null,
-    price: client.price || 0,
-    balance: client.balance ?? client.price ?? 0
-  }, index);
-  return {
-    ...normalized,
-    directorySource: client.directorySource,
-    directoryReadOnly: true,
-    normalizedName: client.normalizedName || "",
-    originalStayKey: client.originalStayKey || ""
-  };
-}
-
-async function loadClientDirectory() {
-  const requestId = ++clientDirectoryRequestId;
-  if (clientDirectoryStatus) clientDirectoryStatus.textContent = "Se sincronizează SQL + istoric local...";
-  try {
-    const response = await fetch("/api/client-directory", { cache: "no-store" });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || result.ok === false) throw new Error(result.error || `HTTP ${response.status}`);
-    if (requestId !== clientDirectoryRequestId) return false;
-    clientDirectory = (Array.isArray(result.clients) ? result.clients : []).map(normalizeDirectoryClient);
-    clientDirectoryLoaded = true;
-    reservationPage = 1;
-    markPagesDirty("clients");
-    if (clientDirectoryStatus) {
-      const sqlCount = Number(result.sources?.sql || 0);
-      const localCount = Number(result.sources?.local || 0);
-      clientDirectoryStatus.textContent = result.sqlAvailable
-        ? `${sqlCount} SQL · ${localCount} istoric local`
-        : `SQL indisponibil · ${localCount} istoric local`;
-    }
-    if (activePage === "clients") {
-      renderReservations();
-      refreshIcons(reservationCards);
-      dirtyPages.delete("clients");
-    }
-    return true;
-  } catch {
-    if (requestId !== clientDirectoryRequestId) return false;
-    clientDirectoryLoaded = false;
-    if (clientDirectoryStatus) clientDirectoryStatus.textContent = "Fuziunea SQL nu este disponibilă; sunt afișate datele locale active.";
-    if (activePage === "clients") renderReservations();
-    return false;
-  }
-}
-
 function visibleClientStays() {
-  const clients = clientDirectoryLoaded ? clientDirectory : stays;
-  return clients
+  return stays
     .filter(
       (stay) =>
         stay.guest !== "Disponibil" &&
@@ -4169,38 +4102,10 @@ function renderReservations() {
         const details = stayDetails(stay);
         const paid = isStayFullyPaid(stay);
         const urgency = clientUrgency(stay);
-        const directorySource = stay.directorySource || "";
-        const originalStay = directorySource === "local-history"
-          ? stays.find((item) => item.key === stay.originalStayKey)
-          : null;
-        const stationingLinkAvailable = Boolean(
-          directorySource &&
-          stay.group === "camping" &&
-          reservationIsFuture(stay) &&
-          exactAvailableStationingMatches(stay.guest).length === 1
-        );
         const checkoutDate = stayEndDate(stay);
         const remainingDays = checkoutDate ? Math.max(0, daysBetween(today, checkoutDate)) : 0;
         const remainingLabel = remainingDays === 1 ? "zi rămasă" : "zile rămase";
         const timelineLabel = formatDateRangeLabel(stay.start, stay.end) || stay.dates || "-";
-        const localKey = escapeHtml(originalStay?.key || stay.key);
-        const actions = directorySource && !originalStay
-          ? `
-              <button class="icon-button compact client-edit-button" type="button" data-rebook-client="${escapeHtml(stay.key)}" title="${stationingLinkAvailable ? "Leagă staționarea în formular" : "Rezervare nouă pentru acest client"}" aria-label="${stationingLinkAvailable ? "Leagă staționarea în formular pentru" : "Rezervare nouă pentru"} ${escapeHtml(stay.guest)}">
-                <i data-lucide="calendar-plus" aria-hidden="true"></i>
-              </button>
-            `
-          : `
-              <button class="icon-button compact client-edit-button" type="button" data-edit-client="${localKey}" title="Editează clientul" aria-label="Editează clientul ${escapeHtml(stay.guest)}">
-                <i data-lucide="pencil" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button compact client-receipt-button" type="button" data-receipt-client="${localKey}" title="Generează bon" aria-label="Generează bon pentru ${escapeHtml(stay.guest)}">
-                <i data-lucide="receipt-text" aria-hidden="true"></i>
-              </button>
-              <button class="icon-button compact client-delete-button" type="button" data-delete-client="${localKey}" title="Șterge clientul" aria-label="Șterge clientul ${escapeHtml(stay.guest)}">
-                <i data-lucide="trash-2" aria-hidden="true"></i>
-              </button>
-            `;
 
         return `
           <article class="client-card ${urgency.className} ${paid ? "is-paid" : "is-unpaid"}" data-client-key="${escapeHtml(stay.key)}" aria-label="${escapeHtml(stay.guest)}, ${paid ? "achitat" : "neachitat"}">
@@ -4223,7 +4128,15 @@ function renderReservations() {
               </div>
             </div>
             <div class="client-card-actions">
-              ${actions}
+              <button class="icon-button compact client-edit-button" type="button" data-edit-client="${stay.key}" title="Editează clientul" aria-label="Editează clientul ${stay.guest}">
+                <i data-lucide="pencil" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button compact client-receipt-button" type="button" data-receipt-client="${stay.key}" title="Generează bon" aria-label="Generează bon pentru ${stay.guest}">
+                <i data-lucide="receipt-text" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button compact client-delete-button" type="button" data-delete-client="${stay.key}" title="Șterge clientul" aria-label="Șterge clientul ${stay.guest}">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
+              </button>
             </div>
             <div class="client-unit-status">
               <span class="client-unit-tag" title="${stay.kind}">${stay.id}</span>
@@ -4259,7 +4172,7 @@ function jumpToClientCard(stayKey) {
   if (activePage !== "clients") setActivePage("clients");
 
   const visible = visibleClientStays();
-  const clientIndex = visible.findIndex((item) => item.key === stayKey || item.originalStayKey === stayKey);
+  const clientIndex = visible.findIndex((item) => item.key === stayKey);
   if (clientIndex < 0) return false;
   reservationPage = Math.max(1, Math.ceil((clientIndex + 1) / RESERVATION_PAGE_SIZE));
   renderReservations();
@@ -6659,8 +6572,10 @@ function renderSourceBookings() {
   const otherBookings = orderedBookings.filter((booking) => booking.start !== todayText);
   const rowForBooking = (booking, index) => {
     const dateLabel = formatDateRangeLabel(booking.start, booking.end);
-    const unitLabel = [booking.kind, booking.unitHint].filter(Boolean).join(" · ");
-    const partyLabel = `${Number(booking.party || 0)} pers.`;
+    const sourceLabel = booking.directorySource === "local-history" ? "Istoric local" : "";
+    const unitLabel = [booking.kind, booking.unitHint, sourceLabel].filter(Boolean).join(" · ");
+    const partyLabel = booking.detailsOnly ? "date client" : `${Number(booking.party || 0)} pers.`;
+    const priceLabel = booking.detailsOnly ? "—" : formatCurrency(Number(booking.price || 0));
     return `
     <tr class="source-record-row" data-source-index="${index}">
       <td class="source-record-client" data-label="Nume">
@@ -6672,7 +6587,7 @@ function renderSourceBookings() {
         <span>${escapeHtml(unitLabel || booking.source || "")}</span>
       </td>
       <td class="source-record-party" data-label="Pers.">${escapeHtml(partyLabel)}</td>
-      <td class="source-record-price" data-label="Total plată">${formatCurrency(Number(booking.price || 0))}</td>
+      <td class="source-record-price" data-label="Total plată">${priceLabel}</td>
     </tr>
   `;
   };
@@ -6781,12 +6696,28 @@ function applySourceBooking(booking) {
   if (hintedUnit) {
     syncKindFromSelectedUnit();
   }
+  const detailsOnly = booking.detailsOnly === true;
   bookingForm.elements.guest.value = booking.guest || "";
-  bookingForm.elements.phone.value = booking.phone || "";
-  bookingForm.elements.adults.value = Math.max(0, Number(booking.adults || 0));
-  bookingForm.elements.children.value = Math.max(0, Number(booking.children || 0));
-  bookingForm.elements.car.value = booking.car || "";
+  bookingForm.elements.phone.value = detailsOnly ? booking.phone || bookingForm.elements.phone.value : booking.phone || "";
+  if (!detailsOnly || Number(booking.adults || 0) > 0) {
+    bookingForm.elements.adults.value = Math.max(0, Number(booking.adults || 0));
+  }
+  if (!detailsOnly || Number(booking.children || 0) > 0) {
+    bookingForm.elements.children.value = Math.max(0, Number(booking.children || 0));
+  }
+  bookingForm.elements.car.value = detailsOnly ? booking.car || bookingForm.elements.car.value : booking.car || "";
   updatePartyTotal();
+  if (detailsOnly) {
+    clearImportedPricing();
+    bookingFacilityDraft = [];
+    renderBookingFacilities();
+    renderBookingRangeCalendar();
+    renderBookingStationingLink();
+    showOldSourceBookingWarning();
+    savePricingSnapshot();
+    showToast(`Date client preluate pentru ${booking.guest}`);
+    return;
+  }
   bookingForm.elements.arrival.value = booking.start;
   bookingForm.elements.departure.value = booking.end;
   syncNightsFromDates();
@@ -6833,12 +6764,14 @@ async function loadSourceBookings(query = bookingForm.elements.guest.value.trim(
     sourceBookingSearchPending = false;
     renderSourceBookings();
     const todayCount = sourceTodayArrivalCount();
+    const localCount = Number(result.sources?.local || 0);
+    const localText = localCount ? ` · ${localCount} din istoricul local` : "";
     sourceRecordStatus.textContent = normalizedQuery
       ? sourceBookings.length
-        ? `${sourceBookings.length} potriviri găsite pentru „${normalizedQuery}”.`
+        ? `${sourceBookings.length} potriviri găsite pentru „${normalizedQuery}”${localText}.`
         : `Nu am găsit clienți cu un nume asemănător cu „${normalizedQuery}”.`
       : sourceBookings.length
-        ? `${sourceBookings.length} rezervări încărcate. ${todayCount} rezervări pentru azi, apoi restul după dată.`
+        ? `${sourceBookings.length} rezervări/clienți încărcați${localText}. ${todayCount} rezervări pentru azi, apoi restul după dată.`
         : "Nu am găsit rezervări valide pentru modul curent.";
   } catch (error) {
     if (requestId !== sourceBookingRequestId) return;
@@ -7652,8 +7585,6 @@ window.addEventListener("resize", () => {
   updateTimelineDayWidth.resizeTimer = window.setTimeout(() => setVisibleMonth(visibleMonth), 120);
 });
 window.setInterval(refreshTodayIfNeeded, 60000);
-window.setInterval(() => void loadClientDirectory(), 5 * 60 * 1000);
-
 bookingForm.elements.kind.addEventListener("change", () => {
   renderUnitSelect();
   syncKindFromSelectedUnit();
@@ -7748,31 +7679,6 @@ jumpToFormButton.addEventListener("click", () => {
   openBookingModal();
 });
 
-function openDirectoryClientBooking(clientKey) {
-  const client = clientDirectory.find((item) => item.key === clientKey);
-  if (!client) return false;
-  const futureReservation = reservationIsFuture(client);
-  const hasExactStationing = client.group === "camping" && exactAvailableStationingMatches(client.guest).length === 1;
-  const mode = client.group === "camping" ? (hasExactStationing ? "rv" : campingModeForUnit(client)) : "room";
-  openBookingModal({
-    guest: client.guest,
-    phone: client.phone,
-    car: client.car,
-    adults: client.adults,
-    children: client.children,
-    kind: mode,
-    group: client.group,
-    arrival: futureReservation ? client.start : undefined,
-    departure: futureReservation ? client.end : undefined,
-    price: futureReservation ? client.price : undefined,
-    balance: futureReservation ? client.balance : undefined,
-    basePrice: futureReservation ? client.basePrice : undefined,
-    facilities: futureReservation ? client.facilities : undefined,
-    note: client.directorySource === "sql" ? "Client selectat din baza SQL." : "Client selectat din istoricul local."
-  });
-  return true;
-}
-
 reservationCards.addEventListener("click", (event) => {
   const barItemButton = event.target.closest("[data-client-bar-item]");
   if (barItemButton) {
@@ -7783,12 +7689,6 @@ reservationCards.addEventListener("click", (event) => {
       Number(barItemButton.dataset.delta || 0),
       { remove: barItemButton.dataset.remove === "true" }
     );
-    return;
-  }
-
-  const rebookButton = event.target.closest("[data-rebook-client]");
-  if (rebookButton) {
-    openDirectoryClientBooking(rebookButton.dataset.rebookClient);
     return;
   }
 
@@ -8349,7 +8249,6 @@ async function initializeApp() {
   rebuildStaysByUnitIndex();
   timelineShell.removeAttribute("aria-busy");
   setVisibleMonth(today, { save: false });
-  void loadClientDirectory();
   syncLocalActivityLog();
   warmHiddenPages();
   loadAppVersion();
