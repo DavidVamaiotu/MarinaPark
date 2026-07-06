@@ -1876,6 +1876,27 @@ async function requestBody(request) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+const lanLogPaths = new Set([
+  "/log",
+  "/activity.html",
+  "/activity.css",
+  "/activity.js",
+  "/assets/marina-park-logo.png",
+  "/fonts/Rubik-Variable.ttf",
+  "/api/log"
+]);
+
+function isLoopbackAddress(address) {
+  const normalized = String(address || "").toLowerCase();
+  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "::ffff:127.0.0.1";
+}
+
+function isAllowedLanLogRequest(request) {
+  if (request.method !== "GET") return false;
+  const pathname = new URL(request.url, "http://localhost").pathname;
+  return lanLogPaths.has(pathname);
+}
+
 async function serveStatic(request, response) {
   const url = new URL(request.url, `http://${request.headers.host}`);
   const requestedPath = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname === "/log" ? "/activity.html" : url.pathname);
@@ -1896,6 +1917,11 @@ async function serveStatic(request, response) {
 
 const server = http.createServer(async (request, response) => {
   try {
+    if (!isLoopbackAddress(request.socket.remoteAddress) && !isAllowedLanLogRequest(request)) {
+      send(response, 403, JSON.stringify({ ok: false, error: "Doar jurnalul poate fi accesat din rețeaua locală" }));
+      return;
+    }
+
     if (request.url.startsWith("/api/data") && request.method === "GET") {
       send(response, 200, JSON.stringify(await readData()));
       return;
@@ -2012,7 +2038,7 @@ function listenOnPort(listenPort, listenHost) {
 
 async function startServer(options = {}) {
   const firstPort = Number(options.port ?? port);
-  const listenHost = String(options.host || process.env.HOST || "127.0.0.1");
+  const listenHost = String(options.host || process.env.HOST || "0.0.0.0");
   const portAttempts = Math.max(1, Math.floor(Number(options.portAttempts || 1)));
   let listenPort = firstPort;
 
@@ -2029,14 +2055,21 @@ async function startServer(options = {}) {
 
   const address = server.address();
   const activePort = typeof address === "object" && address ? address.port : listenPort;
-  const url = `http://${listenHost}:${activePort}`;
+  const localHost = String(options.localHost || (["0.0.0.0", "::"].includes(listenHost) ? "127.0.0.1" : listenHost));
+  const url = `http://${localHost}:${activePort}`;
+  const logUrls = Object.values(os.networkInterfaces())
+    .flat()
+    .filter((entry) => entry && !entry.internal && (entry.family === "IPv4" || entry.family === 4))
+    .map((entry) => `http://${entry.address}:${activePort}/log`)
+    .filter((entry, index, entries) => entries.indexOf(entry) === index);
   console.log(`Marina Park app: ${url}`);
+  for (const logUrl of logUrls) console.log(`Jurnal în rețea: ${logUrl}`);
   console.log(`Database: ${databasePath}`);
   retryPendingPaymentOutbox().catch((error) => console.error("Pending receipt retry failed:", error.message));
   enqueueDatabaseBackup({ reason: "startup" });
   backupInterval = setInterval(() => enqueueDatabaseBackup({ reason: "interval" }), 60 * 60 * 1000);
   backupInterval.unref?.();
-  return { server, port: activePort, host: listenHost, url };
+  return { server, port: activePort, host: listenHost, url, logUrls };
 }
 
 function stopServer() {

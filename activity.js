@@ -6,6 +6,12 @@ const dailyTotalsFilterButton = document.querySelector("#dailyTotalsFilter");
 const refreshButton = document.querySelector("#refreshLog");
 const exportDatabaseButton = document.querySelector("#exportDatabase");
 const clearActivityLogButton = document.querySelector("#clearActivityLog");
+const localActivityAccess = ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
+
+if (!localActivityAccess) {
+  exportDatabaseButton.hidden = true;
+  clearActivityLogButton.hidden = true;
+}
 
 let entries = [];
 let dailyTotalsOnly = false;
