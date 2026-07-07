@@ -1342,6 +1342,9 @@ function prepareStayPayment(payload, context) {
     return next;
   });
   const first = updatedStays[0];
+  const originalCustomerPrice = Math.round(currentStays.reduce((sum, stay) => sum + receiptNumber(stay.price), 0) * 100) / 100;
+  const customerPriceAtPayment = Math.round(paymentStays.reduce((sum, stay) => sum + receiptNumber(stay.price), 0) * 100) / 100;
+  const effectivePaymentLine = ` Preț inițial client: ${money(originalCustomerPrice)} lei; plătit efectiv: ${money(amount)} lei.`;
   const activity = normalizeActivityLogEntry({
     id: `payment-${context.paymentId}`,
     timestamp: context.now,
@@ -1352,13 +1355,18 @@ function prepareStayPayment(payload, context) {
     amount,
     method: context.method,
     message: zeroPriceMarkPaid
-      ? `${first.guest} a fost marcat ca achitat prin voucher.`
+      ? `${first.guest} a fost marcat ca achitat prin voucher.${effectivePaymentLine}`
       : isLinked
       ? `${first.guest} a plătit în total ${money(amount)} lei pentru ${updatedStays.length} rezervări prin ${context.method}.`
-      : `${first.guest} a plătit ${money(amount)} lei prin ${context.method}.`,
+      : `${first.guest} a plătit ${money(amount)} lei prin ${context.method}.${effectivePaymentLine}`,
     data: {
       method: context.method,
       amount,
+      originalCustomerPrice,
+      customerPriceAtPayment,
+      actualPaidAmount: amount,
+      previousPrice: originalCustomerPrice,
+      newPrice: customerPriceAtPayment,
       repeatPayment,
       zeroPriceMarkPaid,
       linkedPayment: isLinked,

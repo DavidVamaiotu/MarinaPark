@@ -78,7 +78,8 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
       { key: "stay-c", id: "D-3", guest: "Rounding", personId: "person-2", group: "room", kind: "Room", price: 1, balance: 1 },
       { key: "stay-d", id: "D-4", guest: "Rounding", personId: "person-2", group: "room", kind: "Room", price: 1, balance: 1 },
       { key: "stay-e", id: "D-5", guest: "Rounding", personId: "person-2", group: "room", kind: "Room", price: 1, balance: 0, paid: true, settledPrice: 1, actualPaidAmount: 1 },
-      { key: "stay-zero", id: "D-6", guest: "Complimentary", personId: "person-3", group: "room", kind: "Room", price: 0, balance: 0, paid: false }
+      { key: "stay-zero", id: "D-6", guest: "Complimentary", personId: "person-3", group: "room", kind: "Room", price: 0, balance: 0, paid: false },
+      { key: "stay-edit", id: "D-7", guest: "Edited Price", personId: "person-4", group: "room", kind: "Room", price: 100, balance: 100 }
     ],
     units: [{ id: "D-1", group: "room", kind: "Room" }, { id: "D-2", group: "room", kind: "Room" }],
     stationing: [
@@ -144,6 +145,24 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
   assert.equal(zeroPrice.body.stays[0].paid, true);
   assert.equal(zeroPrice.body.stays[0].price, 0);
   assert.equal(zeroPrice.body.allocations[0].allocatedAmount, 0);
+
+  const editedPrice = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({
+      paymentId: "stay-edited-price-test",
+      type: "stay",
+      method: "voucher",
+      amount: 120,
+      stayKey: "stay-edit",
+      draftStay: { price: 120, balance: 120 }
+    })
+  });
+  assert.equal(editedPrice.status, 200);
+  const editedPriceActivity = await request(server.url, "/api/log?limit=20");
+  const editedPriceLog = editedPriceActivity.body.entries.find((entry) => entry.id === "payment-stay-edited-price-test");
+  assert.match(editedPriceLog.message, /Preț inițial client: 100\.00 lei; plătit efectiv: 120\.00 lei\./);
+  assert.equal(editedPriceLog.data.originalCustomerPrice, 100);
+  assert.equal(editedPriceLog.data.customerPriceAtPayment, 120);
 
   const repeated = await request(server.url, "/api/payment", {
     method: "POST",
