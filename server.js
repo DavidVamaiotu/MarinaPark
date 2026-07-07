@@ -1939,8 +1939,11 @@ async function fetchClientDirectory(options = {}) {
   return result;
 }
 
-function sourceBookingFromDirectoryClient(client = {}) {
+function sourceBookingFromDirectoryClient(client = {}, fallbackMode = "room") {
   const localHistory = client.directorySource === "local-history";
+  const group = client.group === "camping" || client.group === "room"
+    ? client.group
+    : fallbackMode;
   const start = client.start || client.lastStart || client.last_start || "";
   const end = client.end || client.lastEnd || client.last_end || "";
   const price = localHistory ? 0 : Number(client.price || 0);
@@ -1948,7 +1951,7 @@ function sourceBookingFromDirectoryClient(client = {}) {
   const children = Math.max(0, Number(client.children || 0));
   return {
     ...client,
-    source: localHistory ? "istoric local" : client.source || (client.group === "camping" ? "camping" : "camere"),
+    source: localHistory ? "istoric local" : client.source || (group === "camping" ? "camping" : "camere"),
     guest: client.guest || "",
     phone: client.phone || "",
     car: client.car || "",
@@ -1961,8 +1964,8 @@ function sourceBookingFromDirectoryClient(client = {}) {
     price,
     deposit: "0.00",
     balance: price,
-    group: client.group === "camping" ? "camping" : "room",
-    kind: client.kind || (client.group === "camping" ? "Camping" : "Camere"),
+    group,
+    kind: client.kind || (group === "camping" ? "Camping" : "Camere"),
     unitHint: localHistory ? "" : client.unitHint || "",
     note: localHistory ? "" : client.note || "",
     modifiedAt: client.modifiedAt || client.historyUpdatedAt || client.updatedAt || "",
@@ -1973,16 +1976,17 @@ function sourceBookingFromDirectoryClient(client = {}) {
 async function fetchFusedSourceBookings(mode, query = "") {
   const directory = await fetchClientDirectory();
   const bookings = directory.clients
-    .map(sourceBookingFromDirectoryClient)
+    .map((client) => sourceBookingFromDirectoryClient(client, mode))
     .filter((booking) => booking.group === mode);
+  const filteredBookings = filteredSourceBookings(bookings, query, 300);
   return {
     ok: true,
-    bookings: filteredSourceBookings(bookings, query, 300),
+    bookings: filteredBookings,
     sqlAvailable: directory.sqlAvailable,
     warnings: directory.warnings,
     sources: {
-      sql: bookings.filter((booking) => booking.directorySource === "sql").length,
-      local: bookings.filter((booking) => booking.directorySource === "local-history").length
+      sql: filteredBookings.filter((booking) => booking.directorySource === "sql").length,
+      local: filteredBookings.filter((booking) => booking.directorySource === "local-history").length
     }
   };
 }
