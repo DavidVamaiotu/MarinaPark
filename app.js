@@ -730,16 +730,24 @@ function unitOptions() {
 function normalizeUnit(unit) {
   const id = String(unit.id || "").trim();
   const kind = String(unit.kind || "Cameră dublă").trim();
-  const group = unit.group || groupFromKind(kind);
+  const rawGroup = unit.group || groupFromKind(kind);
+  const explicitModeSource =
+    unit.mode || unit.unitType || (["room", "tent", "rv"].includes(rawGroup) ? rawGroup : "");
+  let mode = normalizeTimelineMode(explicitModeSource || `${id} ${kind}`);
+  if (!explicitModeSource && rawGroup === "camping" && mode === "room") mode = "tent";
+  const group = groupForMode(mode);
   const dailyPrices = normalizeDailyPrices(unit.dailyPrices);
   const firstDailyPrice = Object.values(dailyPrices).find((price) => Number(price || 0) > 0) || 0;
-  const adultPrice = Math.max(0, Number(unit.adultPrice || firstDailyPrice || 0));
-  const childPrice = Math.max(0, Number(unit.childPrice ?? adultPrice / 2));
+  const hasAdultPrice = unit.adultPrice !== undefined && unit.adultPrice !== null && String(unit.adultPrice).trim() !== "";
+  const adultPrice = hasAdultPrice ? normalizeMoneyValue(unit.adultPrice) : firstDailyPrice;
+  const hasChildPrice = unit.childPrice !== undefined && unit.childPrice !== null && String(unit.childPrice).trim() !== "";
+  const childPrice = hasChildPrice ? normalizeMoneyValue(unit.childPrice) : normalizeMoneyValue(adultPrice / 2);
 
   return {
     id,
     kind,
     group,
+    mode,
     pricingMode: unit.pricingMode === "per-person-night" ? "per-person-night" : "per-night",
     adultPrice,
     childPrice,
@@ -821,6 +829,8 @@ function defaultKindForMode(mode = activeMode) {
 }
 
 function campingModeForUnit(unit) {
+  const savedMode = normalizeTimelineMode(unit?.mode || unit?.unitType || "");
+  if (savedMode === "tent" || savedMode === "rv") return savedMode;
   const value = normalizedModeText(`${unit?.id || ""} ${unit?.kind || ""}`);
   if (value.includes("rulot") || /\brv\b/.test(value)) return "rv";
   return "tent";
@@ -2498,11 +2508,13 @@ function applyCommittedPaymentResult(result = {}) {
 }
 
 function unitDraftFromForm() {
-  const adultPrice = firstUnitCalendarPrice(unitPricingDraft);
+  const adultPrice = unitAdultPriceFromDraft();
+  const mode = normalizeTimelineMode(unitForm.elements.group.value || activeMode);
   return normalizeUnit({
     id: editingUnitId || unitForm.elements.id.value || "Unitate nouă",
     kind: unitForm.elements.kind.value || defaultKindForMode(activeMode),
-    group: unitForm.elements.group.value || groupForMode(activeMode),
+    group: groupForMode(mode),
+    mode,
     pricingMode: unitForm.elements.pricingMode.value,
     adultPrice,
     childPrice: adultPrice / 2,
@@ -2517,6 +2529,16 @@ function firstUnitCalendarPrice(dailyPrices = unitPricingDraft) {
     .map((dateText) => normalized[dateText])
     .find((price) => Number(price || 0) > 0);
   return normalizeMoneyValue(firstPrice || 0);
+}
+
+function unitAdultPriceFromDraft() {
+  return normalizeMoneyValue(unitForm.elements.adultPrice?.value) || firstUnitCalendarPrice(unitPricingDraft);
+}
+
+function syncUnitMoneyFieldsFromDraft() {
+  const adultPrice = firstUnitCalendarPrice(unitPricingDraft);
+  setUnitMoneyField("adultPrice", adultPrice);
+  setUnitMoneyField("childPrice", adultPrice / 2);
 }
 
 function setUnitPricingSelection(startText, endText = startText) {
@@ -2608,6 +2630,7 @@ function applyUnitSelectedDayPrice() {
       delete unitPricingDraft[dateText];
     }
   });
+  syncUnitMoneyFieldsFromDraft();
   renderUnitPricingCalendar();
 }
 
@@ -2615,6 +2638,7 @@ function clearUnitSelectedDayPrice() {
   const selectedDates = [...unitPricingSelectedDates];
   if (!selectedDates.length) return;
   selectedDates.forEach((dateText) => delete unitPricingDraft[dateText]);
+  syncUnitMoneyFieldsFromDraft();
   renderUnitPricingCalendar();
 }
 
@@ -2636,9 +2660,7 @@ function openUnitModal(unitId = null) {
   unitForm.elements.group.value = unit ? unitTypeOptionForUnit(unit) : normalizeTimelineMode(activeMode);
   unitForm.elements.kind.value = unit?.kind || defaultKindForMode(activeMode);
   unitForm.elements.pricingMode.value = unit?.pricingMode || "per-night";
-  const calendarBasePrice = firstUnitCalendarPrice(unitPricingDraft);
-  setUnitMoneyField("adultPrice", calendarBasePrice);
-  setUnitMoneyField("childPrice", calendarBasePrice / 2);
+  syncUnitMoneyFieldsFromDraft();
   const selectedRate = unitRatesForDate(unitDraftFromForm(), toISODate(initialPricingDate)).primaryPrice;
   unitDayPriceInput.value = selectedRate.toFixed(2);
   renderUnitPricingCalendar();
@@ -2662,6 +2684,22 @@ function closeUnitModal() {
 
 function setUnitMoneyField(name, value) {
   unitForm.elements[name].value = Number(value || 0).toFixed(2);
+}
+
+function normalizeUnitDailyPricesForCompare(unit) {
+  return Object.fromEntries(Object.entries(normalizeDailyPrices(unit?.dailyPrices)).sort(([first], [second]) => first.localeCompare(second)));
+}
+
+function unitFieldValueForCompare(unit, field) {
+  if (field === "dailyPrices") return JSON.stringify(normalizeUnitDailyPricesForCompare(unit));
+  if (field === "adultPrice" || field === "childPrice") return String(normalizeMoneyValue(unit?.[field]));
+  return String(unit?.[field] ?? "");
+}
+
+function changedUnitFields(previousUnit, nextUnit) {
+  return ["kind", "group", "mode", "pricingMode", "adultPrice", "childPrice", "dailyPrices"].filter(
+    (field) => unitFieldValueForCompare(previousUnit, field) !== unitFieldValueForCompare(nextUnit, field)
+  );
 }
 
 function cloneUnitOptionList() {
@@ -2747,10 +2785,19 @@ function saveUnit(unit) {
 
   const existingIndex = units.findIndex((item) => item.id === normalized.id);
   const previousUnit = existingIndex >= 0 ? { ...units[existingIndex] } : null;
+  const changedFields = previousUnit ? changedUnitFields(previousUnit, normalized) : [];
   if (existingIndex >= 0) {
     units[existingIndex] = normalized;
   } else {
     units.push(normalized);
+  }
+  if (previousUnit && (previousUnit.kind !== normalized.kind || previousUnit.group !== normalized.group)) {
+    stays.forEach((stay) => {
+      if (stay.id !== normalized.id) return;
+      stay.kind = normalized.kind;
+      stay.group = normalized.group;
+    });
+    rebuildStaysByUnitIndex();
   }
   markPagesDirty("calendar", "clients", "settings", "statistics");
   units.sort((first, second) => first.id.localeCompare(second.id, "ro-RO", { numeric: true }));
@@ -2771,11 +2818,7 @@ function saveUnit(unit) {
     data: {
       previous: previousUnit,
       current: normalized,
-      changedFields: previousUnit
-        ? ["kind", "group", "pricingMode", "dailyPrices"].filter(
-            (field) => String(previousUnit[field] ?? "") !== String(normalized[field] ?? "")
-          )
-        : []
+      changedFields
     }
   });
   return true;
@@ -7236,11 +7279,39 @@ function updateTimelineDrag(event) {
 
 function finishTimelineDrag(event) {
   if (!dragState || dragState.pointerId !== event.pointerId) return;
+  completeTimelineDrag(true);
+}
+
+function completeTimelineDrag(commit) {
+  if (!dragState) return;
   const completedDrag = dragState;
+  try {
+    if (completedDrag.bar?.hasPointerCapture?.(completedDrag.pointerId)) {
+      completedDrag.bar.releasePointerCapture(completedDrag.pointerId);
+    }
+  } catch {
+    // Pointer capture can already be gone after focus changes.
+  }
   completedDrag.bar?.classList.remove("is-dragging");
   completedDrag.row?.classList.remove("is-drop-target");
   dragState = null;
   if (completedDrag.changed) {
+    if (!commit) {
+      completedDrag.stay.start = toISODate(completedDrag.originalStart);
+      completedDrag.stay.end = toISODate(completedDrag.originalEnd);
+      completedDrag.stay.dates = formatStayDates(completedDrag.stay.start, completedDrag.stay.end);
+      completedDrag.stay.price = completedDrag.originalPrice;
+      completedDrag.stay.deposit = completedDrag.originalDeposit;
+      completedDrag.stay.balance = completedDrag.originalBalance;
+      syncStayDateCache(completedDrag.stay);
+      renderMetrics();
+      renderGuestTimeline({ preserveScroll: true });
+      if (activePage === "clients") {
+        renderReservations();
+        refreshIcons(reservationCards);
+      }
+      return;
+    }
     const priceRecalculated = recalculateStayPricingFromUnit(completedDrag.stay, { paidAmount: completedDrag.originalPaidAmount });
     if (!priceRecalculated) {
       completedDrag.stay.price = completedDrag.originalPrice;
@@ -7278,6 +7349,12 @@ function finishTimelineDrag(event) {
         : "Tarif calendar 0 sau lipsa; totalul vechi a fost pastrat."
     );
   }
+}
+
+function cancelTimelineDrag(event) {
+  if (!dragState) return;
+  if (event?.pointerId !== undefined && event.pointerId !== dragState.pointerId) return;
+  completeTimelineDrag(false);
 }
 
 function openBookingFromTimeline(event) {
@@ -7669,11 +7746,13 @@ sourceRecordRows.addEventListener("click", (event) => {
 });
 
 guestTimeline.addEventListener("pointerdown", beginTimelineDrag);
+guestTimeline.addEventListener("lostpointercapture", cancelTimelineDrag);
 guestTimeline.addEventListener("dblclick", openBookingFromTimeline);
 guestTimeline.addEventListener("contextmenu", openTimelineContextMenu);
 document.addEventListener("pointermove", updateTimelineDrag);
 document.addEventListener("pointerup", finishTimelineDrag);
-document.addEventListener("pointercancel", finishTimelineDrag);
+document.addEventListener("pointercancel", cancelTimelineDrag);
+window.addEventListener("blur", cancelTimelineDrag);
 
 jumpToFormButton.addEventListener("click", () => {
   openBookingModal();
@@ -7992,8 +8071,8 @@ unitForm.addEventListener("submit", (event) => {
     kind: String(data.get("kind") || "").trim(),
     group: data.get("group"),
     pricingMode: data.get("pricingMode"),
-    adultPrice: firstUnitCalendarPrice(unitPricingDraft),
-    childPrice: firstUnitCalendarPrice(unitPricingDraft) / 2,
+    adultPrice: unitAdultPriceFromDraft(),
+    childPrice: unitAdultPriceFromDraft() / 2,
     dailyPrices: unitPricingDraft
   });
 

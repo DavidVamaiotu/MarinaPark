@@ -262,8 +262,93 @@ function stationingEndDate(record) {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeMoneyValue(value) {
+  const normalizedValue = typeof value === "string" ? value.replace(/\s+/g, "").replace(",", ".") : value;
+  const amount = Math.max(0, Number(normalizedValue || 0));
+  return Number.isFinite(amount) ? Math.round(amount * 100) / 100 : 0;
+}
+
+function normalizedModeText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function normalizeTimelineMode(mode) {
+  const value = normalizedModeText(mode);
+  if (value === "rv" || value === "rulote" || value === "rulota" || value.includes("rulot")) return "rv";
+  if (value === "camping" || value === "cort" || value === "tent" || value.includes("cort") || value.includes("campare")) return "tent";
+  return "room";
+}
+
+function groupForMode(mode) {
+  return normalizeTimelineMode(mode) === "room" ? "room" : "camping";
+}
+
+function groupFromKind(kind) {
+  const value = normalizedModeText(kind);
+  if (
+    value === "camping" ||
+    value === "tent" ||
+    value === "cort" ||
+    value === "rv" ||
+    value.includes("camping") ||
+    value.includes("campare") ||
+    value.includes("rulot")
+  ) {
+    return "camping";
+  }
+  return "room";
+}
+
+function normalizeDailyPrices(dailyPrices = {}) {
+  const normalized = {};
+  if (!dailyPrices || typeof dailyPrices !== "object" || Array.isArray(dailyPrices)) return normalized;
+
+  Object.entries(dailyPrices)
+    .sort(([first], [second]) => first.localeCompare(second))
+    .forEach(([date, rawPrice]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+      const priceValue = typeof rawPrice === "object" && rawPrice !== null ? rawPrice.price ?? rawPrice.adultPrice : rawPrice;
+      const price = normalizeMoneyValue(priceValue);
+      if (price > 0) normalized[date] = price;
+    });
+  return normalized;
+}
+
+function normalizeUnitForStorage(unit = {}) {
+  const id = String(unit.id || "").trim();
+  const kind = String(unit.kind || "Cameră dublă").trim();
+  const rawGroup = unit.group || groupFromKind(kind);
+  const explicitModeSource =
+    unit.mode || unit.unitType || (["room", "tent", "rv"].includes(rawGroup) ? rawGroup : "");
+  let mode = normalizeTimelineMode(explicitModeSource || `${id} ${kind}`);
+  if (!explicitModeSource && rawGroup === "camping" && mode === "room") mode = "tent";
+  const group = groupForMode(mode);
+  const dailyPrices = normalizeDailyPrices(unit.dailyPrices);
+  const firstDailyPrice = Object.values(dailyPrices).find((price) => Number(price || 0) > 0) || 0;
+  const hasAdultPrice = unit.adultPrice !== undefined && unit.adultPrice !== null && String(unit.adultPrice).trim() !== "";
+  const adultPrice = hasAdultPrice ? normalizeMoneyValue(unit.adultPrice) : firstDailyPrice;
+  const hasChildPrice = unit.childPrice !== undefined && unit.childPrice !== null && String(unit.childPrice).trim() !== "";
+  const childPrice = hasChildPrice ? normalizeMoneyValue(unit.childPrice) : normalizeMoneyValue(adultPrice / 2);
+
+  return {
+    ...unit,
+    id,
+    kind,
+    group,
+    mode,
+    pricingMode: unit.pricingMode === "per-person-night" ? "per-person-night" : "per-night",
+    adultPrice,
+    childPrice,
+    dailyPrices
+  };
+}
+
 function replaceDatabaseData(stays, config, units = [], stationing = [], barArticles = []) {
   const now = new Date().toISOString();
+  const normalizedUnits = units.map(normalizeUnitForStorage);
   const insertReservation = db.prepare(`
     INSERT INTO reservations (key, order_index, id, guest, group_name, kind, start_date, end_date, updated_at, data)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -304,7 +389,7 @@ function replaceDatabaseData(stays, config, units = [], stationing = [], barArti
       );
     });
     db.exec("DELETE FROM units");
-    units.forEach((unit) => {
+    normalizedUnits.forEach((unit) => {
       insertUnit.run(
         String(unit.id || ""),
         String(unit.group || ""),
@@ -438,7 +523,7 @@ async function writeData(payload) {
     : {};
   const { units: discardedUnits, ...config } = submittedConfig;
   const stays = payloadArray(payload, "stays");
-  const units = payloadArray(payload, "units", { fallback: discardedUnits });
+  const units = payloadArray(payload, "units", { fallback: discardedUnits }).map(normalizeUnitForStorage);
   const stationing = payloadArray(payload, "stationing");
   const barArticles = payloadArray(payload, "barArticles");
   ensureRequiredField(stays, "stays", "id");

@@ -168,6 +168,105 @@ function logCard(entry) {
   `;
 }
 
+function activityTimestamp(entry) {
+  const date = new Date(entry.timestamp);
+  return Number.isFinite(date.getTime()) ? date.getTime() : 0;
+}
+
+function sessionKey(entry) {
+  const entityType = String(entry.entityType || "");
+  const entityKey = String(entry.entityKey || "");
+  return entityType && entityKey ? `${entityType}:${entityKey}` : "";
+}
+
+function isClientSessionStart(entry) {
+  return entry.eventType === "open" && ["client", "stationing"].includes(entry.entityType) && sessionKey(entry);
+}
+
+function isClientSessionAction(entry) {
+  return ["client", "stationing"].includes(entry.entityType) && entry.eventType !== "open" && sessionKey(entry);
+}
+
+function organizeDayEntries(dayEntries) {
+  const chronologicalEntries = [...dayEntries].sort((first, second) => activityTimestamp(first) - activityTimestamp(second));
+  const openSessions = new Map();
+  const sections = [];
+
+  chronologicalEntries.forEach((entry) => {
+    const key = sessionKey(entry);
+    if (isClientSessionStart(entry)) {
+      const section = {
+        type: "session",
+        key: entry.id,
+        openEntry: entry,
+        actions: []
+      };
+      openSessions.set(key, section);
+      sections.push(section);
+      return;
+    }
+
+    const openSection = isClientSessionAction(entry) ? openSessions.get(key) : null;
+    if (openSection) {
+      openSection.actions.push(entry);
+      if (entry.eventType === "delete") openSessions.delete(key);
+    }
+  });
+
+  const groupedSessions = sections.filter((section) => section.actions.length > 0);
+  const groupedIds = new Set();
+  groupedSessions.forEach((section) => {
+    groupedIds.add(section.openEntry.id);
+    section.actions.forEach((entry) => groupedIds.add(entry.id));
+  });
+
+  dayEntries.forEach((entry) => {
+    if (!groupedIds.has(entry.id)) groupedSessions.push({ type: "entry", key: entry.id, entry });
+  });
+
+  return groupedSessions.sort((first, second) => sectionTimestamp(second) - sectionTimestamp(first));
+}
+
+function sectionTimestamp(section) {
+  if (section.type === "entry") return activityTimestamp(section.entry);
+  const lastAction = section.actions[section.actions.length - 1];
+  return activityTimestamp(lastAction || section.openEntry);
+}
+
+function clientSessionSection(section) {
+  const actionCount = section.actions.length;
+  const actionText = actionCount === 1 ? "1 acțiune în fișă" : `${actionCount} acțiuni în fișă`;
+  const actionList = actionCount
+    ? section.actions.map(logCard).join("")
+    : `<p class="session-empty">Fișa a fost deschisă, fără alte modificări înregistrate după deschidere.</p>`;
+
+  return `
+    <article class="log-session">
+      <header class="session-heading">
+        <div>
+          <span class="session-kicker">Fișă deschisă</span>
+          <h3 class="person-name">${escapeHtml(section.openEntry.entityLabel || entityLabel(section.openEntry))}</h3>
+          <div class="log-meta">
+            <span>${escapeHtml(exactTimeLabel(section.openEntry.timestamp))}</span>
+            <span class="chip">${escapeHtml(entityLabel(section.openEntry))}</span>
+            <span class="chip">${escapeHtml(actionText)}</span>
+          </div>
+        </div>
+      </header>
+      <p class="session-open-message">${escapeHtml(section.openEntry.message)}</p>
+      <div class="session-actions">
+        ${actionList}
+      </div>
+    </article>
+  `;
+}
+
+function renderDayLog(dayEntries) {
+  return organizeDayEntries(dayEntries)
+    .map((section) => (section.type === "session" ? clientSessionSection(section) : logCard(section.entry)))
+    .join("");
+}
+
 function dailyPaymentSummary(dayEntries) {
   const payments = dayEntries.filter((entry) => entry.eventType === "payment" && Number(entry.amount || 0) > 0);
   const methodText = paymentMethodTotalText(payments);
@@ -259,7 +358,7 @@ function renderLog() {
             <h2>${escapeHtml(dateLabel(day))}</h2>
             <span>${dayEntries.length} ${dailyTotalsOnly ? (dayEntries.length === 1 ? "plată" : "plăți") : "evenimente"}</span>
           </div>
-          ${dailyTotalsOnly ? "" : `<div class="log-list">${dayEntries.map(logCard).join("")}</div>`}
+          ${dailyTotalsOnly ? "" : `<div class="log-list">${renderDayLog(dayEntries)}</div>`}
           ${dailyPaymentSummary(dayEntries)}
         </section>
       `
