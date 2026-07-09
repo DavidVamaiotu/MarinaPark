@@ -440,6 +440,7 @@ let suppressBookingCalendarClick = false;
 let editingStationingKey = null;
 let bookingEditSession = null;
 let stationingEditSession = null;
+let stationingModalContext = null;
 let bookingStationingDeductionDraft = null;
 let openLinkedDraftAfterSave = false;
 let editingBarArticleKey = null;
@@ -5386,9 +5387,10 @@ function syncStationingTotals() {
   stationingRangeSummary.textContent = `Final ${formatDateLabel(endDate)} · Total ${formatCurrency(totalPrice)} · Rest ${formatCurrency(balance)}${deductedLabel}`;
 }
 
-function openStationingModal(recordKey = null) {
+function openStationingModal(recordKey = null, defaults = {}) {
   const record = recordKey ? stationing.find((item) => item.key === recordKey) : null;
   editingStationingKey = record?.key || null;
+  stationingModalContext = defaults.context || null;
   stationingModalTitle.textContent = editingStationingKey ? "Editează staționarea" : "Staționare nouă";
   stationingSubmitLabel.textContent = editingStationingKey ? "Salvează staționarea" : "Adaugă staționarea";
   deleteStationingButton.hidden = !editingStationingKey;
@@ -5415,30 +5417,31 @@ function openStationingModal(recordKey = null) {
   }
 
   stationingForm.reset();
-  stationingForm.elements.owner.value = record?.owner || "";
-  stationingForm.elements.phone.value = record?.phone || "";
-  stationingForm.elements.caravan.value = record?.caravan || "";
-  stationingForm.elements.startDate.value = record?.startDate || toISODate(today);
-  stationingForm.elements.prepaidNights.value = record?.prepaidNights || 30;
-  stationingForm.elements.nightlyPrice.value = Number(record?.nightlyPrice || 0).toFixed(2);
-  stationingForm.elements.paidAmount.value = Number(record?.paidAmount || 0).toFixed(2);
-  stationingForm.elements.note.value = record?.note || "";
+  stationingForm.elements.owner.value = record?.owner || defaults.owner || "";
+  stationingForm.elements.phone.value = record?.phone || defaults.phone || "";
+  stationingForm.elements.caravan.value = record?.caravan || defaults.caravan || "";
+  stationingForm.elements.startDate.value = record?.startDate || defaults.startDate || toISODate(today);
+  stationingForm.elements.prepaidNights.value = record?.prepaidNights || defaults.prepaidNights || 30;
+  stationingForm.elements.nightlyPrice.value = Number(record?.nightlyPrice ?? defaults.nightlyPrice ?? 0).toFixed(2);
+  stationingForm.elements.paidAmount.value = Number(record?.paidAmount ?? defaults.paidAmount ?? 0).toFixed(2);
+  stationingForm.elements.note.value = record?.note || defaults.note || "";
   syncStationingTotals();
 
   stationingModal.classList.add("is-open");
   document.body.style.overflow = "hidden";
-  setTimeout(() => stationingForm.elements.owner.focus(), 0);
+  setTimeout(() => (stationingForm.elements.owner.value ? stationingForm.elements.caravan : stationingForm.elements.owner).focus(), 0);
 }
 
 function closeStationingModal() {
   stationingModal.classList.remove("is-open");
-  if (!receiptModal.classList.contains("is-open")) {
+  if (!receiptModal.classList.contains("is-open") && !bookingModal.classList.contains("is-open")) {
     document.body.style.overflow = "";
   }
   editingStationingKey = null;
   deleteStationingButton.hidden = true;
   receiptFromStationingButton.hidden = true;
   stationingEditSession = null;
+  stationingModalContext = null;
 }
 
 function saveStationingRecord(record) {
@@ -5470,6 +5473,7 @@ function saveStationingRecord(record) {
       editSession: stationingEditSession
     }
   });
+  return normalized;
 }
 
 function deleteStationing(recordKey) {
@@ -6066,6 +6070,30 @@ function exactAvailableStationingMatches(guest) {
   });
 }
 
+function bookingStationingCreateDefaults() {
+  const owner = bookingForm.elements.guest.value.trim();
+  if (!owner || !currentBookingIsRv()) return null;
+  const nights = Math.max(30, bookingDeductionNights());
+  return {
+    owner,
+    phone: bookingForm.elements.phone.value.trim(),
+    caravan: bookingForm.elements.car.value.trim(),
+    startDate: bookingForm.elements.arrival.value || toISODate(today),
+    prepaidNights: nights,
+    note: "Adaugata din formularul de client.",
+    context: { source: "booking" }
+  };
+}
+
+function openStationingModalFromBooking() {
+  const defaults = bookingStationingCreateDefaults();
+  if (!defaults) {
+    showToast("Completează numele clientului înainte de staționare");
+    return;
+  }
+  openStationingModal(null, defaults);
+}
+
 function autoLinkStationingForFutureBooking(booking = {}) {
   if (bookingStationingDeductionDraft || !reservationIsFuture(booking)) return false;
   if ((booking.group || currentBookingGroup()) !== "camping") return false;
@@ -6161,8 +6189,20 @@ function renderBookingStationingLink() {
     })
     .slice(0, 3);
 
+  const createStationingAction = query && !selectedRecord && matches.length === 0
+    ? `
+      <div class="stationing-link-create">
+        <span>Nu există staționare pentru <strong class="person-name">${escapeHtml(query)}</strong>.</span>
+        <button class="ghost-button compact-text" type="button" data-create-stationing-from-booking>
+          <i data-lucide="plus" aria-hidden="true"></i>
+          <span>Adaugă staționare</span>
+        </button>
+      </div>
+    `
+    : "";
+
   bookingStationingLinkResults.innerHTML = matches.length
-    ? matches
+    ? `${matches
         .map((record) => {
           const details = stationingDetails(record);
           const selected = record.key === selectedDeduction?.recordKey;
@@ -6176,8 +6216,8 @@ function renderBookingStationingLink() {
             </button>
           `;
         })
-        .join("")
-    : `<p class="empty-state">Nu am gasit rulote in stationare pentru cautarea curenta.</p>`;
+        .join("")}${createStationingAction}`
+    : createStationingAction || `<p class="empty-state">Nu am gasit rulote in stationare pentru cautarea curenta.</p>`;
   refreshIcons(bookingStationingLinkSection);
 }
 
@@ -7832,6 +7872,11 @@ bookingFacilities?.addEventListener("change", (event) => {
   setBookingFacilityEnabled(checkbox.dataset.facilityKey, checkbox.checked);
 });
 bookingStationingLinkSection?.addEventListener("click", (event) => {
+  const createButton = event.target.closest("[data-create-stationing-from-booking]");
+  if (createButton) {
+    openStationingModalFromBooking();
+    return;
+  }
   const clearButton = event.target.closest("[data-clear-stationing-deduction]");
   if (clearButton) {
     bookingStationingDeductionDraft = null;
@@ -8039,8 +8084,9 @@ stationingForm.addEventListener("submit", (event) => {
   }
 
   const wasEditing = Boolean(editingStationingKey);
+  const createdFromBooking = stationingModalContext?.source === "booking" && bookingModal.classList.contains("is-open");
   const key = editingStationingKey || `stationing-${Date.now()}`;
-  saveStationingRecord({
+  const savedRecord = saveStationingRecord({
     key,
     owner,
     phone: String(data.get("phone") || "").trim(),
@@ -8055,8 +8101,24 @@ stationingForm.addEventListener("submit", (event) => {
     note: String(data.get("note") || "").trim()
   });
 
+  if (createdFromBooking && savedRecord && !wasEditing) {
+    bookingStationingDeductionDraft = normalizeStayStationingDeduction({
+      recordKey: savedRecord.key,
+      recordLabel: stationingRecordLabel(savedRecord),
+      selectedAt: new Date().toISOString(),
+      nights: bookingDeductionNights(),
+      autoLinked: true
+    });
+  }
   closeStationingModal();
-  showToast(wasEditing ? `Staționare actualizată: ${owner}` : `Staționare adăugată: ${owner}`);
+  if (createdFromBooking) renderBookingStationingLink();
+  showToast(
+    createdFromBooking && !wasEditing
+      ? `Staționare adăugată și selectată: ${owner}`
+      : wasEditing
+        ? `Staționare actualizată: ${owner}`
+        : `Staționare adăugată: ${owner}`
+  );
 });
 
 deleteStationingButton.addEventListener("click", () => {

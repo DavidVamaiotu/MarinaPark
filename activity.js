@@ -3,6 +3,7 @@ const logFeed = document.querySelector("#logFeed");
 const summaryGrid = document.querySelector("#summaryGrid");
 const searchInput = document.querySelector("#logSearch");
 const dailyTotalsFilterButton = document.querySelector("#dailyTotalsFilter");
+const eventFilterButtons = [...document.querySelectorAll("[data-event-filter]")];
 const refreshButton = document.querySelector("#refreshLog");
 const exportDatabaseButton = document.querySelector("#exportDatabase");
 const clearActivityLogButton = document.querySelector("#clearActivityLog");
@@ -15,6 +16,7 @@ if (!localActivityAccess) {
 
 let entries = [];
 let dailyTotalsOnly = false;
+let eventFilter = "all";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -48,7 +50,7 @@ function dateLabel(dateKey) {
 function timeLabel(timestamp) {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) return "--:--";
-  return date.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return date.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" });
 }
 
 function exactTimeLabel(timestamp) {
@@ -87,8 +89,11 @@ function entrySearchText(entry) {
 
 function filteredEntries() {
   const query = searchInput.value.trim().toLowerCase();
-  if (!query) return entries;
-  return entries.filter((entry) => entrySearchText(entry).includes(query));
+  return entries.filter((entry) => {
+    const matchesEvent = eventFilter === "all" || entry.eventType === eventFilter;
+    const matchesSearch = !query || entrySearchText(entry).includes(query);
+    return matchesEvent && matchesSearch;
+  });
 }
 
 function eventLabel(entry) {
@@ -108,7 +113,10 @@ function entityLabel(entry) {
     client: "Client",
     stationing: "Staționare",
     unit: "Unitate",
-    settings: "Setări"
+    settings: "Setări",
+    bar: "Bar",
+    bar_article: "Articol bar",
+    facility: "Facilitate"
   };
   return labels[entry.entityType] || entry.entityType || "Aplicație";
 }
@@ -154,11 +162,11 @@ function logCard(entry) {
         <div>
           <h3${entityNameClass}>${escapeHtml(entry.entityLabel || entityLabel(entry))}</h3>
           <div class="log-meta">
-            <span>${escapeHtml(exactTimeLabel(entry.timestamp))}</span>
             <span class="chip">${escapeHtml(eventLabel(entry))}</span>
             <span class="chip">${escapeHtml(entityLabel(entry))}</span>
             ${method}
             ${amountChip}
+            <time>${escapeHtml(timeLabel(entry.timestamp))}</time>
           </div>
         </div>
       </header>
@@ -233,27 +241,43 @@ function sectionTimestamp(section) {
   return activityTimestamp(lastAction || section.openEntry);
 }
 
+function sessionActionRow(entry) {
+  const amount = Number(entry.amount || 0);
+  const amountText = amount > 0 ? `<span>${formatCurrency(amount)}</span>` : "";
+  const methodText = entry.method ? `<span>${escapeHtml(entry.method)}</span>` : "";
+
+  return `
+    <div class="session-action-row is-${escapeHtml(entry.eventType)}">
+      <time>${escapeHtml(timeLabel(entry.timestamp))}</time>
+      <span>${escapeHtml(eventLabel(entry))}</span>
+      <p>${escapeHtml(entry.message)}</p>
+      ${methodText}
+      ${amountText}
+    </div>
+    ${priceChangeAlert(entry)}
+  `;
+}
+
 function clientSessionSection(section) {
   const actionCount = section.actions.length;
   const actionText = actionCount === 1 ? "1 acțiune în fișă" : `${actionCount} acțiuni în fișă`;
   const actionList = actionCount
-    ? section.actions.map(logCard).join("")
+    ? section.actions.map(sessionActionRow).join("")
     : `<p class="session-empty">Fișa a fost deschisă, fără alte modificări înregistrate după deschidere.</p>`;
 
   return `
     <article class="log-session">
       <header class="session-heading">
         <div>
-          <span class="session-kicker">Fișă deschisă</span>
           <h3 class="person-name">${escapeHtml(section.openEntry.entityLabel || entityLabel(section.openEntry))}</h3>
           <div class="log-meta">
-            <span>${escapeHtml(exactTimeLabel(section.openEntry.timestamp))}</span>
+            <time>${escapeHtml(timeLabel(section.openEntry.timestamp))}</time>
+            <span class="chip">Fișă deschisă</span>
             <span class="chip">${escapeHtml(entityLabel(section.openEntry))}</span>
             <span class="chip">${escapeHtml(actionText)}</span>
           </div>
         </div>
       </header>
-      <p class="session-open-message">${escapeHtml(section.openEntry.message)}</p>
       <div class="session-actions">
         ${actionList}
       </div>
@@ -267,7 +291,14 @@ function renderDayLog(dayEntries) {
     .join("");
 }
 
-function dailyPaymentSummary(dayEntries) {
+function dayCountLabel(count) {
+  if (dailyTotalsOnly || eventFilter === "payment") return count === 1 ? "plată" : "plăți";
+  if (eventFilter === "update") return count === 1 ? "editare" : "editări";
+  if (eventFilter === "delete") return count === 1 ? "ștergere" : "ștergeri";
+  return "evenimente";
+}
+
+function dailyPaymentSummary(dayEntries, showDetails = false) {
   const payments = dayEntries.filter((entry) => entry.eventType === "payment" && Number(entry.amount || 0) > 0);
   const methodText = paymentMethodTotalText(payments);
   if (!payments.length) {
@@ -290,17 +321,30 @@ function dailyPaymentSummary(dayEntries) {
         <strong>${formatCurrency(total)}</strong>
       </div>
       <p class="log-meta">${escapeHtml(methodText)}</p>
-      <ul class="daily-payments">
-        ${payments
-          .map((entry) => {
-            const name = entry.data?.client || entry.data?.owner || entry.entityLabel || "Client";
-            const method = entry.method ? `, ${entry.method}` : "";
-            return `<li>${escapeHtml(timeLabel(entry.timestamp))} · <span class="person-name">${escapeHtml(name)}</span> - ${formatCurrency(entry.amount)}${escapeHtml(method)}</li>`;
-          })
-          .join("")}
-      </ul>
+      ${
+        showDetails
+          ? `<ul class="daily-payments">
+              ${payments
+                .map((entry) => {
+                  const name = entry.data?.client || entry.data?.owner || entry.entityLabel || "Client";
+                  const method = entry.method ? `, ${entry.method}` : "";
+                  return `<li>${escapeHtml(timeLabel(entry.timestamp))} · <span class="person-name">${escapeHtml(name)}</span> - ${formatCurrency(entry.amount)}${escapeHtml(method)}</li>`;
+                })
+                .join("")}
+            </ul>`
+          : ""
+      }
     </section>
   `;
+}
+
+function setEventFilter(nextFilter) {
+  eventFilter = nextFilter || "all";
+  eventFilterButtons.forEach((filterButton) => {
+    const isActive = filterButton.dataset.eventFilter === eventFilter;
+    filterButton.classList.toggle("is-active", isActive);
+    filterButton.setAttribute("aria-pressed", String(isActive));
+  });
 }
 
 function renderSummary(currentEntries) {
@@ -356,10 +400,10 @@ function renderLog() {
         <section class="day-group">
           <div class="day-heading">
             <h2>${escapeHtml(dateLabel(day))}</h2>
-            <span>${dayEntries.length} ${dailyTotalsOnly ? (dayEntries.length === 1 ? "plată" : "plăți") : "evenimente"}</span>
+            <span>${dayEntries.length} ${escapeHtml(dayCountLabel(dayEntries.length))}</span>
           </div>
+          ${dailyPaymentSummary(dayEntries, dailyTotalsOnly)}
           ${dailyTotalsOnly ? "" : `<div class="log-list">${renderDayLog(dayEntries)}</div>`}
-          ${dailyPaymentSummary(dayEntries)}
         </section>
       `
     )
@@ -424,8 +468,15 @@ async function clearActivityLog() {
 }
 
 searchInput.addEventListener("input", renderLog);
+eventFilterButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    setEventFilter(button.dataset.eventFilter);
+    renderLog();
+  });
+});
 dailyTotalsFilterButton.addEventListener("click", () => {
   dailyTotalsOnly = !dailyTotalsOnly;
+  if (dailyTotalsOnly) setEventFilter("payment");
   dailyTotalsFilterButton.setAttribute("aria-pressed", String(dailyTotalsOnly));
   renderLog();
 });

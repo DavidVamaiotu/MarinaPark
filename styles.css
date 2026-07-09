@@ -1977,6 +1977,20 @@ h3 {
   white-space: nowrap;
 }
 
+.stationing-link-create {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  color: #1f4c47;
+  background: #eef8f6;
+  border: 1px dashed #6daaa0;
+  border-radius: 8px;
+}
+
+.stationing-link-create .ghost-button {
+  justify-content: center;
+}
+
 .bar-payment-summary {
   gap: 9px;
 }

@@ -19,7 +19,13 @@
             <span>Caută</span>
             <input id="logSearch" type="search" placeholder="Client, sumă, card, șters..." />
           </label>
-          <button class="filter-button" type="button" id="dailyTotalsFilter" aria-pressed="false">Doar totaluri zilnice</button>
+          <div class="event-filters" aria-label="Filtrează jurnalul">
+            <button class="event-filter is-active" type="button" data-event-filter="all" aria-pressed="true">Toate</button>
+            <button class="event-filter" type="button" data-event-filter="payment" aria-pressed="false">Plăți</button>
+            <button class="event-filter" type="button" data-event-filter="update" aria-pressed="false">Editări</button>
+            <button class="event-filter" type="button" data-event-filter="delete" aria-pressed="false">Ștergeri</button>
+          </div>
+          <button class="filter-button" type="button" id="dailyTotalsFilter" aria-pressed="false">Totaluri</button>
           <button type="button" id="refreshLog">Reîncarcă</button>
           <button type="button" id="exportDatabase">Exportă baza de date</button>
           <button class="danger-button" type="button" id="clearActivityLog">Șterge jurnalul</button>
