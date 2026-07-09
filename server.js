@@ -1997,15 +1997,9 @@ async function fetchClientDirectory(options = {}) {
   const warnings = sources
     .filter((result) => result.status === "rejected")
     .map((result) => String(result.reason?.message || result.reason || "SQL indisponibil"));
-  if (!warnings.length) {
-    const sqlNames = new Set(sqlBookings.map((booking) => normalizeClientName(booking.guest)).filter(Boolean));
-    const unmatchedLocalReservations = reservationRows().filter((stay) => {
-      const normalizedName = normalizeClientName(stay.guest);
-      return normalizedName && !sqlNames.has(normalizedName);
-    });
-    const historyChanges = clientHistoryStore.syncReservations(unmatchedLocalReservations);
-    if (historyChanges > 0) await enqueueDatabaseBackup({ afterMutation: true });
-  }
+  const localReservations = reservationRows().filter((stay) => normalizeClientName(stay.guest));
+  const historyChanges = clientHistoryStore.syncReservations(localReservations);
+  if (historyChanges > 0) await enqueueDatabaseBackup({ afterMutation: true });
   const localClients = warnings.length
     ? reservationRows().map((stay) => ({ normalizedName: normalizeClientName(stay.guest), ...stay }))
     : clientHistoryStore.clients();

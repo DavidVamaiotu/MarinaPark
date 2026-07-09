@@ -106,7 +106,8 @@ test("client directory fuses SQL bookings with persistent unmatched local client
   assert.equal(localOnly.car, "B-01-OLD");
 
   const history = new DatabaseSync(server.historyPath, { readOnly: true });
-  assert.equal(history.prepare("SELECT COUNT(*) count FROM clients").get().count, 2);
+  assert.equal(history.prepare("SELECT COUNT(*) count FROM clients").get().count, 3);
+  assert.ok(history.prepare("SELECT data FROM clients WHERE normalized_name = ?").get("alice popescu"));
   history.close();
 
   const cleared = await request(server.url, "/api/data", {

@@ -51,13 +51,12 @@ păstrează istoricul într-un fișier SQLite separat:
 - `%APPDATA%\Marina Park\data\client-history.sqlite`
 
 La sincronizare, numele sunt comparate fără diferențe de majuscule, diacritice,
-semne sau spații multiple. Rezervările SQL au prioritate. Un client local este
-adăugat în istoricul separat și afișat în lista de import numai dacă numele lui
-nu există în bazele SQL. Detaliile locale rămân în fișier chiar dacă rezervarea
-activă este eliminată ulterior. Dacă SQL nu este disponibil, istoricul nu este
-rescris pe baza unor date incomplete. Când este selectat un client din istoricul
-local, formularul preia doar datele de identificare/contact; perioada și prețul
-rămân cele ale rezervării noi.
+semne sau spații multiple. Orice client salvat local într-o unitate este păstrat
+în istoricul separat, indiferent dacă apare și în SQL. În lista fuzionată,
+rezervările SQL au prioritate pentru același nume, ca să nu apară duplicate.
+Detaliile locale rămân în fișier chiar dacă rezervarea activă este eliminată
+ulterior. Când este selectat un client din istoricul local, formularul preia doar
+datele de identificare/contact; perioada și prețul rămân cele ale rezervării noi.
 
 Pentru o rezervare viitoare de camping, butonul de legare caută o staționare
 cu același nume normalizat și cu nopți rămase. Dacă există exact una, formularul
