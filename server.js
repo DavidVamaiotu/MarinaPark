@@ -1266,13 +1266,86 @@ function allocateProportionally(amount, balances) {
   return allocated.map((cents) => cents / 100);
 }
 
-function accommodationReceiptOutbox(stay, method, amount, config, paymentId) {
+function normalizedReceiptBarMode(value) {
+  return String(value || "").trim() === "separate" ? "separate" : "combined";
+}
+
+function reservationReceiptBarItems(stay = {}) {
+  if (!Array.isArray(stay.barItems)) return [];
+  return stay.barItems
+    .map((item, index) => {
+      const quantity = Math.max(0, receiptNumber(item.quantity));
+      const price = receiptNumber(item.price);
+      const hasSgr = item.hasSgr === true || item.hasSgr === "true" || item.hasSgr === 1;
+      const subtotal = receiptNumber(item.subtotal ?? price * quantity);
+      const sgrTotal = receiptNumber(item.sgrTotal ?? (hasSgr ? 0.5 * quantity : 0));
+      const lineTotal = receiptNumber(item.lineTotal ?? subtotal + sgrTotal);
+      return {
+        id: String(item.id || `bar-${index}`),
+        name: String(item.name || "Articol bar").trim() || "Articol bar",
+        price,
+        quantity,
+        vatRate: receiptVatRate(item.vatRate || item.vat_rate),
+        hasSgr,
+        subtotal,
+        sgrTotal,
+        lineTotal
+      };
+    })
+    .filter((item) => item.price > 0 && item.quantity > 0 && item.lineTotal > 0);
+}
+
+function reservationReceiptBarTotal(items = []) {
+  return receiptNumber(items.reduce((sum, item) => sum + receiptNumber(item.lineTotal), 0));
+}
+
+function separateAccommodationReceiptLines(stay, amount, config, options = {}) {
+  const normalizedAmount = receiptNumber(amount);
+  const vat = receiptVat(config.receiptVat);
+  const items = reservationReceiptBarItems(stay);
+  const barTotal = reservationReceiptBarTotal(items);
+  if (barTotal <= 0 || normalizedAmount <= 0) {
+    return [`S,1,______,_,__;CAZARE;${receiptAmount(normalizedAmount)};1.000;1;1;${vat};0;0;buc`];
+  }
+
+  const accommodationAmount = options.accommodationAmount == null
+    ? receiptNumber(normalizedAmount - barTotal)
+    : receiptNumber(options.accommodationAmount);
+  if (accommodationAmount < 0) throw requestError(400, "Suma pentru cazare este invalidă");
+  if (Math.abs(receiptNumber(accommodationAmount + barTotal) - normalizedAmount) > 0.001) {
+    throw requestError(400, "Totalul bonului separat nu corespunde cu suma de cazare și articolele de bar");
+  }
+
+  const lines = [];
+
+  if (accommodationAmount > 0) {
+    lines.push(`S,1,______,_,__;CAZARE;${receiptAmount(accommodationAmount)};1.000;1;1;${vat};0;0;buc`);
+  }
+
+  let sgrQuantity = 0;
+  items.forEach((item) => {
+    lines.push(`S,1,______,_,__;${cleanReceiptText(item.name)};${receiptAmount(item.price)};${receiptQuantity(item.quantity)};1;1;${item.vatRate};0;0;buc`);
+    if (item.hasSgr) sgrQuantity += item.quantity;
+  });
+  if (sgrQuantity > 0) {
+    lines.push(`S,1,______,_,__;AMBALAJ SGR;0.50;${receiptQuantity(sgrQuantity)};1;1;0%;0;0;buc`);
+  }
+
+  return lines.length
+    ? lines
+    : [`S,1,______,_,__;CAZARE;${receiptAmount(normalizedAmount)};1.000;1;1;${vat};0;0;buc`];
+}
+
+function accommodationReceiptOutbox(stay, method, amount, config, paymentId, options = {}) {
   if (method === "voucher") return { receiptDirectory: "", receiptContent: "", infoLine: "" };
   const paymentCode = method === "card" ? String(config.cardPaymentCode || "1") : String(config.cashPaymentCode || "0");
   const normalizedAmount = receiptAmount(amount);
   const vat = receiptVat(config.receiptVat);
+  const receiptLines = normalizedReceiptBarMode(options.barMode) === "separate"
+    ? separateAccommodationReceiptLines(stay, amount, config, { accommodationAmount: options.accommodationAmount })
+    : [`S,1,______,_,__;CAZARE;${normalizedAmount};1.000;1;1;${vat};0;0;buc`];
   const receiptContent = [
-    `S,1,______,_,__;CAZARE;${normalizedAmount};1.000;1;1;${vat};0;0;buc`,
+    ...receiptLines,
     `T,1,______,_,__;${paymentCode};${normalizedAmount};;;;`
   ].join(os.EOL) + os.EOL;
   const { date, time } = receiptTimestampLabel();
@@ -1429,6 +1502,8 @@ function prepareStayPayment(payload, context) {
   const first = updatedStays[0];
   const originalCustomerPrice = Math.round(currentStays.reduce((sum, stay) => sum + receiptNumber(stay.price), 0) * 100) / 100;
   const customerPriceAtPayment = Math.round(paymentStays.reduce((sum, stay) => sum + receiptNumber(stay.price), 0) * 100) / 100;
+  const receiptBarMode = !isLinked ? normalizedReceiptBarMode(payload.receiptBarMode) : "combined";
+  const receiptAccommodationAmount = receiptBarMode === "separate" ? receiptNumber(payload.receiptAccommodationAmount) : null;
   const effectivePaymentLine = ` Preț inițial client: ${money(originalCustomerPrice)} lei; plătit efectiv: ${money(amount)} lei.`;
   const activity = normalizeActivityLogEntry({
     id: `payment-${context.paymentId}`,
@@ -1454,6 +1529,8 @@ function prepareStayPayment(payload, context) {
       newPrice: customerPriceAtPayment,
       repeatPayment,
       zeroPriceMarkPaid,
+      receiptBarMode,
+      receiptAccommodationAmount,
       linkedPayment: isLinked,
       allocations: updatedStays.map((stay, index) => ({ key: stay.key, id: stay.id, outstanding: outstanding[index], allocatedAmount: allocations[index] }))
     }
@@ -1462,9 +1539,9 @@ function prepareStayPayment(payload, context) {
   return {
     entityKey: first.key,
     amount,
-    result: { type: "stay", stays: updatedStays, allocations: activity.data.allocations },
+    result: { type: "stay", stays: updatedStays, allocations: activity.data.allocations, receiptBarMode, receiptAccommodationAmount },
     activity,
-    outbox: accommodationReceiptOutbox(receiptStay, context.method, amount, context.config, context.paymentId)
+    outbox: accommodationReceiptOutbox(receiptStay, context.method, amount, context.config, context.paymentId, { barMode: receiptBarMode, accommodationAmount: receiptAccommodationAmount })
   };
 }
 

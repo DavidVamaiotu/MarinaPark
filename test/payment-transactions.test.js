@@ -79,7 +79,40 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
       { key: "stay-d", id: "D-4", guest: "Rounding", personId: "person-2", group: "room", kind: "Room", price: 1, balance: 1 },
       { key: "stay-e", id: "D-5", guest: "Rounding", personId: "person-2", group: "room", kind: "Room", price: 1, balance: 0, paid: true, settledPrice: 1, actualPaidAmount: 1 },
       { key: "stay-zero", id: "D-6", guest: "Complimentary", personId: "person-3", group: "room", kind: "Room", price: 0, balance: 0, paid: false },
-      { key: "stay-edit", id: "D-7", guest: "Edited Price", personId: "person-4", group: "room", kind: "Room", price: 100, balance: 100 }
+      { key: "stay-edit", id: "D-7", guest: "Edited Price", personId: "person-4", group: "room", kind: "Room", price: 100, balance: 100 },
+      {
+        key: "stay-bar-combined",
+        id: "D-8",
+        guest: "Bar Combined",
+        personId: "person-5",
+        group: "room",
+        kind: "Room",
+        price: 111,
+        balance: 111,
+        barItems: [{ id: "attached-water-combined", articleKey: "water", name: "Water", price: 5, quantity: 2, vatRate: 11, hasSgr: true, subtotal: 10, sgrTotal: 1, lineTotal: 11 }]
+      },
+      {
+        key: "stay-bar-separate",
+        id: "D-9",
+        guest: "Bar Separate",
+        personId: "person-6",
+        group: "room",
+        kind: "Room",
+        price: 111,
+        balance: 111,
+        barItems: [{ id: "attached-water-separate", articleKey: "water", name: "Water", price: 5, quantity: 2, vatRate: 11, hasSgr: true, subtotal: 10, sgrTotal: 1, lineTotal: 11 }]
+      },
+      {
+        key: "stay-bar-partial",
+        id: "D-10",
+        guest: "Bar Partial",
+        personId: "person-7",
+        group: "room",
+        kind: "Room",
+        price: 111,
+        balance: 111,
+        barItems: [{ id: "attached-water-partial", articleKey: "water", name: "Water", price: 5, quantity: 2, vatRate: 11, hasSgr: true, subtotal: 10, sgrTotal: 1, lineTotal: 11 }]
+      }
     ],
     units: [{ id: "D-1", group: "room", kind: "Room" }, { id: "D-2", group: "room", kind: "Room" }],
     stationing: [
@@ -163,6 +196,37 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
   assert.match(editedPriceLog.message, /Preț inițial client: 100\.00 lei; plătit efectiv: 120\.00 lei\./);
   assert.equal(editedPriceLog.data.originalCustomerPrice, 100);
   assert.equal(editedPriceLog.data.customerPriceAtPayment, 120);
+
+  const combinedAttachedBar = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({ paymentId: "stay-bar-combined-test", type: "stay", method: "card", amount: 111, stayKey: "stay-bar-combined", receiptBarMode: "combined", receiptConfig })
+  });
+  assert.equal(combinedAttachedBar.status, 200);
+  const combinedReceipt = await fs.readFile(path.join(server.receiptDir, "bon.inp"), "utf8");
+  assert.match(combinedReceipt, /CAZARE;111\.00;1\.000/);
+  assert.doesNotMatch(combinedReceipt, /Water;5\.00;2\.000/);
+
+  const separateAttachedBar = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({ paymentId: "stay-bar-separate-test", type: "stay", method: "card", amount: 111, stayKey: "stay-bar-separate", receiptBarMode: "separate", receiptAccommodationAmount: 100, receiptConfig })
+  });
+  assert.equal(separateAttachedBar.status, 200);
+  const separateReceipt = await fs.readFile(path.join(server.receiptDir, "bon.inp"), "utf8");
+  assert.match(separateReceipt, /CAZARE;100\.00;1\.000/);
+  assert.match(separateReceipt, /Water;5\.00;2\.000/);
+  assert.match(separateReceipt, /AMBALAJ SGR;0\.50;2\.000/);
+  assert.match(separateReceipt, /;1;111\.00;;;;/);
+
+  const partialSeparateBar = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({ paymentId: "stay-bar-partial-test", type: "stay", method: "card", amount: 61, stayKey: "stay-bar-partial", receiptBarMode: "separate", receiptAccommodationAmount: 50, receiptConfig })
+  });
+  assert.equal(partialSeparateBar.status, 200);
+  const partialReceipt = await fs.readFile(path.join(server.receiptDir, "bon.inp"), "utf8");
+  assert.match(partialReceipt, /CAZARE;50\.00;1\.000/);
+  assert.match(partialReceipt, /Water;5\.00;2\.000/);
+  assert.match(partialReceipt, /AMBALAJ SGR;0\.50;2\.000/);
+  assert.match(partialReceipt, /;1;61\.00;;;;/);
 
   const repeated = await request(server.url, "/api/payment", {
     method: "POST",

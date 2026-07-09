@@ -410,6 +410,7 @@ let contextStayKey = null;
 let receiptStayKey = null;
 let receiptDraft = null;
 let receiptTargetType = "stay";
+let receiptBarMode = "combined";
 let receiptPaymentInProgress = false;
 let sourceBookings = [];
 let sourceRecordsMode = activeMode;
@@ -1575,6 +1576,28 @@ function reservationBarTotal(items = []) {
   return normalizeMoneyValue(normalizeStayBarItems(items).reduce((sum, item) => sum + Number(item.lineTotal || 0), 0));
 }
 
+function receiptBarModeForDraft(draft) {
+  const barTotal = reservationBarTotal(draft?.stay?.barItems);
+  const selectedMode = receiptForm.querySelector('input[name="receiptBarMode"]:checked')?.value || receiptBarMode;
+  return draft?.isLinkedTotal || barTotal <= 0 || selectedMode !== "separate" ? "combined" : "separate";
+}
+
+function syncReceiptAmountForBarMode() {
+  if (receiptTargetType !== "stay" || !receiptDraft || receiptDraft.isLinkedTotal) return;
+  const barTotal = reservationBarTotal(receiptDraft.stay?.barItems);
+  if (barTotal <= 0) return;
+  const mode = receiptBarModeForDraft(receiptDraft);
+  const amount = normalizeMoneyValue(receiptDraft.amount);
+  if (mode === "separate") {
+    const accommodationAmount = Math.max(0, normalizeMoneyValue(amount - barTotal));
+    receiptAmountInput.value = accommodationAmount.toFixed(2);
+    receiptAmountInput.max = accommodationAmount.toFixed(2);
+  } else {
+    receiptAmountInput.value = amount.toFixed(2);
+    receiptAmountInput.removeAttribute("max");
+  }
+}
+
 function currentBookingBarTotal() {
   if (!editingStayKey) return 0;
   const stay = stays.find((item) => item.key === editingStayKey);
@@ -2342,6 +2365,7 @@ function openReceiptModal(stayKey) {
   receiptTargetType = "stay";
   receiptStayKey = stay.key;
   receiptDraft = receiptDraftForStay(stay);
+  receiptBarMode = "combined";
   const amount = receiptDraft.amount;
   const canMarkZeroPricePaid = normalizeMoneyValue(receiptDraft.stay.price) === 0 && !isStayFullyPaid(receiptDraft.stay);
   if (amount <= 0 && !canMarkZeroPricePaid) {
@@ -2355,12 +2379,30 @@ function openReceiptModal(stayKey) {
   const stationingDeductionLine = stationingDeduction && !stationingDeduction.appliedAt
     ? `<span>Nopti stationare pregatite: ${stationingDeduction.nights} ${stationingDeduction.nights === 1 ? "noapte" : "nopti"}, fara scadere din pret.</span>`
     : "";
+  const barTotal = reservationBarTotal(receiptDraft.stay.barItems);
+  const barModePrompt = barTotal > 0
+    ? `
+      <div class="receipt-bar-choice" role="radiogroup" aria-label="Cum apar articolele de bar pe bon">
+        <strong>Articole bar pe bon</strong>
+        <label>
+          <input type="radio" name="receiptBarMode" value="combined" checked />
+          <span>Adaugă valoarea la CAZARE</span>
+        </label>
+        <label>
+          <input type="radio" name="receiptBarMode" value="separate" />
+          <span>Separă barul de CAZARE</span>
+        </label>
+        <small>Bar atașat: ${formatCurrency(barTotal)}</small>
+      </div>
+    `
+    : "";
   receiptSummary.innerHTML = `
     <strong>Plata cu numerar, card sau voucher</strong>
     <span class="person-name">${receiptDraft.stay.guest}</span>
     <span>${receiptDraft.stay.id} - ${receiptDraft.stay.kind}</span>
     ${stationingDeductionLine}
     <span>Sumă bon: ${formatCurrency(amount)}</span>
+    ${barModePrompt}
   `;
   receiptAmountInput.value = amount.toFixed(2);
   receiptAmountInput.removeAttribute("max");
@@ -2380,6 +2422,7 @@ function openLinkedReceiptModal(personId) {
   readReceiptSettings({ save: false });
   receiptTargetType = "stay";
   receiptStayKey = firstStay.key;
+  receiptBarMode = "combined";
   receiptDraft = {
     amount: totalBalance,
     stay: { ...firstStay, price: totalPrice, balance: totalBalance },
@@ -2416,6 +2459,7 @@ function openStationingReceiptModal(recordKey) {
   readReceiptSettings({ save: false });
   receiptTargetType = "stationing";
   receiptStayKey = record.key;
+  receiptBarMode = "combined";
   receiptDraft = receiptDraftForStationing(record);
   const amount = receiptDraft.amount;
   if (amount <= 0) {
@@ -2444,6 +2488,7 @@ function closeReceiptModal() {
   receiptStayKey = null;
   receiptDraft = null;
   receiptTargetType = "stay";
+  receiptBarMode = "combined";
   receiptPaymentRequestId = null;
   setReceiptPaymentBusy(false);
   if (!bookingModal.classList.contains("is-open") && !stationingModal.classList.contains("is-open")) {
@@ -3289,14 +3334,22 @@ async function generateCommittedReceipt(stayKey, method) {
         ? receiptDraft
         : receiptDraftForStay(stay);
     const availableAmount = normalizeMoneyValue(draft.amount);
+    const barMode = targetType === "stay" ? receiptBarModeForDraft(draft) : "combined";
+    const separateBarTotal = barMode === "separate" ? reservationBarTotal(draft.stay?.barItems) : 0;
     const enteredAmount = receiptAmountInput.value === "" ? availableAmount : Number(receiptAmountInput.value);
+    const receiptAccommodationAmount = targetType === "stay" && barMode === "separate"
+      ? normalizeMoneyValue(enteredAmount)
+      : null;
+    const paymentAmount = receiptAccommodationAmount === null
+      ? normalizeMoneyValue(enteredAmount)
+      : normalizeMoneyValue(receiptAccommodationAmount + separateBarTotal);
     const canMarkZeroPricePaid =
       isVoucher && targetType === "stay" && normalizeMoneyValue(draft.stay.price) === 0;
-    if (!Number.isFinite(enteredAmount) || enteredAmount < 0 || (enteredAmount === 0 && !canMarkZeroPricePaid)) {
+    if (!Number.isFinite(enteredAmount) || enteredAmount < 0 || (paymentAmount === 0 && !canMarkZeroPricePaid)) {
       showToast("Suma trebuie să fie mai mare decât 0");
       return false;
     }
-    const amount = normalizeMoneyValue(enteredAmount);
+    const amount = paymentAmount;
     if (amount > availableAmount) {
       showToast("Suma depășește suma disponibilă pentru plată");
       return false;
@@ -3325,6 +3378,8 @@ async function generateCommittedReceipt(stayKey, method) {
       method,
       amount,
       receiptConfig: config,
+      receiptBarMode: targetType === "stay" ? barMode : undefined,
+      receiptAccommodationAmount: receiptAccommodationAmount ?? undefined,
       stayKey: targetType === "stay" ? stay.key : undefined,
       linkedKeys: targetType === "stay" && draft.isLinkedTotal ? draft.linkedKeys : undefined,
       draftStay: targetType === "stay" && !draft.isLinkedTotal ? draft.stay : undefined,
@@ -8020,6 +8075,11 @@ receiptForm.addEventListener("click", (event) => {
   const methodButton = event.target.closest("[data-receipt-method]");
   if (!methodButton || !receiptStayKey) return;
   generateCommittedReceipt(receiptStayKey, methodButton.dataset.receiptMethod);
+});
+
+receiptForm.addEventListener("change", (event) => {
+  if (!event.target.closest('input[name="receiptBarMode"]')) return;
+  syncReceiptAmountForBarMode();
 });
 
 unitPricingPrevButton.addEventListener("click", () => {
