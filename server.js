@@ -2062,7 +2062,7 @@ async function fetchFusedSourceBookings(mode, query = "") {
   const directory = await fetchClientDirectory();
   const bookings = directory.clients
     .map((client) => sourceBookingFromDirectoryClient(client, mode))
-    .filter((booking) => booking.group === mode);
+    .filter((booking) => booking.group === mode || booking.directorySource === "local-history");
   const filteredBookings = filteredSourceBookings(bookings, query, 300);
   return {
     ok: true,

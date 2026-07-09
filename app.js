@@ -6565,6 +6565,62 @@ function calendarDateFromPointer(event, selector, datasetKey) {
   return dayButton?.dataset?.[datasetKey] || null;
 }
 
+function elementFromEventTarget(target) {
+  return target instanceof Element ? target : target?.parentElement || null;
+}
+
+function isEditableTextControl(element) {
+  if (!element || element.disabled || element.readOnly) return false;
+  if (element instanceof HTMLTextAreaElement) return true;
+  if (element instanceof HTMLInputElement) {
+    return !["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"].includes(element.type);
+  }
+  return element.isContentEditable;
+}
+
+function editableTextControlFromTarget(target) {
+  const element = elementFromEventTarget(target);
+  const control = element?.closest?.("input, textarea, [contenteditable='true']");
+  return isEditableTextControl(control) ? control : null;
+}
+
+function focusEditableTextControl(control) {
+  if (!isEditableTextControl(control)) return;
+  window.setTimeout(() => {
+    if (!document.contains(control) || document.activeElement === control) return;
+    control.focus({ preventScroll: true });
+  }, 0);
+}
+
+function releaseTransientInteractionState(options = {}) {
+  const pointerId = options.pointerId;
+  const force = options.force === true;
+  if (dragState && (force || pointerId === undefined || pointerId !== dragState.pointerId)) {
+    completeTimelineDrag(false);
+  }
+  finishCalendarDrags();
+}
+
+function guardEditableTextFocus(event) {
+  const control = editableTextControlFromTarget(event.target);
+  if (!control) return;
+  releaseTransientInteractionState({ pointerId: event.pointerId });
+  focusEditableTextControl(control);
+}
+
+function clearStaleInteractionState(event) {
+  const target = elementFromEventTarget(event.target);
+  if (dragState) {
+    completeTimelineDrag(false);
+  }
+  if (unitPricingDrag && !target?.closest?.("#unitPricingCalendar")) {
+    finishUnitPricingDrag();
+  }
+  if (bookingCalendarDrag && !target?.closest?.("#bookingRangeCalendar")) {
+    finishBookingCalendarDrag();
+  }
+}
+
 function finishUnitPricingDrag() {
   if (unitPricingDrag?.moved) {
     suppressUnitCalendarClick = true;
@@ -7240,6 +7296,10 @@ function beginTimelineDrag(event) {
 
 function updateTimelineDrag(event) {
   if (!dragState || dragState.pointerId !== event.pointerId) return;
+  if (event.buttons !== undefined && event.buttons !== 1) {
+    completeTimelineDrag(false);
+    return;
+  }
 
   autoScrollTimelineDuringDrag(event);
   const scrollDelta = timelineShell.scrollLeft - dragState.scrollLeft;
@@ -7744,6 +7804,15 @@ sourceRecordRows.addEventListener("click", (event) => {
   sourceRecordRows.querySelectorAll("tr").forEach((item) => item.classList.toggle("is-selected", item === row));
   applySourceBooking(sourceBookings[Number(row.dataset.sourceIndex)]);
 });
+
+document.addEventListener("pointerdown", clearStaleInteractionState, true);
+document.addEventListener("pointerdown", guardEditableTextFocus, true);
+document.addEventListener("focusin", guardEditableTextFocus, true);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) releaseTransientInteractionState({ force: true });
+});
+window.addEventListener("pagehide", () => releaseTransientInteractionState({ force: true }));
+window.addEventListener("blur", () => releaseTransientInteractionState({ force: true }));
 
 guestTimeline.addEventListener("pointerdown", beginTimelineDrag);
 guestTimeline.addEventListener("lostpointercapture", cancelTimelineDrag);
