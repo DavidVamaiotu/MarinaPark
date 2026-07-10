@@ -15,3 +15,11 @@ test("clients page has a persistent per-mode identity header", () => {
   assert.match(app, /clientModeImages,\s*\n\s*roomUnitCatalogSeeded/);
   assert.match(app, /renderClientModeIdentity\(\);/);
 });
+
+test("today's free rooms use only reservations saved in the app", () => {
+  const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+
+  assert.match(app, /function availableUnitsForDate\(date\)[\s\S]*occupiedUnitKeysForDate\(date\)/);
+  assert.match(app, /Calculat din rezervările salvate în aplicație\./);
+  assert.doesNotMatch(app, /fetch\(`\/api\/availability/);
+});

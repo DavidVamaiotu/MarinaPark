@@ -427,16 +427,6 @@ let sourceBookingCandidates = [];
 let sourceBookingSearchPending = false;
 let sourceBookingSearchTimer = null;
 let sourceBookingRequestId = 0;
-const roomAvailabilityRefreshMs = 60 * 1000;
-let roomAvailabilityRequestId = 0;
-let roomAvailabilityPendingDate = "";
-let roomAvailabilitySnapshot = {
-  date: "",
-  occupiedUnitIds: new Set(),
-  sqlAvailable: false,
-  warnings: [],
-  fetchedAt: 0
-};
 let units = [];
 let facilityCatalog = defaultFacilityCatalog.map((facility) => ({ ...facility }));
 let bookingFacilityDraft = [];
@@ -4273,9 +4263,6 @@ function occupiedUnitKeysForDate(date) {
 
 function availableUnitsForDate(date) {
   const occupied = occupiedUnitKeysForDate(date);
-  if (normalizeTimelineMode(activeMode) === "room" && roomAvailabilitySnapshot.date === toISODate(date)) {
-    roomAvailabilitySnapshot.occupiedUnitIds.forEach((id) => occupied.add(unitOccupancyKey("room", id)));
-  }
 
   return units
     .filter((unit) => unitMatchesTimelineMode(unit))
@@ -4283,75 +4270,17 @@ function availableUnitsForDate(date) {
     .sort((first, second) => first.id.localeCompare(second.id, "ro-RO", { numeric: true }));
 }
 
-async function refreshRoomAvailability(date = today, options = {}) {
-  const dateText = toISODate(date);
-  const snapshotIsFresh =
-    roomAvailabilitySnapshot.date === dateText &&
-    Date.now() - roomAvailabilitySnapshot.fetchedAt < roomAvailabilityRefreshMs;
-  if (!options.force && snapshotIsFresh) return;
-  if (roomAvailabilityPendingDate === dateText) return;
-
-  const requestId = ++roomAvailabilityRequestId;
-  roomAvailabilityPendingDate = dateText;
-  try {
-    const response = await fetch(`/api/availability?date=${encodeURIComponent(dateText)}`, { cache: "no-store" });
-    const result = await response.json();
-    if (!response.ok || !result.ok) throw new Error(result.error || "Disponibilitatea nu a putut fi verificată");
-    if (requestId !== roomAvailabilityRequestId || dateText !== toISODate(today)) return;
-
-    roomAvailabilitySnapshot = {
-      date: dateText,
-      occupiedUnitIds: new Set(Array.isArray(result.occupiedUnitIds) ? result.occupiedUnitIds.map(normalizedUnitId) : []),
-      sqlAvailable: result.sqlAvailable === true,
-      warnings: Array.isArray(result.warnings) ? result.warnings : [],
-      fetchedAt: Date.now()
-    };
-  } catch (error) {
-    if (requestId !== roomAvailabilityRequestId) return;
-    roomAvailabilitySnapshot = {
-      date: dateText,
-      occupiedUnitIds: new Set(),
-      sqlAvailable: false,
-      warnings: [error.message || "Sursa rezervărilor nu este disponibilă"],
-      fetchedAt: Date.now()
-    };
-  } finally {
-    if (requestId === roomAvailabilityRequestId) {
-      roomAvailabilityPendingDate = "";
-      if (normalizeTimelineMode(activeMode) === "room") {
-        if (activePage === "clients") renderAvailableUnitsToday();
-        else markPagesDirty("clients");
-      }
-    }
-  }
-}
-
 function renderAvailableUnitsToday() {
   if (!availableUnitsToday || !availableUnitsTodayLabel || !availableUnitsTodayList) return;
 
-  const dateText = toISODate(today);
-  const roomMode = normalizeTimelineMode(activeMode) === "room";
-  const hasRemoteRoomSnapshot = roomAvailabilitySnapshot.date === dateText && roomAvailabilitySnapshot.fetchedAt > 0;
-
-  if (roomMode && !hasRemoteRoomSnapshot) {
-    availableUnitsTodayLabel.textContent = "Se verifică disponibilitatea";
-    availableUnitsToday.setAttribute("aria-label", "Se verifică disponibilitatea camerelor pentru astăzi");
-    availableUnitsTodayList.innerHTML = `<span class="available-units-empty">Se verifică...</span>`;
-    refreshRoomAvailability(today);
-    return;
-  }
-
   const availableUnits = availableUnitsForDate(today);
-  const localOnly = roomMode && !roomAvailabilitySnapshot.sqlAvailable;
 
-  availableUnitsTodayLabel.textContent = `Libere azi · ${availableUnits.length}${localOnly ? " · local" : ""}`;
+  availableUnitsTodayLabel.textContent = `Libere azi · ${availableUnits.length}`;
   availableUnitsToday.setAttribute(
     "aria-label",
-    `${availableUnits.length} ${timelineModeLabel(activeMode)} libere astăzi${localOnly ? ", calcul bazat doar pe datele locale" : ""}`
+    `${availableUnits.length} ${timelineModeLabel(activeMode)} libere astăzi`
   );
-  availableUnitsToday.title = localOnly
-    ? "Sursa rezervărilor online nu este disponibilă; lista folosește doar datele locale."
-    : "Verificat cu rezervările locale și sursa online.";
+  availableUnitsToday.title = "Calculat din rezervările salvate în aplicație.";
   availableUnitsTodayList.innerHTML = availableUnits.length
     ? availableUnits
         .map(
@@ -4360,10 +4289,6 @@ function renderAvailableUnitsToday() {
         )
         .join("")
     : `<span class="available-units-empty">Niciuna</span>`;
-
-  if (roomMode && Date.now() - roomAvailabilitySnapshot.fetchedAt >= roomAvailabilityRefreshMs) {
-    refreshRoomAvailability(today, { force: true });
-  }
 }
 
 function visibleClientStays() {
@@ -8059,12 +7984,6 @@ window.addEventListener("resize", () => {
   window.clearTimeout(updateTimelineDayWidth.resizeTimer);
   updateTimelineDayWidth.resizeTimer = window.setTimeout(() => setVisibleMonth(visibleMonth), 120);
 });
-window.setInterval(() => {
-  refreshTodayIfNeeded();
-  if (activePage === "clients" && normalizeTimelineMode(activeMode) === "room") {
-    refreshRoomAvailability(today, { force: true });
-  }
-}, roomAvailabilityRefreshMs);
 bookingForm.elements.kind.addEventListener("change", () => {
   renderUnitSelect();
   syncKindFromSelectedUnit();
