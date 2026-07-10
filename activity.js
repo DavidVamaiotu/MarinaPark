@@ -440,8 +440,14 @@ function exportDatabase() {
 }
 
 async function clearActivityLog() {
-  const confirmation = window.prompt(
-    "Această acțiune șterge doar jurnalul de activitate. Clienții și articolele de bar rămân în baza de date. Scrie exact STERGE LOG pentru confirmare."
+  const confirmation = await window.appDialog.prompt(
+    "Această acțiune șterge doar jurnalul de activitate. Clienții și articolele de bar rămân în baza de date. Scrie exact STERGE LOG pentru confirmare.",
+    {
+      title: "Ștergere jurnal",
+      confirmLabel: "Continuă",
+      inputLabel: "Scrie STERGE LOG",
+      danger: true
+    }
   );
   if (confirmation !== "STERGE LOG") return;
 
@@ -459,9 +465,12 @@ async function clearActivityLog() {
     localStorage.removeItem(activityLogStorageKey);
     entries = [];
     renderLog();
-    window.alert("Jurnalul de activitate a fost șters. Clienții și articolele de bar au rămas neschimbate.");
+    await window.appDialog.alert("Jurnalul de activitate a fost șters. Clienții și articolele de bar au rămas neschimbate.");
   } catch (error) {
-    window.alert(error.message || "Nu am putut șterge jurnalul de activitate");
+    await window.appDialog.alert(error.message || "Nu am putut șterge jurnalul de activitate", {
+      title: "Eroare",
+      danger: true
+    });
   } finally {
     clearActivityLogButton.disabled = false;
   }

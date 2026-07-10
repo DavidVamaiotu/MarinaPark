@@ -31,6 +31,8 @@ $ReleaseFiles = @(
   "activity.js",
   "assets\marina-park-logo.png",
   "app.js",
+  "app-dialog.css",
+  "app-dialog.js",
   "fonts\OFL.txt",
   "fonts\Rubik-Variable.ttf",
   "index.html",

@@ -14,6 +14,8 @@ files:
   - client-directory.js
   - server.js
   - app.js
+  - app-dialog.js
+  - app-dialog.css
   - index.html
   - styles.css
   - activity.js

@@ -55,6 +55,7 @@ if (clientHistoryDatabasePath === databasePath) {
 const clientHistoryStore = new ClientHistoryStore(clientHistoryDatabasePath);
 const clientDirectoryCacheMs = 60 * 1000;
 let clientDirectoryCache = null;
+let roomAvailabilityCache = null;
 db.exec(`
   PRAGMA journal_mode = WAL;
   CREATE TABLE IF NOT EXISTS reservations (
@@ -2147,6 +2148,49 @@ async function fetchFusedSourceBookings(mode, query = "") {
   };
 }
 
+function normalizedAvailabilityDate(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return localISODate();
+  const [year, month, day] = text.split("-").map(Number);
+  const parsed = new Date(year, month - 1, day);
+  return localISODate(parsed) === text ? text : localISODate();
+}
+
+function sourceBookingOccupiesDate(booking, dateText) {
+  return Boolean(booking?.start && booking?.end && booking.start <= dateText && booking.end > dateText);
+}
+
+async function fetchRoomAvailability(dateValue) {
+  const date = normalizedAvailabilityDate(dateValue);
+  const now = Date.now();
+  if (roomAvailabilityCache?.date === date && roomAvailabilityCache.expiresAt > now) {
+    return roomAvailabilityCache.result;
+  }
+
+  let result;
+  try {
+    const bookings = await fetchSourceBookings("room", "", { all: true, limit: 50000 });
+    const occupiedUnitIds = [...new Set(
+      bookings
+        .filter((booking) => sourceBookingOccupiesDate(booking, date))
+        .map((booking) => String(booking.unitHint || "").trim())
+        .filter(Boolean)
+    )].sort((first, second) => first.localeCompare(second, "ro-RO", { numeric: true }));
+    result = { ok: true, date, occupiedUnitIds, sqlAvailable: true, warnings: [] };
+  } catch (error) {
+    result = {
+      ok: true,
+      date,
+      occupiedUnitIds: [],
+      sqlAvailable: false,
+      warnings: [String(error?.message || error || "Sursa rezervărilor nu este disponibilă")]
+    };
+  }
+
+  roomAvailabilityCache = { date, expiresAt: now + clientDirectoryCacheMs, result };
+  return result;
+}
+
 function pickReceiptDirectory() {
   const script = `
 Add-Type -AssemblyName System.Windows.Forms
@@ -2191,6 +2235,8 @@ const lanLogPaths = new Set([
   "/activity.html",
   "/activity.css",
   "/activity.js",
+  "/app-dialog.css",
+  "/app-dialog.js",
   "/assets/marina-park-logo.png",
   "/fonts/Rubik-Variable.ttf",
   "/api/log"
@@ -2306,6 +2352,12 @@ const server = http.createServer(async (request, response) => {
         "Content-Disposition": `attachment; filename="${result.filename}"`
       });
       response.end(result.xml);
+      return;
+    }
+
+    if (request.url.startsWith("/api/availability") && request.method === "GET") {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      send(response, 200, JSON.stringify(await fetchRoomAvailability(url.searchParams.get("date"))));
       return;
     }
 

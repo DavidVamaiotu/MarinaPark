@@ -223,6 +223,8 @@ let activeMode = "room";
 let activePage = "calendar";
 let searchTerm = "";
 let sidebarCollapsed = localStorage.getItem("marinaParkSidebarCollapsed") === "true";
+const clientModeImagesStorageKey = "marinaParkClientModeImages";
+let clientModeImages = loadClientModeImagesFromLocalStorage();
 let stationing = [];
 let barArticles = [];
 let barCart = [];
@@ -280,6 +282,12 @@ const prevMonthButton = document.querySelector("#prevMonth");
 const nextMonthButton = document.querySelector("#nextMonth");
 const currentMonthButton = document.querySelector("#currentMonth");
 const reservationCards = document.querySelector("#reservationCards");
+const clientModeIdentity = document.querySelector("#clientModeIdentity");
+const clientModeLabel = document.querySelector("#clientModeLabel");
+const clientModeImageButton = document.querySelector("#clientModeImageButton");
+const clientModeImagePreview = document.querySelector("#clientModeImagePreview");
+const clientModeImagePlaceholder = document.querySelector("#clientModeImagePlaceholder");
+const clientModeImageInput = document.querySelector("#clientModeImageInput");
 const availableUnitsToday = document.querySelector("#availableUnitsToday");
 const availableUnitsTodayLabel = document.querySelector("#availableUnitsTodayLabel");
 const availableUnitsTodayList = document.querySelector("#availableUnitsTodayList");
@@ -419,6 +427,16 @@ let sourceBookingCandidates = [];
 let sourceBookingSearchPending = false;
 let sourceBookingSearchTimer = null;
 let sourceBookingRequestId = 0;
+const roomAvailabilityRefreshMs = 60 * 1000;
+let roomAvailabilityRequestId = 0;
+let roomAvailabilityPendingDate = "";
+let roomAvailabilitySnapshot = {
+  date: "",
+  occupiedUnitIds: new Set(),
+  sqlAvailable: false,
+  warnings: [],
+  fetchedAt: 0
+};
 let units = [];
 let facilityCatalog = defaultFacilityCatalog.map((facility) => ({ ...facility }));
 let bookingFacilityDraft = [];
@@ -823,6 +841,93 @@ function unitTypeLabel(mode = activeMode) {
   return "Camere";
 }
 
+function normalizeClientModeImages(images) {
+  if (!images || typeof images !== "object" || Array.isArray(images)) return {};
+  const normalized = {};
+  ["room", "tent", "rv"].forEach((mode) => {
+    const value = String(images[mode] || "");
+    if (/^data:image\/(?:jpeg|png|webp);base64,/i.test(value) && value.length <= 1_500_000) {
+      normalized[mode] = value;
+    }
+  });
+  return normalized;
+}
+
+function loadClientModeImagesFromLocalStorage() {
+  try {
+    return normalizeClientModeImages(JSON.parse(localStorage.getItem(clientModeImagesStorageKey) || "{}"));
+  } catch {
+    return {};
+  }
+}
+
+function cacheClientModeImages() {
+  try {
+    localStorage.setItem(clientModeImagesStorageKey, JSON.stringify(clientModeImages));
+  } catch {
+    // The database-backed config remains the durable copy when local storage is unavailable.
+  }
+}
+
+function renderClientModeIdentity() {
+  if (!clientModeIdentity) return;
+  const mode = normalizeTimelineMode(activeMode);
+  const label = unitTypeLabel(mode);
+  const image = clientModeImages[mode] || "";
+  const imageActionLabel = image ? "Schimbă imaginea" : "Adaugă imagine";
+
+  clientModeIdentity.dataset.mode = mode;
+  clientModeLabel.textContent = label;
+  clientModeImagePreview.src = image;
+  clientModeImagePreview.alt = image ? `Imagine pentru ${label}` : "";
+  clientModeImagePreview.hidden = !image;
+  clientModeImagePlaceholder.hidden = Boolean(image);
+  clientModeImageButton.setAttribute("aria-label", `${imageActionLabel} pentru ${label}`);
+}
+
+function decodeClientModeImage(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Imaginea nu a putut fi deschisă"));
+    };
+    image.src = objectUrl;
+  });
+}
+
+async function compactClientModeImage(file) {
+  if (!file?.type?.startsWith("image/")) throw new Error("Alege un fișier imagine");
+  if (file.size > 25 * 1024 * 1024) throw new Error("Imaginea este prea mare");
+
+  const image = await decodeClientModeImage(file);
+  const maxWidth = 960;
+  const maxHeight = 600;
+  const scale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Imaginea nu a putut fi procesată");
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  let dataUrl = canvas.toDataURL("image/webp", 0.82);
+  if (dataUrl.length > 1_500_000) dataUrl = canvas.toDataURL("image/webp", 0.65);
+  if (dataUrl.length > 1_500_000) throw new Error("Imaginea este prea complexă; alege una mai mică");
+  return dataUrl;
+}
+
+function persistClientModeImages() {
+  clientModeImages = normalizeClientModeImages(clientModeImages);
+  cacheClientModeImages();
+  queueFileSave();
+}
+
 function defaultKindForMode(mode = activeMode) {
   const normalized = normalizeTimelineMode(mode);
   if (normalized === "tent") return "Campare cort";
@@ -858,6 +963,7 @@ function updateModeSwitchUi() {
       button.setAttribute("aria-checked", String(isActive));
     });
   });
+  renderClientModeIdentity();
 }
 
 function updateSourceModeSwitchUi() {
@@ -2079,6 +2185,14 @@ async function loadFileBackedData() {
       updateModeSwitchUi();
     }
 
+    if (data.config?.clientModeImages) {
+      clientModeImages = normalizeClientModeImages(data.config.clientModeImages);
+      cacheClientModeImages();
+      renderClientModeIdentity();
+    } else if (Object.keys(clientModeImages).length) {
+      queueFileSave();
+    }
+
     receiptConfig = {
       ...receiptConfig,
       ...(data.config?.receiptConfig || {})
@@ -2165,6 +2279,7 @@ function configSnapshot() {
     receiptConfig,
     sagaExportConfig,
     facilityCatalog,
+    clientModeImages,
     roomUnitCatalogSeeded: true
   };
 }
@@ -2921,13 +3036,17 @@ function renderUnitList() {
   refreshIcons();
 }
 
-function deleteUnit(unitId) {
+async function deleteUnit(unitId) {
   const usage = unitUsageCount(unitId);
   if (usage > 0) {
     showToast(`Unitatea ${unitId} are ${usage} rezervări. Mută sau șterge rezervările înainte.`);
     return;
   }
-  const confirmed = window.confirm(`Ștergi unitatea ${unitId}?`);
+  const confirmed = await window.appDialog.confirm(`Ștergi unitatea ${unitId}?`, {
+    title: "Ștergere unitate",
+    confirmLabel: "Șterge",
+    danger: true
+  });
   if (!confirmed) return;
 
   const deletedUnit = units.find((unit) => unit.id === unitId);
@@ -2982,8 +3101,9 @@ async function applyStationingDeductionForStay(stay, options = {}) {
 
   const nights = Math.min(remainingDeductibleNights, Math.max(1, Number(deduction.nights || stayDetails(stay).nights || 1)));
   if (options.ask !== false) {
-    const confirmed = window.confirm(
-      `Inregistrezi ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationarea pentru ${stationingRecordLabel(record)}?`
+    const confirmed = await window.appDialog.confirm(
+      `Inregistrezi ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationarea pentru ${stationingRecordLabel(record)}?`,
+      { title: "Confirmare staționare", confirmLabel: "Înregistrează" }
     );
     if (!confirmed) return null;
   }
@@ -4128,26 +4248,110 @@ async function checkGoogleReviews() {
   }
 }
 
+function normalizedUnitId(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("ro-RO");
+}
+
+function unitOccupancyKey(group, id) {
+  return `${groupForMode(group)}:${normalizedUnitId(id)}`;
+}
+
+function stayOccupiesDate(stay, date) {
+  if (!stay || stay.guest === "Disponibil") return false;
+  const start = stayStartDate(stay);
+  const end = stayEndDate(stay);
+  return Boolean(start && end && start <= date && end > date);
+}
+
+function occupiedUnitKeysForDate(date) {
+  const occupied = new Set();
+  stays.forEach((stay) => {
+    if (stayOccupiesDate(stay, date)) occupied.add(unitOccupancyKey(stay.group, stay.id));
+  });
+  return occupied;
+}
+
+function availableUnitsForDate(date) {
+  const occupied = occupiedUnitKeysForDate(date);
+  if (normalizeTimelineMode(activeMode) === "room" && roomAvailabilitySnapshot.date === toISODate(date)) {
+    roomAvailabilitySnapshot.occupiedUnitIds.forEach((id) => occupied.add(unitOccupancyKey("room", id)));
+  }
+
+  return units
+    .filter((unit) => unitMatchesTimelineMode(unit))
+    .filter((unit) => !occupied.has(unitOccupancyKey(unit.group, unit.id)))
+    .sort((first, second) => first.id.localeCompare(second.id, "ro-RO", { numeric: true }));
+}
+
+async function refreshRoomAvailability(date = today, options = {}) {
+  const dateText = toISODate(date);
+  const snapshotIsFresh =
+    roomAvailabilitySnapshot.date === dateText &&
+    Date.now() - roomAvailabilitySnapshot.fetchedAt < roomAvailabilityRefreshMs;
+  if (!options.force && snapshotIsFresh) return;
+  if (roomAvailabilityPendingDate === dateText) return;
+
+  const requestId = ++roomAvailabilityRequestId;
+  roomAvailabilityPendingDate = dateText;
+  try {
+    const response = await fetch(`/api/availability?date=${encodeURIComponent(dateText)}`, { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || "Disponibilitatea nu a putut fi verificată");
+    if (requestId !== roomAvailabilityRequestId || dateText !== toISODate(today)) return;
+
+    roomAvailabilitySnapshot = {
+      date: dateText,
+      occupiedUnitIds: new Set(Array.isArray(result.occupiedUnitIds) ? result.occupiedUnitIds.map(normalizedUnitId) : []),
+      sqlAvailable: result.sqlAvailable === true,
+      warnings: Array.isArray(result.warnings) ? result.warnings : [],
+      fetchedAt: Date.now()
+    };
+  } catch (error) {
+    if (requestId !== roomAvailabilityRequestId) return;
+    roomAvailabilitySnapshot = {
+      date: dateText,
+      occupiedUnitIds: new Set(),
+      sqlAvailable: false,
+      warnings: [error.message || "Sursa rezervărilor nu este disponibilă"],
+      fetchedAt: Date.now()
+    };
+  } finally {
+    if (requestId === roomAvailabilityRequestId) {
+      roomAvailabilityPendingDate = "";
+      if (normalizeTimelineMode(activeMode) === "room") {
+        if (activePage === "clients") renderAvailableUnitsToday();
+        else markPagesDirty("clients");
+      }
+    }
+  }
+}
+
 function renderAvailableUnitsToday() {
   if (!availableUnitsToday || !availableUnitsTodayLabel || !availableUnitsTodayList) return;
 
-  const availableUnits = unitOptions()
-    .filter((unit) => unitMatchesTimelineMode(unit))
-    .filter((unit) =>
-      !stays.some((stay) => {
-        if (stay.guest === "Disponibil" || stay.id !== unit.id || stay.group !== unit.group) return false;
-        const start = stayStartDate(stay);
-        const end = stayEndDate(stay);
-        return Boolean(start && end && start <= today && end > today);
-      })
-    )
-    .sort((first, second) => first.id.localeCompare(second.id, "ro-RO", { numeric: true }));
+  const dateText = toISODate(today);
+  const roomMode = normalizeTimelineMode(activeMode) === "room";
+  const hasRemoteRoomSnapshot = roomAvailabilitySnapshot.date === dateText && roomAvailabilitySnapshot.fetchedAt > 0;
 
-  availableUnitsTodayLabel.textContent = `Libere azi · ${availableUnits.length}`;
+  if (roomMode && !hasRemoteRoomSnapshot) {
+    availableUnitsTodayLabel.textContent = "Se verifică disponibilitatea";
+    availableUnitsToday.setAttribute("aria-label", "Se verifică disponibilitatea camerelor pentru astăzi");
+    availableUnitsTodayList.innerHTML = `<span class="available-units-empty">Se verifică...</span>`;
+    refreshRoomAvailability(today);
+    return;
+  }
+
+  const availableUnits = availableUnitsForDate(today);
+  const localOnly = roomMode && !roomAvailabilitySnapshot.sqlAvailable;
+
+  availableUnitsTodayLabel.textContent = `Libere azi · ${availableUnits.length}${localOnly ? " · local" : ""}`;
   availableUnitsToday.setAttribute(
     "aria-label",
-    `${availableUnits.length} ${timelineModeLabel(activeMode)} libere astăzi`
+    `${availableUnits.length} ${timelineModeLabel(activeMode)} libere astăzi${localOnly ? ", calcul bazat doar pe datele locale" : ""}`
   );
+  availableUnitsToday.title = localOnly
+    ? "Sursa rezervărilor online nu este disponibilă; lista folosește doar datele locale."
+    : "Verificat cu rezervările locale și sursa online.";
   availableUnitsTodayList.innerHTML = availableUnits.length
     ? availableUnits
         .map(
@@ -4156,6 +4360,10 @@ function renderAvailableUnitsToday() {
         )
         .join("")
     : `<span class="available-units-empty">Niciuna</span>`;
+
+  if (roomMode && Date.now() - roomAvailabilitySnapshot.fetchedAt >= roomAvailabilityRefreshMs) {
+    refreshRoomAvailability(today, { force: true });
+  }
 }
 
 function visibleClientStays() {
@@ -4188,6 +4396,7 @@ function visibleClientStays() {
 
 function renderReservations() {
   disconnectReservationAutoLoad();
+  renderClientModeIdentity();
   renderAvailableUnitsToday();
   const visible = visibleClientStays();
 
@@ -4724,10 +4933,14 @@ function saveBarArticleFromForm() {
   return true;
 }
 
-function deleteBarArticle() {
+async function deleteBarArticle() {
   const article = editingBarArticleKey ? barArticleByKey(editingBarArticleKey) : null;
   if (!article) return false;
-  const confirmed = window.confirm(`Ștergi articolul ${article.name}?`);
+  const confirmed = await window.appDialog.confirm(`Ștergi articolul ${article.name}?`, {
+    title: "Ștergere articol",
+    confirmLabel: "Șterge",
+    danger: true
+  });
   if (!confirmed) return false;
 
   barArticles = barArticles.filter((item) => item.key !== article.key);
@@ -5476,10 +5689,14 @@ function saveStationingRecord(record) {
   return normalized;
 }
 
-function deleteStationing(recordKey) {
+async function deleteStationing(recordKey) {
   const record = stationing.find((item) => item.key === recordKey);
   if (!record) return false;
-  const confirmed = window.confirm(`Ștergi staționarea pentru ${record.owner}?`);
+  const confirmed = await window.appDialog.confirm(`Ștergi staționarea pentru ${record.owner}?`, {
+    title: "Ștergere staționare",
+    confirmLabel: "Șterge",
+    danger: true
+  });
   if (!confirmed) return false;
 
   stationing = stationing.filter((item) => item.key !== recordKey);
@@ -6221,12 +6438,13 @@ function renderBookingStationingLink() {
   refreshIcons(bookingStationingLinkSection);
 }
 
-function selectBookingStationingDeduction(recordKey) {
+async function selectBookingStationingDeduction(recordKey) {
   const record = stationing.find((item) => item.key === recordKey);
   if (!record) return;
   const nights = bookingDeductionNights();
-  const confirmed = window.confirm(
-    `Folosesti ${stationingRecordLabel(record)} pentru a inregistra ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationare?`
+  const confirmed = await window.appDialog.confirm(
+    `Folosesti ${stationingRecordLabel(record)} pentru a inregistra ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationare?`,
+    { title: "Confirmare staționare", confirmLabel: "Folosește" }
   );
   if (!confirmed) return;
   bookingStationingDeductionDraft = normalizeStayStationingDeduction({
@@ -7045,13 +7263,17 @@ function availablePlaceholderFor(stay) {
   };
 }
 
-function deleteClient(stayKey) {
+async function deleteClient(stayKey) {
   const stayIndex = stays.findIndex((stay) => stay.key === stayKey);
   if (stayIndex < 0) return false;
 
   const stay = stays[stayIndex];
   if (stay.guest === "Disponibil") return false;
-  const confirmed = window.confirm(`Ștergi clientul ${stay.guest}?`);
+  const confirmed = await window.appDialog.confirm(`Ștergi clientul ${stay.guest}?`, {
+    title: "Ștergere client",
+    confirmLabel: "Șterge",
+    danger: true
+  });
   if (!confirmed) return false;
 
   stays.splice(stayIndex, 1);
@@ -7575,6 +7797,27 @@ window.setActivePage = setActivePage;
   });
 });
 
+clientModeImageButton?.addEventListener("click", () => clientModeImageInput?.click());
+
+clientModeImageInput?.addEventListener("change", async () => {
+  const file = clientModeImageInput.files?.[0];
+  if (!file) return;
+  const mode = normalizeTimelineMode(activeMode);
+  try {
+    clientModeImageInput.disabled = true;
+    clientModeImages[mode] = await compactClientModeImage(file);
+    persistClientModeImages();
+    renderClientModeIdentity();
+    showToast(`Imaginea pentru ${unitTypeLabel(mode)} a fost salvată`);
+  } catch (error) {
+    showToast(error.message || "Imaginea nu a putut fi salvată");
+  } finally {
+    clientModeImageInput.disabled = false;
+    clientModeImageInput.value = "";
+  }
+});
+
+
 function setVisibleMonth(month, options = {}) {
   const targetMonth = monthStart(month);
   const targetMonthTime = targetMonth.getTime();
@@ -7816,7 +8059,12 @@ window.addEventListener("resize", () => {
   window.clearTimeout(updateTimelineDayWidth.resizeTimer);
   updateTimelineDayWidth.resizeTimer = window.setTimeout(() => setVisibleMonth(visibleMonth), 120);
 });
-window.setInterval(refreshTodayIfNeeded, 60000);
+window.setInterval(() => {
+  refreshTodayIfNeeded();
+  if (activePage === "clients" && normalizeTimelineMode(activeMode) === "room") {
+    refreshRoomAvailability(today, { force: true });
+  }
+}, roomAvailabilityRefreshMs);
 bookingForm.elements.kind.addEventListener("change", () => {
   renderUnitSelect();
   syncKindFromSelectedUnit();

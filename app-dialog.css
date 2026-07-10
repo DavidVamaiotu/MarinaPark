@@ -1,0 +1,99 @@
+.app-dialog {
+  width: min(440px, calc(100% - 32px));
+  max-width: none;
+  padding: 0;
+  color: #18201e;
+  background: transparent;
+  border: 0;
+}
+
+.app-dialog::backdrop {
+  background: rgba(18, 28, 25, 0.48);
+}
+
+.app-dialog-card {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  background: #ffffff;
+  border: 1px solid #dfe4e1;
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(18, 28, 25, 0.22);
+}
+
+.app-dialog-card h2,
+.app-dialog-card p {
+  margin: 0;
+}
+
+.app-dialog-card h2 {
+  font-size: 20px;
+}
+
+.app-dialog-card p {
+  color: #55615d;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.app-dialog-input {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  color: #18201e;
+  background: #ffffff;
+  border: 1px solid #cfd7d3;
+  border-radius: 6px;
+  outline: none;
+}
+
+.app-dialog-input:focus {
+  border-color: #246b58;
+  box-shadow: 0 0 0 3px rgba(36, 107, 88, 0.14);
+}
+
+.app-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.app-dialog-actions button {
+  min-height: 40px;
+  padding: 8px 15px;
+  font: inherit;
+  font-weight: 650;
+  border: 1px solid #d6ddda;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.app-dialog-cancel {
+  color: #34413d;
+  background: #ffffff;
+}
+
+.app-dialog-confirm {
+  color: #ffffff;
+  background: #246b58;
+  border-color: #246b58 !important;
+}
+
+.app-dialog-confirm.is-danger {
+  background: #b44545;
+  border-color: #b44545 !important;
+}
+
+@media (max-width: 520px) {
+  .app-dialog-card {
+    padding: 18px;
+  }
+
+  .app-dialog-actions {
+    flex-direction: column-reverse;
+  }
+
+  .app-dialog-actions button {
+    width: 100%;
+  }
+}

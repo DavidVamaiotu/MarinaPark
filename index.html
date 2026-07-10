@@ -6,6 +6,7 @@
     <title>Administrare clienți Marina Park</title>
     <link rel="icon" href="assets/marina-park-logo.png" type="image/png" />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="app-dialog.css" />
   </head>
   <body data-mode="room">
     <div class="app-shell" id="appShell">
@@ -328,9 +329,16 @@
         <section class="details-grid page-section" data-page-section="clients" hidden>
           <section class="panel" id="reservations-section" aria-labelledby="reservationsTitle">
             <div class="section-header">
-              <div>
-                <p class="eyebrow">Registru clienți</p>
-                <h2 id="reservationsTitle">Clienți</h2>
+              <div class="client-mode-identity" id="clientModeIdentity" data-mode="room">
+                <h2 id="reservationsTitle">Clienți · <strong id="clientModeLabel">Camere</strong></h2>
+                <button class="client-mode-image-picker" id="clientModeImageButton" type="button" aria-label="Adaugă imagine pentru Camere">
+                  <img id="clientModeImagePreview" alt="" hidden />
+                  <span id="clientModeImagePlaceholder">
+                    <i data-lucide="image-plus" aria-hidden="true"></i>
+                    <small>Imagine</small>
+                  </span>
+                </button>
+                <input id="clientModeImageInput" type="file" accept="image/*" hidden />
               </div>
               <div class="clients-header-tools">
                 <div class="available-units-today" id="availableUnitsToday" aria-live="polite">
@@ -1017,6 +1025,7 @@
     </div>
 
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script src="app-dialog.js"></script>
     <script src="app.js?v=unit-type-segments-20260518"></script>
   </body>
 </html>
