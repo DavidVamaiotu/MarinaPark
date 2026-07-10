@@ -27,7 +27,8 @@ async function startFixtureServer() {
       { guest: "SQL Only", phone: "0711", group: "room", kind: "Camere", source: "camere", start: "2026-08-04", end: "2026-08-06", price: 600 }
     ],
     camping: [
-      { guest: "Camp Guest", phone: "0722", group: "camping", kind: "Camping", source: "camping", start: "2026-08-07", end: "2026-08-09", price: 200 }
+      { guest: "Tent Guest", phone: "0722", group: "camping", mode: "tent", kind: "Camping", source: "camping", start: "2026-08-07", end: "2026-08-09", price: 200 },
+      { guest: "RV Guest", phone: "0723", group: "camping", mode: "rv", kind: "Camping rulotă", source: "camping", start: "2026-08-10", end: "2026-08-12", price: 300 }
     ]
   }));
 
@@ -95,9 +96,9 @@ test("client directory fuses SQL bookings with persistent unmatched local client
   const fused = await request(server.url, "/api/client-directory");
   assert.equal(fused.status, 200);
   assert.equal(fused.body.sqlAvailable, true);
-  assert.equal(fused.body.sources.sql, 3);
+  assert.equal(fused.body.sources.sql, 4);
   assert.equal(fused.body.sources.local, 2);
-  assert.equal(fused.body.clients.length, 5);
+  assert.equal(fused.body.clients.length, 6);
   assert.equal(fused.body.clients.filter((client) => client.normalizedName === "alice popescu").length, 1);
   assert.equal(fused.body.clients.find((client) => client.normalizedName === "alice popescu").directorySource, "sql");
   const localOnly = fused.body.clients.find((client) => client.normalizedName === "local only");
@@ -137,7 +138,7 @@ test("client directory fuses SQL bookings with persistent unmatched local client
   assert.equal(localSourceClient.car, "B-01-OLD");
   assert.equal(localSourceClient.price, 0);
 
-  const roomLocalFromCampingSearch = await request(server.url, "/api/source-bookings?mode=camping&query=Local%20Only");
+  const roomLocalFromCampingSearch = await request(server.url, "/api/source-bookings?mode=tent&query=Local%20Only");
   assert.equal(roomLocalFromCampingSearch.status, 200);
   assert.ok(roomLocalFromCampingSearch.body.bookings.some((booking) => booking.guest === "Local Only" && booking.directorySource === "local-history"));
 
@@ -145,7 +146,28 @@ test("client directory fuses SQL bookings with persistent unmatched local client
   assert.equal(campingLocalFromRoomSearch.status, 200);
   assert.ok(campingLocalFromRoomSearch.body.bookings.some((booking) => booking.guest === "Camp Local" && booking.directorySource === "local-history"));
 
+  const tentSources = await request(server.url, "/api/source-bookings?mode=tent");
+  assert.equal(tentSources.status, 200);
+  assert.ok(tentSources.body.bookings.some((booking) => booking.guest === "Tent Guest" && booking.directorySource === "sql"));
+  assert.ok(!tentSources.body.bookings.some((booking) => booking.guest === "RV Guest" && booking.directorySource === "sql"));
+  assert.ok(tentSources.body.bookings.some((booking) => booking.guest === "Local Only" && booking.directorySource === "local-history"));
+  assert.ok(tentSources.body.bookings.some((booking) => booking.guest === "Camp Local" && booking.directorySource === "local-history"));
+  assert.ok(tentSources.body.bookings.some((booking) => booking.guest === "Alice Popescu" && booking.directorySource === "local-history"));
+
+  const rvSources = await request(server.url, "/api/source-bookings?mode=rv");
+  assert.equal(rvSources.status, 200);
+  assert.ok(rvSources.body.bookings.some((booking) => booking.guest === "RV Guest" && booking.directorySource === "sql"));
+  assert.ok(!rvSources.body.bookings.some((booking) => booking.guest === "Tent Guest" && booking.directorySource === "sql"));
+  assert.ok(rvSources.body.bookings.some((booking) => booking.guest === "Local Only" && booking.directorySource === "local-history"));
+  assert.ok(rvSources.body.bookings.some((booking) => booking.guest === "Camp Local" && booking.directorySource === "local-history"));
+  assert.ok(rvSources.body.bookings.some((booking) => booking.guest === "Alice Popescu" && booking.directorySource === "local-history"));
+
   const sqlSourceSearch = await request(server.url, "/api/source-bookings?mode=room&query=Alice");
   assert.equal(sqlSourceSearch.status, 200);
   assert.ok(sqlSourceSearch.body.bookings.some((booking) => booking.normalizedName === "alice popescu" && booking.directorySource === "sql"));
+  assert.ok(!sqlSourceSearch.body.bookings.some((booking) => booking.normalizedName === "alice popescu" && booking.directorySource === "local-history"));
+
+  const roomSources = await request(server.url, "/api/source-bookings?mode=room");
+  assert.ok(roomSources.body.bookings.some((booking) => booking.guest === "Local Only" && booking.directorySource === "local-history"));
+  assert.ok(roomSources.body.bookings.some((booking) => booking.guest === "Camp Local" && booking.directorySource === "local-history"));
 });

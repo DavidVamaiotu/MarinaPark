@@ -23,3 +23,11 @@ test("today's free rooms use only reservations saved in the app", () => {
   assert.match(app, /Calculat din rezervările salvate în aplicație\./);
   assert.doesNotMatch(app, /fetch\(`\/api\/availability/);
 });
+
+test("only SQL source records are grouped as arrivals today", () => {
+  const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+
+  assert.match(app, /function isSqlSourceArrivalToday[\s\S]*directorySource === "sql"/);
+  assert.match(app, /todayBookings = orderedBookings\.filter\(\(booking\) => isSqlSourceArrivalToday\(booking, todayText\)\)/);
+  assert.match(app, /sourceBookings\.filter\(\(booking\) => isSqlSourceArrivalToday\(booking, todayText\)\)/);
+});

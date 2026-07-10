@@ -1,6 +1,6 @@
 {
   "name": "marina-park",
-  "version": "1.0.46",
+  "version": "1.0.47",
   "description": "Aplicație desktop pentru administrarea Marina Park",
   "main": "electron-main.js",
   "author": "Marina Park",

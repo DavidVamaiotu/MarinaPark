@@ -6905,8 +6905,8 @@ function renderSourceBookings() {
 
   const todayText = toISODate(new Date());
   const orderedBookings = orderedSourceBookings(todayText);
-  const todayBookings = orderedBookings.filter((booking) => booking.start === todayText);
-  const otherBookings = orderedBookings.filter((booking) => booking.start !== todayText);
+  const todayBookings = orderedBookings.filter((booking) => isSqlSourceArrivalToday(booking, todayText));
+  const otherBookings = orderedBookings.filter((booking) => !isSqlSourceArrivalToday(booking, todayText));
   const rowForBooking = (booking, index) => {
     const dateLabel = formatDateRangeLabel(booking.start, booking.end);
     const sourceLabel = booking.directorySource === "local-history" ? "Istoric local" : "";
@@ -6962,6 +6962,10 @@ function sourceRecordModifiedValue(value) {
   return Number.isFinite(time) ? time : 0;
 }
 
+function isSqlSourceArrivalToday(booking, todayText = toISODate(new Date())) {
+  return booking?.directorySource === "sql" && booking.start === todayText;
+}
+
 function rememberSourceBookingCandidates(bookings, replace = false) {
   const candidateMap = new Map();
   const candidates = replace ? bookings : [...sourceBookingCandidates, ...bookings];
@@ -6982,8 +6986,8 @@ function orderedSourceBookings(todayText = toISODate(new Date())) {
 
     const firstStart = sourceRecordDateValue(first.start);
     const secondStart = sourceRecordDateValue(second.start);
-    const firstGroup = first.start === todayText ? 0 : firstStart > todayValue ? 1 : 2;
-    const secondGroup = second.start === todayText ? 0 : secondStart > todayValue ? 1 : 2;
+    const firstGroup = isSqlSourceArrivalToday(first, todayText) ? 0 : firstStart > todayValue ? 1 : 2;
+    const secondGroup = isSqlSourceArrivalToday(second, todayText) ? 0 : secondStart > todayValue ? 1 : 2;
 
     if (firstGroup !== secondGroup) return firstGroup - secondGroup;
 
@@ -6996,7 +7000,7 @@ function orderedSourceBookings(todayText = toISODate(new Date())) {
 
 function sourceTodayArrivalCount() {
   const todayText = toISODate(new Date());
-  return sourceBookings.filter((booking) => booking.start === todayText).length;
+  return sourceBookings.filter((booking) => isSqlSourceArrivalToday(booking, todayText)).length;
 }
 
 function setSourceRecordsMode(mode) {
@@ -7078,7 +7082,7 @@ function applySourceBooking(booking) {
 }
 
 async function loadSourceBookings(query = bookingForm.elements.guest.value.trim()) {
-  const mode = groupForMode(sourceRecordsMode);
+  const mode = normalizeTimelineMode(sourceRecordsMode);
   const normalizedQuery = String(query || "").trim();
   const requestId = ++sourceBookingRequestId;
   sourceBookingQuery = normalizedQuery;

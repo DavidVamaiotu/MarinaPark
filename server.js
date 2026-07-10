@@ -1739,6 +1739,14 @@ function detectRequestedFacilities(form, mode) {
   return facilities;
 }
 
+function campingBookingMode(form = {}) {
+  const isCaravan = Object.entries(form.fields || {}).some(([key, value]) =>
+    String(key).startsWith("wpbc_custom_booking_form") &&
+    /rulot|caravan|camper|autorulot/.test(removeDiacritics(value).toLowerCase())
+  );
+  return isCaravan ? "rv" : "tent";
+}
+
 const roMonthNumbers = {
   ian: 0,
   ianuarie: 0,
@@ -2014,6 +2022,7 @@ async function fetchSourceBookings(mode, query = "", options = {}) {
         const adults = Number(form.adults || 0);
         const children = Number(form.children || 0);
         const roomType = bookingTypeMap[row.booking_type] || {};
+        const bookingMode = isCamping ? campingBookingMode(form) : "room";
         const roomPrices = isCamping ? null : parseRoomPrices(row.remark);
         const initialTotal = isCamping ? parseMoney(form.costHint) : roomPrices.initialTotal;
         const deposit = isCamping ? "0.00" : roomPrices.deposit;
@@ -2043,6 +2052,7 @@ async function fetchSourceBookings(mode, query = "", options = {}) {
           deposit: "0.00",
           balance: price,
           group: isCamping ? "camping" : "room",
+          mode: bookingMode,
           kind: isCamping ? "Camping" : "Camere",
           unitHint: roomType.unitHint || "",
           note: isCamping
@@ -2100,7 +2110,12 @@ function sourceBookingFromDirectoryClient(client = {}, fallbackMode = "room") {
   const localHistory = client.directorySource === "local-history";
   const group = client.group === "camping" || client.group === "room"
     ? client.group
-    : fallbackMode;
+    : fallbackMode === "room" ? "room" : "camping";
+  const mode = client.mode === "rv" || client.mode === "tent" || client.mode === "room"
+    ? client.mode
+    : group === "camping" && /rulot|caravan|camper|autorulot/.test(removeDiacritics(`${client.kind || ""} ${client.source || ""}`).toLowerCase())
+      ? "rv"
+      : group === "camping" ? "tent" : "room";
   const start = client.start || client.lastStart || client.last_start || "";
   const end = client.end || client.lastEnd || client.last_end || "";
   const price = localHistory ? 0 : Number(client.price || 0);
@@ -2122,6 +2137,7 @@ function sourceBookingFromDirectoryClient(client = {}, fallbackMode = "room") {
     deposit: "0.00",
     balance: price,
     group,
+    mode,
     kind: client.kind || (group === "camping" ? "Camping" : "Camere"),
     unitHint: localHistory ? "" : client.unitHint || "",
     note: localHistory ? "" : client.note || "",
@@ -2132,10 +2148,20 @@ function sourceBookingFromDirectoryClient(client = {}, fallbackMode = "room") {
 
 async function fetchFusedSourceBookings(mode, query = "") {
   const directory = await fetchClientDirectory();
-  const bookings = directory.clients
+  const sqlBookings = directory.clients
+    .filter((client) => client.directorySource === "sql")
     .map((client) => sourceBookingFromDirectoryClient(client, mode))
-    .filter((booking) => booking.group === mode || booking.directorySource === "local-history");
-  const filteredBookings = filteredSourceBookings(bookings, query, 300);
+    .filter((booking) => booking.mode === mode);
+  const sqlNames = new Set(sqlBookings.map((booking) => normalizeClientName(booking.guest)));
+  const localClients = directory.warnings.length
+    ? reservationRows()
+    : clientHistoryStore.clients();
+  const localBookings = localClients
+    .map((client) => sourceBookingFromDirectoryClient({ ...client, directorySource: "local-history" }, mode))
+    .filter((booking) => !sqlNames.has(normalizeClientName(booking.guest)));
+  const filteredSqlBookings = filteredSourceBookings(sqlBookings, query, 300);
+  const filteredLocalBookings = filteredSourceBookings(localBookings, query, Math.max(1, localBookings.length));
+  const filteredBookings = [...filteredSqlBookings, ...filteredLocalBookings];
   return {
     ok: true,
     bookings: filteredBookings,
@@ -2363,7 +2389,8 @@ const server = http.createServer(async (request, response) => {
 
     if (request.url.startsWith("/api/source-bookings") && request.method === "GET") {
       const url = new URL(request.url, `http://${request.headers.host}`);
-      const mode = url.searchParams.get("mode") === "camping" ? "camping" : "room";
+      const requestedMode = url.searchParams.get("mode");
+      const mode = requestedMode === "tent" || requestedMode === "rv" ? requestedMode : "room";
       const query = String(url.searchParams.get("query") || "").trim().slice(0, 120);
       send(response, 200, JSON.stringify(await fetchFusedSourceBookings(mode, query)));
       return;
