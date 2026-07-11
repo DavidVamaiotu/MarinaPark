@@ -90,10 +90,124 @@ function entrySearchText(entry) {
 function filteredEntries() {
   const query = searchInput.value.trim().toLowerCase();
   return entries.filter((entry) => {
-    const matchesEvent = eventFilter === "all" || entry.eventType === eventFilter;
+    const matchesEvent =
+      eventFilter === "all" ||
+      (eventFilter === "suspicious" ? suspiciousReasons(entry).length > 0 : entry.eventType === eventFilter);
     const matchesSearch = !query || entrySearchText(entry).includes(query);
     return matchesEvent && matchesSearch;
   });
+}
+
+function finiteMoney(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
+}
+
+function paymentComparison(entry) {
+  if (entry.eventType !== "payment" || entry.entityType === "bar") return null;
+  const initialPrice = finiteMoney(
+    entry.data?.initialEditPrice,
+    entry.data?.originalCustomerPrice,
+    entry.data?.originalTotalPrice,
+    entry.data?.totalPrice
+  );
+  const paidAmount = finiteMoney(entry.data?.actualPaidAmount, entry.data?.amount, entry.amount);
+  if (initialPrice === null || paidAmount === null || initialPrice <= 0) return null;
+  return {
+    initialPrice,
+    paidAmount,
+    difference: Math.round((initialPrice - paidAmount) * 100) / 100,
+    isUnderpaid: paidAmount + 0.001 < initialPrice
+  };
+}
+
+function priceReduction(entry) {
+  if (entry.eventType !== "update") return null;
+  const previousPrice = finiteMoney(entry.data?.previousPrice, entry.data?.previous?.price, entry.data?.previous?.totalPrice);
+  const newPrice = finiteMoney(entry.data?.newPrice, entry.data?.current?.price, entry.data?.current?.totalPrice);
+  if (previousPrice === null || newPrice === null || newPrice + 0.001 >= previousPrice) return null;
+  return { previousPrice, newPrice, difference: Math.round((previousPrice - newPrice) * 100) / 100 };
+}
+
+function suspiciousReasons(entry) {
+  const reasons = [];
+  const comparison = paymentComparison(entry);
+  const reduction = priceReduction(entry);
+  if (comparison?.isUnderpaid) reasons.push(`Plătit cu ${formatCurrency(comparison.difference)} mai puțin decât prețul inițial.`);
+  if (reduction) reasons.push(`Preț redus cu ${formatCurrency(reduction.difference)}.`);
+  return reasons;
+}
+
+function suspiciousAlert(entry) {
+  const reasons = suspiciousReasons(entry);
+  if (!reasons.length) return "";
+  return `
+    <div class="suspicious-alert" role="note">
+      <strong>De verificat</strong>
+      <span>${escapeHtml(reasons.join(" "))}</span>
+    </div>
+  `;
+}
+
+function paymentComparisonView(entry) {
+  const comparison = paymentComparison(entry);
+  if (!comparison) return "";
+  const differenceText = comparison.isUnderpaid
+    ? `-${formatCurrency(comparison.difference)}`
+    : formatCurrency(comparison.paidAmount - comparison.initialPrice);
+  return `
+    <dl class="payment-comparison${comparison.isUnderpaid ? " is-suspicious" : ""}">
+      <div><dt>Preț inițial</dt><dd>${formatCurrency(comparison.initialPrice)}</dd></div>
+      <div><dt>Plătit efectiv</dt><dd>${formatCurrency(comparison.paidAmount)}</dd></div>
+      <div><dt>Diferență</dt><dd>${differenceText}</dd></div>
+    </dl>
+  `;
+}
+
+function readableChanges(entry) {
+  const explicitChanges = Array.isArray(entry.data?.changes)
+    ? entry.data.changes
+    : Array.isArray(entry.data?.savedEdits)
+      ? entry.data.savedEdits
+      : [];
+  if (explicitChanges.length) return explicitChanges.map(String).filter(Boolean);
+
+  const changes = [];
+  const pairs = [
+    ["Început", entry.data?.previousStart, entry.data?.newStart],
+    ["Final", entry.data?.previousEnd, entry.data?.newEnd],
+    ["Preț", entry.data?.previousPrice, entry.data?.newPrice],
+    ["Rest", entry.data?.previousBalance, entry.data?.newBalance]
+  ];
+  pairs.forEach(([label, previous, current]) => {
+    if (previous === undefined || current === undefined || String(previous) === String(current)) return;
+    const moneyValue = ["Preț", "Rest"].includes(label);
+    changes.push(`${label}: ${moneyValue ? formatCurrency(previous) : previous} -> ${moneyValue ? formatCurrency(current) : current}`);
+  });
+  return changes;
+}
+
+function changeDetails(entry) {
+  if (entry.eventType !== "update") return "";
+  const changes = readableChanges(entry);
+  if (!changes.length) return "";
+  const rows = changes.map((change) => {
+    const [labelPart, valuePart = ""] = String(change).split(/:\s(.+)/);
+    const [previous = "—", current = "—"] = valuePart.split(/\s(?:->|→)\s/);
+    return `
+      <div class="change-row">
+        <span>${escapeHtml(labelPart)}</span>
+        <del>${escapeHtml(previous)}</del>
+        <b aria-hidden="true">→</b>
+        <ins>${escapeHtml(current)}</ins>
+      </div>
+    `;
+  }).join("");
+  return `<div class="change-details"><strong>Ce s-a schimbat</strong>${rows}</div>`;
 }
 
 function eventLabel(entry) {
@@ -157,7 +271,7 @@ function logCard(entry) {
   const amountChip = amount > 0 ? `<span class="chip">${formatCurrency(amount)}</span>` : "";
   const entityNameClass = entry.entityType === "client" || entry.entityType === "stationing" ? " class=\"person-name\"" : "";
   return `
-    <article class="log-card is-${escapeHtml(entry.eventType)}">
+    <article class="log-card is-${escapeHtml(entry.eventType)}${suspiciousReasons(entry).length ? " is-suspicious" : ""}">
       <header>
         <div>
           <h3${entityNameClass}>${escapeHtml(entry.entityLabel || entityLabel(entry))}</h3>
@@ -171,6 +285,9 @@ function logCard(entry) {
         </div>
       </header>
       <p>${escapeHtml(entry.message)}</p>
+      ${changeDetails(entry)}
+      ${paymentComparisonView(entry)}
+      ${suspiciousAlert(entry)}
       ${priceChangeAlert(entry)}
     </article>
   `;
@@ -247,13 +364,16 @@ function sessionActionRow(entry) {
   const methodText = entry.method ? `<span>${escapeHtml(entry.method)}</span>` : "";
 
   return `
-    <div class="session-action-row is-${escapeHtml(entry.eventType)}">
+    <div class="session-action-row is-${escapeHtml(entry.eventType)}${suspiciousReasons(entry).length ? " is-suspicious" : ""}">
       <time>${escapeHtml(timeLabel(entry.timestamp))}</time>
       <span>${escapeHtml(eventLabel(entry))}</span>
       <p>${escapeHtml(entry.message)}</p>
       ${methodText}
       ${amountText}
     </div>
+    ${changeDetails(entry)}
+    ${paymentComparisonView(entry)}
+    ${suspiciousAlert(entry)}
     ${priceChangeAlert(entry)}
   `;
 }
@@ -295,6 +415,7 @@ function dayCountLabel(count) {
   if (dailyTotalsOnly || eventFilter === "payment") return count === 1 ? "plată" : "plăți";
   if (eventFilter === "update") return count === 1 ? "editare" : "editări";
   if (eventFilter === "delete") return count === 1 ? "ștergere" : "ștergeri";
+  if (eventFilter === "suspicious") return count === 1 ? "de verificat" : "de verificat";
   return "evenimente";
 }
 
@@ -353,13 +474,13 @@ function renderSummary(currentEntries) {
   const totalToday = todayPayments.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
   const todayMethodText = paymentMethodTotalText(todayPayments);
   const updates = currentEntries.filter((entry) => entry.eventType === "update").length;
-  const deletes = currentEntries.filter((entry) => entry.eventType === "delete").length;
+  const suspicious = currentEntries.filter((entry) => suspiciousReasons(entry).length > 0).length;
 
   summaryGrid.innerHTML = [
     ["Evenimente", currentEntries.length, "în filtrul curent"],
     ["Plăți azi", formatCurrency(totalToday), `${todayPayments.length} încasări · ${todayMethodText}`],
     ["Modificări", updates, "editări și mutări"],
-    ["Ștergeri", deletes, "client/unitate/staționare"]
+    ["De verificat", suspicious, suspicious ? "plăți sau prețuri suspecte" : "nimic suspect"]
   ]
     .map(
       ([label, value, detail]) => `
@@ -479,6 +600,10 @@ async function clearActivityLog() {
 searchInput.addEventListener("input", renderLog);
 eventFilterButtons.forEach((button) => {
   button.addEventListener("click", () => {
+    if (dailyTotalsOnly && button.dataset.eventFilter !== "payment") {
+      dailyTotalsOnly = false;
+      dailyTotalsFilterButton.setAttribute("aria-pressed", "false");
+    }
     setEventFilter(button.dataset.eventFilter);
     renderLog();
   });

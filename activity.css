@@ -621,8 +621,38 @@ button,
 }
 
 .log-actions {
-  align-items: end;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr);
+  align-items: stretch;
   gap: 8px;
+}
+
+.log-title > p:last-child {
+  max-width: 210px;
+  margin: 7px 0 0;
+  color: #596575;
+  font-size: 13px;
+}
+
+.log-view-controls,
+.log-maintenance,
+.log-maintenance > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.control-label {
+  min-width: 92px;
+  color: #596575;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.log-maintenance {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
 }
 
 .search-box {
@@ -665,6 +695,17 @@ button {
   color: #173d25;
   background: #ffffff;
   border-color: var(--line);
+}
+
+.event-filter[data-event-filter="suspicious"] {
+  color: #a83d3d;
+}
+
+.event-filter[data-event-filter="suspicious"]:hover,
+.event-filter[data-event-filter="suspicious"].is-active {
+  color: #8f2929;
+  background: #fff0f0;
+  border-color: #efb7b7;
 }
 
 .summary-grid {
@@ -721,6 +762,11 @@ button {
 .log-card {
   gap: 5px;
   padding: 10px 12px;
+}
+
+.log-card.is-suspicious {
+  border-color: #e7a5a5;
+  border-left-color: var(--danger);
 }
 
 .log-card header {
@@ -823,6 +869,122 @@ button {
   margin: 0 0 8px 56px;
 }
 
+.change-details {
+  display: grid;
+  gap: 5px;
+  margin-top: 3px;
+  padding: 9px 10px;
+  background: #f7f9f8;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.change-details > strong {
+  color: #33413f;
+  font-size: 12px;
+}
+
+.change-row {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.7fr) minmax(90px, 1fr) 18px minmax(90px, 1fr);
+  gap: 7px;
+  align-items: center;
+}
+
+.change-row > span {
+  color: #596575;
+  text-transform: capitalize;
+}
+
+.change-row del,
+.change-row ins {
+  padding: 4px 6px;
+  border-radius: 5px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.change-row del {
+  color: #7b4a4a;
+  background: #faeded;
+}
+
+.change-row ins {
+  color: #27633b;
+  background: #eaf7ee;
+}
+
+.change-row b {
+  color: #8b9692;
+  text-align: center;
+}
+
+.payment-comparison {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 3px 0 0;
+  overflow: hidden;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.payment-comparison > div {
+  padding: 8px 10px;
+  background: #f7f9f8;
+}
+
+.payment-comparison dt {
+  color: #596575;
+  font-size: 11px;
+}
+
+.payment-comparison dd {
+  margin: 2px 0 0;
+  color: #27332f;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.payment-comparison.is-suspicious {
+  background: #efb7b7;
+  border-color: #efb7b7;
+}
+
+.payment-comparison.is-suspicious > div,
+.suspicious-alert {
+  background: #fff0f0;
+}
+
+.payment-comparison.is-suspicious dd {
+  color: #9a3030;
+}
+
+.suspicious-alert {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 10px;
+  color: #8f2929;
+  border: 1px solid #e7a5a5;
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.suspicious-alert strong {
+  flex: 0 0 auto;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+.session-actions > .change-details,
+.session-actions > .payment-comparison,
+.session-actions > .suspicious-alert {
+  margin: 0 0 8px 56px;
+}
+
 @media (max-width: 920px) {
   .log-header {
     display: grid;
@@ -850,6 +1012,29 @@ button {
 
   .search-box,
   .event-filters {
+    grid-column: 1 / -1;
+  }
+
+  .log-view-controls,
+  .log-maintenance {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-column: 1 / -1;
+  }
+
+  .log-maintenance > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .log-maintenance button {
+    min-width: 0;
+    padding-inline: 8px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .log-maintenance > div .danger-button {
     grid-column: 1 / -1;
   }
 
@@ -895,6 +1080,30 @@ button {
 
   .session-actions .price-alert {
     margin-left: 0;
+  }
+
+  .change-row {
+    grid-template-columns: 1fr 18px 1fr;
+  }
+
+  .change-row > span {
+    grid-column: 1 / -1;
+  }
+
+  .payment-comparison {
+    grid-template-columns: 1fr;
+  }
+
+  .session-actions > .change-details,
+  .session-actions > .payment-comparison,
+  .session-actions > .suspicious-alert {
+    margin-left: 0;
+  }
+
+  .suspicious-alert {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
   }
 }
 
