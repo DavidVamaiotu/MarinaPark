@@ -19,7 +19,12 @@ test("clients page has a persistent per-mode identity header", () => {
 test("today's free rooms use only reservations saved in the app", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
 
-  assert.match(app, /function availableUnitsForDate\(date\)[\s\S]*occupiedUnitKeysForDate\(date\)/);
+  assert.match(
+    app,
+    /function occupiedUnitKeysFromSavedStays\(\)[\s\S]*stays\.forEach\(\(stay\) => \{[\s\S]*occupied\.add\(unitOccupancyKey\(stay\.group, stay\.id\)\)/
+  );
+  assert.match(app, /function availableUnitsFromSavedStays\(\)[\s\S]*occupiedUnitKeysFromSavedStays\(\)/);
+  assert.doesNotMatch(app, /if \(stayOccupiesDate\(stay, date\)\) occupied\.add/);
   assert.match(app, /Calculat din rezervările salvate în aplicație\./);
   assert.doesNotMatch(app, /fetch\(`\/api\/availability/);
 });

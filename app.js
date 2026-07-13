@@ -4253,16 +4253,16 @@ function stayOccupiesDate(stay, date) {
   return Boolean(start && end && start <= date && end > date);
 }
 
-function occupiedUnitKeysForDate(date) {
+function occupiedUnitKeysFromSavedStays() {
   const occupied = new Set();
   stays.forEach((stay) => {
-    if (stayOccupiesDate(stay, date)) occupied.add(unitOccupancyKey(stay.group, stay.id));
+    occupied.add(unitOccupancyKey(stay.group, stay.id));
   });
   return occupied;
 }
 
-function availableUnitsForDate(date) {
-  const occupied = occupiedUnitKeysForDate(date);
+function availableUnitsFromSavedStays() {
+  const occupied = occupiedUnitKeysFromSavedStays();
 
   return units
     .filter((unit) => unitMatchesTimelineMode(unit))
@@ -4273,7 +4273,7 @@ function availableUnitsForDate(date) {
 function renderAvailableUnitsToday() {
   if (!availableUnitsToday || !availableUnitsTodayLabel || !availableUnitsTodayList) return;
 
-  const availableUnits = availableUnitsForDate(today);
+  const availableUnits = availableUnitsFromSavedStays();
 
   availableUnitsTodayLabel.textContent = `Libere azi · ${availableUnits.length}`;
   availableUnitsToday.setAttribute(
