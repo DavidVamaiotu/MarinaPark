@@ -4110,9 +4110,6 @@ function renderSidebarOccupancy() {
   const counts = { total: 0, room: 0, tent: 0, rv: 0 };
   stays.forEach((stay) => {
     if (stay.guest === "Disponibil") return;
-    const start = stayStartDate(stay);
-    const end = stayEndDate(stay);
-    if (!start || !end || start > today || end <= today) return;
 
     const guests = Math.max(0, Number(stay.party || 0));
     const category = stay.group === "room" ? "room" : campingModeForUnit(unitById(stay.id) || stay);

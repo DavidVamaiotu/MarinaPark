@@ -29,6 +29,16 @@ test("today's free rooms use only reservations saved in the app", () => {
   assert.doesNotMatch(app, /fetch\(`\/api\/availability/);
 });
 
+test("compound occupancy counts guests until their reservation is deleted", () => {
+  const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  const occupancyFunction = app.match(/function renderSidebarOccupancy\(\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
+
+  assert.ok(occupancyFunction, "renderSidebarOccupancy should exist");
+  assert.match(occupancyFunction, /stays\.forEach\(\(stay\) => \{/);
+  assert.match(occupancyFunction, /Number\(stay\.party \|\| 0\)/);
+  assert.doesNotMatch(occupancyFunction, /stayStartDate|stayEndDate|\btoday\b/);
+});
+
 test("only SQL source records are grouped as arrivals today", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
 
