@@ -21,7 +21,11 @@ test("today's free rooms use only reservations saved in the app", () => {
 
   assert.match(
     app,
-    /function occupiedUnitKeysFromSavedStays\(\)[\s\S]*stays\.forEach\(\(stay\) => \{[\s\S]*occupied\.add\(unitOccupancyKey\(stay\.group, stay\.id\)\)/
+    /function stayCountsAsPresent\(stay\)[\s\S]*stay\.guest === "Disponibil"[\s\S]*const start = stayStartDate\(stay\);[\s\S]*return !start \|\| start <= today;/
+  );
+  assert.match(
+    app,
+    /function occupiedUnitKeysFromSavedStays\(\)[\s\S]*stays\.forEach\(\(stay\) => \{[\s\S]*if \(!stayCountsAsPresent\(stay\)\) return;[\s\S]*occupied\.add\(unitOccupancyKey\(stay\.group, stay\.id\)\)/
   );
   assert.match(app, /function availableUnitsFromSavedStays\(\)[\s\S]*occupiedUnitKeysFromSavedStays\(\)/);
   assert.doesNotMatch(app, /if \(stayOccupiesDate\(stay, date\)\) occupied\.add/);
@@ -35,8 +39,9 @@ test("compound occupancy counts guests until their reservation is deleted", () =
 
   assert.ok(occupancyFunction, "renderSidebarOccupancy should exist");
   assert.match(occupancyFunction, /stays\.forEach\(\(stay\) => \{/);
+  assert.match(occupancyFunction, /if \(!stayCountsAsPresent\(stay\)\) return;/);
   assert.match(occupancyFunction, /Number\(stay\.party \|\| 0\)/);
-  assert.doesNotMatch(occupancyFunction, /stayStartDate|stayEndDate|\btoday\b/);
+  assert.doesNotMatch(occupancyFunction, /stayEndDate/);
 });
 
 test("only SQL source records are grouped as arrivals today", () => {

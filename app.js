@@ -4109,7 +4109,7 @@ function setMode(mode) {
 function renderSidebarOccupancy() {
   const counts = { total: 0, room: 0, tent: 0, rv: 0 };
   stays.forEach((stay) => {
-    if (stay.guest === "Disponibil") return;
+    if (!stayCountsAsPresent(stay)) return;
 
     const guests = Math.max(0, Number(stay.party || 0));
     const category = stay.group === "room" ? "room" : campingModeForUnit(unitById(stay.id) || stay);
@@ -4243,6 +4243,12 @@ function unitOccupancyKey(group, id) {
   return `${groupForMode(group)}:${normalizedUnitId(id)}`;
 }
 
+function stayCountsAsPresent(stay) {
+  if (!stay || stay.guest === "Disponibil") return false;
+  const start = stayStartDate(stay);
+  return !start || start <= today;
+}
+
 function stayOccupiesDate(stay, date) {
   if (!stay || stay.guest === "Disponibil") return false;
   const start = stayStartDate(stay);
@@ -4253,6 +4259,7 @@ function stayOccupiesDate(stay, date) {
 function occupiedUnitKeysFromSavedStays() {
   const occupied = new Set();
   stays.forEach((stay) => {
+    if (!stayCountsAsPresent(stay)) return;
     occupied.add(unitOccupancyKey(stay.group, stay.id));
   });
   return occupied;
