@@ -547,6 +547,7 @@ async function writeData(payload) {
     savedAt: config.savedAt || new Date().toISOString()
   };
   replaceDatabaseData(stays, nextConfig, units, stationing, barArticles);
+  clientHistoryStore.syncReservations(stays);
   clientDirectoryCache = null;
   await enqueueDatabaseBackup({ afterMutation: true });
   return { savedAt: nextConfig.savedAt };
@@ -2088,9 +2089,7 @@ async function fetchClientDirectory(options = {}) {
   const localReservations = reservationRows().filter((stay) => normalizeClientName(stay.guest));
   const historyChanges = clientHistoryStore.syncReservations(localReservations);
   if (historyChanges > 0) await enqueueDatabaseBackup({ afterMutation: true });
-  const localClients = warnings.length
-    ? reservationRows().map((stay) => ({ normalizedName: normalizeClientName(stay.guest), ...stay }))
-    : clientHistoryStore.clients();
+  const localClients = clientHistoryStore.clients();
   const clients = mergeClientDirectory(sqlBookings, localClients);
   const result = {
     ok: true,
@@ -2121,6 +2120,8 @@ function sourceBookingFromDirectoryClient(client = {}, fallbackMode = "room") {
   const price = localHistory ? 0 : Number(client.price || 0);
   const adults = Math.max(0, Number(client.adults || 0));
   const children = Math.max(0, Number(client.children || 0));
+  const previousRoom = localHistory ? String(client.room || "").trim() : "";
+  const previousCategory = localHistory ? String(client.category || "").trim() : "";
   return {
     ...client,
     source: localHistory ? "istoric local" : client.source || (group === "camping" ? "camping" : "camere"),
@@ -2140,6 +2141,8 @@ function sourceBookingFromDirectoryClient(client = {}, fallbackMode = "room") {
     mode,
     kind: client.kind || (group === "camping" ? "Camping" : "Camere"),
     unitHint: localHistory ? "" : client.unitHint || "",
+    previousRoom,
+    previousCategory,
     note: localHistory ? "" : client.note || "",
     modifiedAt: client.modifiedAt || client.historyUpdatedAt || client.updatedAt || "",
     detailsOnly: localHistory
@@ -2153,9 +2156,7 @@ async function fetchFusedSourceBookings(mode, query = "") {
     .map((client) => sourceBookingFromDirectoryClient(client, mode))
     .filter((booking) => booking.mode === mode);
   const sqlNames = new Set(sqlBookings.map((booking) => normalizeClientName(booking.guest)));
-  const localClients = directory.warnings.length
-    ? reservationRows()
-    : clientHistoryStore.clients();
+  const localClients = clientHistoryStore.clients();
   const localBookings = localClients
     .map((client) => sourceBookingFromDirectoryClient({ ...client, directorySource: "local-history" }, mode))
     .filter((booking) => !sqlNames.has(normalizeClientName(booking.guest)));

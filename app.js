@@ -6914,7 +6914,15 @@ function renderSourceBookings() {
   const rowForBooking = (booking, index) => {
     const dateLabel = formatDateRangeLabel(booking.start, booking.end);
     const sourceLabel = booking.directorySource === "local-history" ? "Istoric local" : "";
-    const unitLabel = [booking.kind, booking.unitHint, sourceLabel].filter(Boolean).join(" · ");
+    const previousRoomLabel = booking.directorySource === "local-history" && booking.previousRoom
+      ? `Ultima unitate: ${booking.previousRoom}`
+      : "";
+    const previousCategoryLabel = booking.directorySource === "local-history" && booking.previousCategory
+      ? `Ultima categorie: ${booking.previousCategory}`
+      : "";
+    const unitLabel = [booking.kind, booking.unitHint, previousRoomLabel, previousCategoryLabel, sourceLabel]
+      .filter(Boolean)
+      .join(" · ");
     const partyLabel = booking.detailsOnly ? "date client" : `${Number(booking.party || 0)} pers.`;
     const priceLabel = booking.detailsOnly ? "—" : formatCurrency(Number(booking.price || 0));
     return `
@@ -7032,8 +7040,13 @@ function applySourceBooking(booking) {
   if (!booking) return;
   bookingStationingDeductionDraft = null;
 
-  const hintedUnit = booking.unitHint ? unitById(booking.unitHint) : null;
-  const bookingKind = hintedUnit ? unitTypeOptionForUnit(hintedUnit) : normalizeTimelineMode(sourceRecordsMode || booking.kind || booking.group);
+  const detailsOnly = booking.detailsOnly === true;
+  const hintedUnitId = detailsOnly ? booking.previousRoom || booking.room || "" : booking.unitHint || "";
+  const hintedUnit = hintedUnitId ? unitById(hintedUnitId) : null;
+  const historicalCategory = detailsOnly ? booking.previousCategory || booking.category || "" : "";
+  const bookingKind = hintedUnit
+    ? unitTypeOptionForUnit(hintedUnit)
+    : normalizeTimelineMode(historicalCategory || sourceRecordsMode || booking.kind || booking.group);
   ensureKindOption(bookingKind);
   bookingForm.elements.kind.value = bookingKind;
   bookingUnitId = hintedUnit?.id || bookingUnitId;
@@ -7041,16 +7054,11 @@ function applySourceBooking(booking) {
   if (hintedUnit) {
     syncKindFromSelectedUnit();
   }
-  const detailsOnly = booking.detailsOnly === true;
   bookingForm.elements.guest.value = booking.guest || "";
-  bookingForm.elements.phone.value = detailsOnly ? booking.phone || bookingForm.elements.phone.value : booking.phone || "";
-  if (!detailsOnly || Number(booking.adults || 0) > 0) {
-    bookingForm.elements.adults.value = Math.max(0, Number(booking.adults || 0));
-  }
-  if (!detailsOnly || Number(booking.children || 0) > 0) {
-    bookingForm.elements.children.value = Math.max(0, Number(booking.children || 0));
-  }
-  bookingForm.elements.car.value = detailsOnly ? booking.car || bookingForm.elements.car.value : booking.car || "";
+  bookingForm.elements.phone.value = booking.phone || "";
+  bookingForm.elements.adults.value = Math.max(0, Number(booking.adults || 0));
+  bookingForm.elements.children.value = Math.max(0, Number(booking.children || 0));
+  bookingForm.elements.car.value = booking.car || "";
   updatePartyTotal();
   if (detailsOnly) {
     clearImportedPricing();

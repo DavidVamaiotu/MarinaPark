@@ -5,6 +5,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { DatabaseSync } = require("node:sqlite");
 const test = require("node:test");
+const { ClientHistoryStore } = require("../client-directory");
 
 async function request(url, pathname, options = {}) {
   const response = await fetch(`${url}${pathname}`, {
@@ -82,7 +83,7 @@ test("client directory fuses SQL bookings with persistent unmatched local client
     stays: [
       { key: "local-alice", id: "D-1", guest: "Alice Popescu", phone: "0701", group: "room", kind: "Cameră", start: "2026-05-01", end: "2026-05-03" },
       { key: "local-only-old", id: "D-2", guest: "Local Only", phone: "0733", car: "B-01-OLD", group: "room", kind: "Cameră", start: "2025-05-01", end: "2025-05-03" },
-      { key: "local-only-new", id: "D-3", guest: "Local Only", phone: "", car: "", group: "room", kind: "Cameră", start: "2026-05-01", end: "2026-05-03" },
+      { key: "local-only-new", id: "D-3", guest: "Local Only", phone: "", car: "", adults: 2, children: 1, group: "room", kind: "Cameră", start: "2026-05-01", end: "2026-05-03" },
       { key: "local-camp", id: "C-1", guest: "Camp Local", phone: "0744", group: "camping", kind: "Campare cort", start: "2026-04-01", end: "2026-04-03" }
     ],
     units: [{ id: "D-1", group: "room", kind: "Cameră" }],
@@ -92,6 +93,27 @@ test("client directory fuses SQL bookings with persistent unmatched local client
   };
   const seeded = await request(server.url, "/api/data", { method: "POST", body: JSON.stringify(seed) });
   assert.equal(seeded.status, 200);
+
+  const immediateHistory = new DatabaseSync(server.historyPath, { readOnly: true });
+  assert.equal(immediateHistory.prepare("SELECT COUNT(*) count FROM clients").get().count, 3);
+  const immediateLocalOnly = immediateHistory.prepare(`
+    SELECT group_name, kind, last_start, last_end, data
+    FROM clients WHERE normalized_name = ?
+  `).get("local only");
+  assert.equal(immediateLocalOnly.group_name, "");
+  assert.equal(immediateLocalOnly.kind, "Cameră");
+  assert.equal(immediateLocalOnly.last_start, null);
+  assert.equal(immediateLocalOnly.last_end, null);
+  assert.deepEqual(
+    Object.keys(JSON.parse(immediateLocalOnly.data)).sort(),
+    ["guest", "phone", "car", "room", "category", "adults", "children", "historySource", "historyNormalizedName", "historyFirstSeenAt", "historyUpdatedAt"].sort()
+  );
+  const immediateLocalOnlyData = JSON.parse(immediateLocalOnly.data);
+  assert.equal(immediateLocalOnlyData.room, "D-3");
+  assert.equal(immediateLocalOnlyData.category, "Cameră");
+  assert.equal(immediateLocalOnlyData.adults, 2);
+  assert.equal(immediateLocalOnlyData.children, 1);
+  immediateHistory.close();
 
   const fused = await request(server.url, "/api/client-directory");
   assert.equal(fused.status, 200);
@@ -136,7 +158,20 @@ test("client directory fuses SQL bookings with persistent unmatched local client
   assert.equal(localSourceClient.detailsOnly, true);
   assert.equal(localSourceClient.phone, "0733");
   assert.equal(localSourceClient.car, "B-01-OLD");
+  assert.equal(localSourceClient.room, "D-3");
+  assert.equal(localSourceClient.previousRoom, "D-3");
+  assert.equal(localSourceClient.category, "Cameră");
+  assert.equal(localSourceClient.previousCategory, "Cameră");
+  assert.equal(localSourceClient.adults, 2);
+  assert.equal(localSourceClient.children, 1);
   assert.equal(localSourceClient.price, 0);
+  for (const reservationField of ["id", "start", "end", "unitHint", "note"]) {
+    if (reservationField === "id") {
+      assert.equal(localSourceClient[reservationField], undefined);
+    } else {
+      assert.equal(localSourceClient[reservationField] || "", "");
+    }
+  }
 
   const roomLocalFromCampingSearch = await request(server.url, "/api/source-bookings?mode=tent&query=Local%20Only");
   assert.equal(roomLocalFromCampingSearch.status, 200);
@@ -170,4 +205,83 @@ test("client directory fuses SQL bookings with persistent unmatched local client
   const roomSources = await request(server.url, "/api/source-bookings?mode=room");
   assert.ok(roomSources.body.bookings.some((booking) => booking.guest === "Local Only" && booking.directorySource === "local-history"));
   assert.ok(roomSources.body.bookings.some((booking) => booking.guest === "Camp Local" && booking.directorySource === "local-history"));
+});
+
+test("client history removes booking metadata from legacy rows", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "marina-client-history-sanitize-test-"));
+  const historyPath = path.join(root, "client-history.sqlite");
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  const legacy = new DatabaseSync(historyPath);
+  legacy.exec(`
+    CREATE TABLE clients (
+      normalized_name TEXT PRIMARY KEY,
+      guest TEXT NOT NULL,
+      phone TEXT NOT NULL DEFAULT '',
+      car TEXT NOT NULL DEFAULT '',
+      group_name TEXT NOT NULL DEFAULT '',
+      kind TEXT NOT NULL DEFAULT '',
+      last_start TEXT,
+      last_end TEXT,
+      first_seen_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      data TEXT NOT NULL
+    )
+  `);
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  legacy.prepare(`
+    INSERT INTO clients
+      (normalized_name, guest, phone, car, group_name, kind, last_start, last_end, first_seen_at, updated_at, data)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    "legacy client",
+    "Legacy Client",
+    "0700",
+    "B-01-ABC",
+    "room",
+    "Cameră",
+    "2026-01-01",
+    "2026-01-03",
+    timestamp,
+    timestamp,
+    JSON.stringify({
+      guest: "Legacy Client",
+      phone: "0700",
+      car: "B-01-ABC",
+      id: "D-1",
+      group: "room",
+      kind: "Cameră",
+      start: "2026-01-01",
+      end: "2026-01-03",
+      price: 500,
+      adults: 2,
+      children: 1,
+      note: "legacy booking note"
+    })
+  );
+  legacy.close();
+
+  const store = new ClientHistoryStore(historyPath);
+  const [client] = store.clients();
+  assert.deepEqual(
+    Object.keys(client).sort(),
+    ["normalizedName", "guest", "phone", "car", "room", "category", "adults", "children", "historySource", "historyNormalizedName", "historyFirstSeenAt", "historyUpdatedAt"].sort()
+  );
+  assert.equal(client.room, "D-1");
+  assert.equal(client.category, "Cameră");
+  assert.equal(client.adults, 2);
+  assert.equal(client.children, 1);
+  store.close();
+
+  const sanitized = new DatabaseSync(historyPath, { readOnly: true });
+  const row = sanitized.prepare("SELECT group_name, kind, last_start, last_end, data FROM clients").get();
+  assert.equal(row.group_name, "");
+  assert.equal(row.kind, "Cameră");
+  assert.equal(row.last_start, null);
+  assert.equal(row.last_end, null);
+  const storedData = JSON.parse(row.data);
+  for (const reservationField of ["id", "group", "kind", "start", "end", "price", "note"]) {
+    assert.equal(Object.hasOwn(storedData, reservationField), false);
+  }
+  sanitized.close();
 });

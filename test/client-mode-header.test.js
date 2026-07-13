@@ -44,6 +44,20 @@ test("compound occupancy counts guests until their reservation is deleted", () =
   assert.doesNotMatch(occupancyFunction, /stayEndDate/);
 });
 
+test("local-history selection applies every retained client field", () => {
+  const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  const applySource = app.match(/function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
+
+  assert.ok(applySource, "applySourceBooking should exist");
+  assert.match(applySource, /booking\.previousRoom \|\| booking\.room/);
+  assert.match(applySource, /booking\.previousCategory \|\| booking\.category/);
+  assert.match(applySource, /bookingForm\.elements\.guest\.value = booking\.guest \|\| "";/);
+  assert.match(applySource, /bookingForm\.elements\.phone\.value = booking\.phone \|\| "";/);
+  assert.match(applySource, /bookingForm\.elements\.adults\.value = Math\.max\(0, Number\(booking\.adults \|\| 0\)\);/);
+  assert.match(applySource, /bookingForm\.elements\.children\.value = Math\.max\(0, Number\(booking\.children \|\| 0\)\);/);
+  assert.match(applySource, /bookingForm\.elements\.car\.value = booking\.car \|\| "";/);
+});
+
 test("only SQL source records are grouped as arrivals today", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
 

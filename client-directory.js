@@ -39,6 +39,18 @@ function newestClient(first, second) {
   return secondDate > firstDate ? richerClientDetails(second, first) : richerClientDetails(first, second);
 }
 
+function clientHistoryDetails(client = {}) {
+  return {
+    guest: String(client.guest || "").trim(),
+    phone: String(client.phone || "").trim(),
+    car: String(client.car || "").trim(),
+    room: String(client.room || client.id || client.unitHint || "").trim(),
+    category: String(client.category || client.kind || "").trim(),
+    adults: Math.max(0, Number(client.adults || 0)) || 0,
+    children: Math.max(0, Number(client.children || 0)) || 0
+  };
+}
+
 function directoryKey(prefix, parts) {
   const digest = crypto.createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 20);
   return `${prefix}-${digest}`;
@@ -67,6 +79,62 @@ class ClientHistoryStore {
       CREATE INDEX IF NOT EXISTS idx_clients_guest ON clients(guest);
       CREATE INDEX IF NOT EXISTS idx_clients_group ON clients(group_name);
     `);
+    this.sanitizeStoredClients();
+  }
+
+  sanitizeStoredClients() {
+    const rows = this.db.prepare(`
+      SELECT normalized_name, guest, phone, car, group_name, kind, last_start, last_end,
+             first_seen_at, updated_at, data
+      FROM clients
+    `).all();
+    if (!rows.length) return 0;
+
+    const update = this.db.prepare(`
+      UPDATE clients
+      SET guest = ?, phone = ?, car = ?, group_name = '', kind = ?,
+          last_start = NULL, last_end = NULL, data = ?
+      WHERE normalized_name = ?
+    `);
+    let changed = 0;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const row of rows) {
+        let current = {};
+        try {
+          current = JSON.parse(row.data);
+        } catch {
+          current = {};
+        }
+        const details = clientHistoryDetails({
+          ...current,
+          guest: current.guest || row.guest,
+          phone: current.phone || row.phone,
+          car: current.car || row.car,
+          category: current.category || current.kind || row.kind
+        });
+        const stored = {
+          ...details,
+          historySource: "local",
+          historyNormalizedName: row.normalized_name,
+          historyFirstSeenAt: current.historyFirstSeenAt || row.first_seen_at,
+          historyUpdatedAt: current.historyUpdatedAt || row.updated_at
+        };
+        const nextData = JSON.stringify(stored);
+        const alreadySanitized =
+          !row.group_name && row.kind === details.category && !row.last_start && !row.last_end &&
+          row.guest === details.guest && row.phone === details.phone && row.car === details.car &&
+          row.data === nextData;
+        if (alreadySanitized) continue;
+        update.run(details.guest, details.phone, details.car, details.category, nextData, row.normalized_name);
+        changed += 1;
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return changed;
   }
 
   existingClient(normalizedName) {
@@ -109,12 +177,11 @@ class ClientHistoryStore {
         const client = newestClient(current, candidate);
         const firstSeenAt = current?.historyFirstSeenAt || now;
         const stored = {
-          ...client,
+          ...clientHistoryDetails(client),
           historySource: "local",
           historyNormalizedName: normalizedName,
           historyFirstSeenAt: firstSeenAt,
-          historyUpdatedAt: now,
-          originalStayKey: client.originalStayKey || client.key || ""
+          historyUpdatedAt: now
         };
         const currentFingerprint = current ? JSON.stringify({ ...current, historyUpdatedAt: "" }) : "";
         const storedFingerprint = JSON.stringify({ ...stored, historyUpdatedAt: "" });
@@ -124,10 +191,10 @@ class ClientHistoryStore {
           String(stored.guest || ""),
           String(stored.phone || ""),
           String(stored.car || ""),
-          String(stored.group || ""),
-          String(stored.kind || ""),
-          stored.start || null,
-          stored.end || null,
+          "",
+          String(stored.category || ""),
+          null,
+          null,
           firstSeenAt,
           now,
           JSON.stringify(stored)
