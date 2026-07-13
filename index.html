@@ -237,6 +237,46 @@
             </button>
           </div>
           <div class="metric-grid stationing-metrics" id="stationingMetricGrid" aria-label="Indicatori staționare"></div>
+          <details class="stationing-timeline-panel" aria-labelledby="stationingTimelineTitle">
+            <summary class="stationing-timeline-toggle">
+              <div>
+                <p class="eyebrow">Plăți pe zile</p>
+                <h3 id="stationingTimelineTitle">Calendar staționare</h3>
+              </div>
+              <span class="stationing-timeline-toggle-label" aria-hidden="true"></span>
+            </summary>
+            <div class="stationing-timeline-content">
+              <div class="timeline-actions">
+                <div class="month-controls" aria-label="Schimbă luna timeline-ului de staționare">
+                  <button class="icon-button compact" type="button" id="stationingTimelinePrev" title="Luna anterioară" aria-label="Luna anterioară">
+                    <i data-lucide="chevron-left" aria-hidden="true"></i>
+                  </button>
+                  <strong id="stationingTimelineMonthLabel"></strong>
+                  <button class="icon-button compact" type="button" id="stationingTimelineNext" title="Luna următoare" aria-label="Luna următoare">
+                    <i data-lucide="chevron-right" aria-hidden="true"></i>
+                  </button>
+                  <button class="ghost-button compact-text" type="button" id="stationingTimelineToday">Luna curentă</button>
+                </div>
+                <div class="stationing-timeline-zoom" aria-label="Zoom timeline staționare">
+                  <button class="icon-button compact" type="button" id="stationingTimelineZoomOut" title="Micșorează" aria-label="Micșorează">
+                    <i data-lucide="zoom-out" aria-hidden="true"></i>
+                  </button>
+                  <button class="icon-button compact" type="button" id="stationingTimelineZoomIn" title="Mărește" aria-label="Mărește">
+                    <i data-lucide="zoom-in" aria-hidden="true"></i>
+                  </button>
+                </div>
+              </div>
+              <div class="stationing-timeline-legend" aria-label="Legendă stări staționare">
+                <span class="is-unpaid"><b aria-hidden="true">!</b> Neplătit</span>
+                <span class="is-paid"><b aria-hidden="true">✓</b> Plătit</span>
+                <span class="is-excluded"><b aria-hidden="true">−</b> Client cazat, fără taxă</span>
+              </div>
+              <div class="timeline-shell stationing-timeline-shell" id="stationingTimelineShell" aria-label="Timeline plăți staționare">
+                <div class="timeline-scale" id="stationingTimelineScale"></div>
+                <div class="guest-timeline stationing-timeline" id="stationingTimelineRows"></div>
+              </div>
+            </div>
+          </details>
           <div class="stationing-layout">
             <section class="stationing-board" aria-labelledby="stationingBoardTitle">
               <div class="section-header tight">
@@ -973,12 +1013,18 @@
             <input name="startDate" type="date" required />
           </label>
           <label>
-            Nopți preplătite
-            <input name="prepaidNights" type="number" min="1" max="1095" value="30" required />
+            Data sfârșit (opțional)
+            <input name="periodEndDate" type="date" />
+            <small>Lasă gol pentru staționare activă; se calculează până ieri.</small>
           </label>
           <label>
-            Preț pe noapte
-            <input name="nightlyPrice" type="number" min="0" step="0.01" value="0.00" required />
+            Nopți preplătite (zile albastre)
+            <input name="prepaidNights" type="number" min="0" value="0" readonly />
+            <small>Se calculează automat din rezervările clientului; aceeași valoare apare ca nopți deduse.</small>
+          </label>
+          <label>
+            Preț pe zi
+            <input name="nightlyPrice" type="number" min="0.01" step="0.01" value="0.00" required />
           </label>
           <label>
             Plătit
@@ -988,6 +1034,7 @@
           <input name="totalPrice" type="hidden" value="0.00" />
           <input name="balance" type="hidden" value="0.00" />
           <p class="calendar-summary stationing-form-summary" id="stationingRangeSummary"></p>
+          <div class="stationing-payment-history" id="stationingPaymentHistory" aria-live="polite"></div>
         </div>
         <section class="stationing-notes-section">
           <label>
@@ -1026,6 +1073,7 @@
 
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
     <script src="app-dialog.js"></script>
+    <script src="stationing-calculator.js"></script>
     <script src="app.js?v=unit-type-segments-20260518"></script>
   </body>
 </html>

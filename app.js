@@ -153,6 +153,7 @@ const stays = [
 
 const staysStorageKey = "marinaParkClientStays";
 const stationingStorageKey = "marinaParkStationing";
+const stationingCalculator = window.StationingCalculator;
 const activityLogStorageKey = "marinaParkActivityLog";
 const barArticlesStorageKey = "marinaParkBarArticles";
 const defaultStays = stays.map((stay) => ({ ...stay }));
@@ -271,7 +272,7 @@ const pageSections = document.querySelectorAll("[data-page-section]");
 const reviewStatus = document.querySelector("#reviewStatus");
 const reviewList = document.querySelector("#reviewList");
 const checkGoogleReviewsButton = document.querySelector("#checkGoogleReviews");
-const timelineShell = document.querySelector(".timeline-shell");
+const timelineShell = document.querySelector("#guest-timeline-section .timeline-shell");
 const guestTimeline = document.querySelector("#guestTimeline");
 const timelineScale = document.querySelector("#timelineScale");
 const guestTimelineMode = document.querySelector("#guestTimelineMode");
@@ -375,6 +376,16 @@ const closeStationingModalButton = document.querySelector("#closeStationingModal
 const deleteStationingButton = document.querySelector("#deleteStationing");
 const receiptFromStationingButton = document.querySelector("#receiptFromStationing");
 const stationingRangeSummary = document.querySelector("#stationingRangeSummary");
+const stationingPaymentHistory = document.querySelector("#stationingPaymentHistory");
+const stationingTimelineShell = document.querySelector("#stationingTimelineShell");
+const stationingTimelineScale = document.querySelector("#stationingTimelineScale");
+const stationingTimelineRows = document.querySelector("#stationingTimelineRows");
+const stationingTimelineMonthLabel = document.querySelector("#stationingTimelineMonthLabel");
+const stationingTimelinePrevButton = document.querySelector("#stationingTimelinePrev");
+const stationingTimelineNextButton = document.querySelector("#stationingTimelineNext");
+const stationingTimelineTodayButton = document.querySelector("#stationingTimelineToday");
+const stationingTimelineZoomOutButton = document.querySelector("#stationingTimelineZoomOut");
+const stationingTimelineZoomInButton = document.querySelector("#stationingTimelineZoomIn");
 const barArticleGrid = document.querySelector("#barArticleGrid");
 const openBarArticleModalButton = document.querySelector("#openBarArticleModal");
 const clearBarCheckoutButton = document.querySelector("#clearBarCheckout");
@@ -450,6 +461,10 @@ let bookingEditSession = null;
 let stationingEditSession = null;
 let stationingModalContext = null;
 let bookingStationingDeductionDraft = null;
+let stationingTimelineMonth = monthStart(today);
+let stationingTimelineDayWidth = 54;
+let stationingTimelineHasRendered = false;
+let stationingMidnightRefreshTimer = null;
 let openLinkedDraftAfterSave = false;
 let editingBarArticleKey = null;
 let barPaymentInProgress = false;
@@ -484,6 +499,8 @@ units = buildUnitCatalogFromStays();
 applySidebarState();
 applyReceiptSettings();
 applySagaExportSettings();
+scheduleStationingMidnightRefresh();
+setInterval(refreshTodayIfNeeded, 60000);
 
 
 function addDays(date, days) {
@@ -597,8 +614,20 @@ function refreshTodayIfNeeded() {
   if (nextToday.getTime() === today.getTime()) return false;
 
   today = nextToday;
-  renderAll();
+  markPagesDirty("calendar", "clients", "stationing", "statistics");
+  renderAll({ force: true });
   return true;
+}
+
+function scheduleStationingMidnightRefresh() {
+  if (stationingMidnightRefreshTimer) clearTimeout(stationingMidnightRefreshTimer);
+  const now = new Date();
+  const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1);
+  stationingMidnightRefreshTimer = setTimeout(() => {
+    refreshTodayIfNeeded();
+    if (activePage === "stationing") renderStationing();
+    scheduleStationingMidnightRefresh();
+  }, Math.max(1000, nextMidnight.getTime() - now.getTime()));
 }
 
 function formatCurrency(value) {
@@ -1506,9 +1535,7 @@ function formatDateLabel(dateText) {
 }
 
 function stationingEndDate(record) {
-  const start = validDateFromISO(record.startDate) || today;
-  const prepaidNights = Math.max(1, Number(record.prepaidNights || 1));
-  return toISODate(addDays(start, prepaidNights));
+  return stationingCalculator.effectiveEndDate(record, toISODate(today));
 }
 
 function normalizeStationingDeductions(deductions = []) {
@@ -1523,77 +1550,78 @@ function normalizeStationingDeductions(deductions = []) {
       end: String(deduction.end || ""),
       nights: Math.max(1, Math.round(Number(deduction.nights || 1))),
       amount: normalizeMoneyValue(deduction.amount),
+      subtractDays: deduction.subtractDays !== false,
       appliedAt: deduction.appliedAt || new Date().toISOString()
     }))
     .filter((deduction) => deduction.stayKey && deduction.nights > 0);
 }
 
 function stationingDeductedNights(record = {}) {
-  const prepaidNights = Math.max(1, Number(record.prepaidNights || 1));
-  const total = normalizeStationingDeductions(record.deductions).reduce((sum, deduction) => sum + Number(deduction.nights || 0), 0);
-  return Math.min(prepaidNights, total);
+  return stationingDetails(record).excludedDays;
 }
 
 function normalizeStationingRecord(record = {}, index = 0) {
-  const startDate = validDateFromISO(record.startDate) ? record.startDate : toISODate(today);
-  const prepaidNights = Math.max(1, Math.min(1095, Math.round(Number(record.prepaidNights || 30))));
-  const nightlyPrice = normalizeMoneyValue(record.nightlyPrice);
-  const deductions = normalizeStationingDeductions(record.deductions);
-  const totalPrice = normalizeMoneyValue(nightlyPrice > 0 ? nightlyPrice * prepaidNights : record.totalPrice);
-  const paidAmount = Math.min(totalPrice, normalizeMoneyValue(record.paidAmount));
-  const balance = Math.max(0, normalizeMoneyValue(totalPrice - paidAmount));
+  const key = String(record.key || `stationing-${Date.now()}-${index}`);
+  const normalized = stationingCalculator.normalizeRecord({ ...record, key });
+  const calculation = stationingCalculator.calculate(normalized, stays, {
+    todayISO: toISODate(today),
+    allowZeroPrice: true
+  });
+  const prepaidNights = calculation.excludedDays;
 
   return {
-    key: String(record.key || `stationing-${Date.now()}-${index}`),
+    ...record,
+    key,
+    schemaVersion: 2,
     owner: String(record.owner || "").trim(),
     phone: String(record.phone || "").trim(),
     caravan: String(record.caravan || "").trim(),
-    startDate,
+    startDate: normalized.startDate,
+    endDate: normalized.endDate,
+    openEnded: normalized.openEnded,
     prepaidNights,
-    nightlyPrice,
-    totalPrice,
-    paidAmount,
-    balance,
-    deductions,
+    pricePerDayCents: normalized.pricePerDayCents,
+    nightlyPrice: normalized.pricePerDayCents / 100,
+    totalPrice: calculation.generatedTotalCents / 100,
+    paidAmount: calculation.amountPaidCents / 100,
+    balance: calculation.remainingBalanceCents / 100,
+    credit: calculation.creditCents / 100,
+    paymentTransactions: normalized.paymentTransactions,
+    stayLinks: normalized.stayLinks,
+    deductions: normalizeStationingDeductions(record.deductions),
     note: String(record.note || "").trim()
   };
 }
 
 function stationingDetails(record) {
-  const start = validDateFromISO(record.startDate) || today;
-  const prepaidNights = Math.max(1, Number(record.prepaidNights || 1));
-  const nightlyPrice = normalizeMoneyValue(record.nightlyPrice);
-  const deductedNights = stationingDeductedNights(record);
-  const remainingBillableNights = Math.max(0, prepaidNights - deductedNights);
-  const totalPrice = normalizeMoneyValue(record.totalPrice || prepaidNights * nightlyPrice);
-  const paidAmount = Math.min(totalPrice, normalizeMoneyValue(record.paidAmount));
-  const paidNights =
-    nightlyPrice > 0
-      ? Math.min(prepaidNights, Math.floor(paidAmount / nightlyPrice))
-      : paidAmount >= totalPrice && totalPrice > 0
-        ? prepaidNights
-        : 0;
-  const usedNights = Math.min(prepaidNights, Math.max(0, daysBetween(start, today)));
-  const billableUsedNights = Math.max(0, usedNights - deductedNights);
-  const remainingNights = Math.max(0, remainingBillableNights - billableUsedNights);
-  const progress = Math.round((usedNights / prepaidNights) * 100);
-  const paidProgress = prepaidNights > 0 ? Math.round((paidNights / prepaidNights) * 100) : 100;
+  const calculation = stationingCalculator.calculate(record, stays, {
+    todayISO: toISODate(today),
+    allowZeroPrice: true
+  });
+  const prepaidNights = calculation.excludedDays;
+  const paidNights = calculation.paidDays;
+  const remainingNights = calculation.unpaidDays;
+  const usedNights = calculation.chargeableDays;
+  const deductedNights = prepaidNights;
+  const progress = calculation.days.length > 0 ? Math.round((usedNights / calculation.days.length) * 100) : 0;
+  const paidProgress = calculation.chargeableDays > 0 ? Math.round((paidNights / calculation.chargeableDays) * 100) : 100;
   const unpaidProgress = Math.max(0, 100 - paidProgress);
-  const endDate = stationingEndDate(record);
-  const status =
-    remainingNights === 0
-      ? { label: "Expirat", className: "is-expired", priority: 0 }
-      : remainingNights <= 7
-        ? { label: "Expiră curând", className: "is-expiring", priority: 1 }
-        : { label: "Activ", className: "is-active", priority: 2 };
+  const endDate = calculation.effectiveEndDate;
+  const isClosedAndComplete = !calculation.record.openEnded && endDate && endDate < toISODate(today);
+  const status = isClosedAndComplete
+    ? { label: "Încheiat", className: "is-expired", priority: 0 }
+    : remainingNights > 0
+      ? { label: "De plată", className: "is-expiring", priority: 1 }
+      : { label: "Activ", className: "is-active", priority: 2 };
 
   return {
+    ...calculation,
     usedNights,
     remainingNights,
     paidNights,
     prepaidNights,
     deductedNights,
-    billableNights: remainingBillableNights,
+    billableNights: calculation.chargeableDays,
     progress,
     paidProgress,
     unpaidProgress,
@@ -1990,6 +2018,7 @@ function stationingChangeList(previous, next) {
     ["phone", "telefon"],
     ["caravan", "rulotă"],
     ["startDate", "început"],
+    ["endDate", "sfârșit"],
     ["prepaidNights", "nopți"],
     ["nightlyPrice", "preț/noapte", changedMoneyLabel],
     ["totalPrice", "total", changedMoneyLabel],
@@ -2039,6 +2068,7 @@ function normalizeStayStationingDeduction(deduction = {}) {
     appliedNights: Math.max(0, Math.round(Number(deduction.appliedNights || 0))),
     appliedAmount: normalizeMoneyValue(deduction.appliedAmount || 0),
     autoLinked: deduction.autoLinked === true,
+    subtractDays: deduction.subtractDays === true,
     nights
   };
 }
@@ -2436,10 +2466,12 @@ function stationingDraftFromForm(record) {
     phone: String(stationingForm.elements.phone.value || record.phone).trim(),
     caravan: String(stationingForm.elements.caravan.value || record.caravan).trim() || record.caravan,
     startDate: stationingForm.elements.startDate.value || record.startDate,
+    endDate: stationingForm.elements.periodEndDate.value || "",
+    openEnded: !stationingForm.elements.periodEndDate.value,
     prepaidNights: Number(stationingForm.elements.prepaidNights.value || record.prepaidNights || 1),
     nightlyPrice: Number(stationingForm.elements.nightlyPrice.value || record.nightlyPrice || 0),
     totalPrice: Number(stationingForm.elements.totalPrice.value || record.totalPrice || 0),
-    paidAmount: Number(stationingForm.elements.paidAmount.value || record.paidAmount || 0),
+    paymentTransactions: stationingPaymentTransactionsForForm(record, true),
     note: String(stationingForm.elements.note.value || record.note || "").trim()
   });
 }
@@ -2447,8 +2479,9 @@ function stationingDraftFromForm(record) {
 function receiptDraftForStationing(record) {
   const formDraft = stationingDraftFromForm(record);
   const sourceRecord = formDraft || record;
+  const amountNeeded = Math.max(0, normalizeMoneyValue(sourceRecord.balance) - normalizeMoneyValue(sourceRecord.credit));
   return {
-    amount: normalizeMoneyValue(sourceRecord.balance),
+    amount: amountNeeded,
     stationing: { ...sourceRecord },
     stay: {
       key: sourceRecord.key,
@@ -2512,6 +2545,7 @@ function openReceiptModal(stayKey) {
   `;
   receiptAmountInput.value = amount.toFixed(2);
   receiptAmountInput.removeAttribute("max");
+  receiptAmountInput.readOnly = false;
   receiptModal.classList.add("is-open");
   document.body.style.overflow = "hidden";
   refreshIcons();
@@ -2567,6 +2601,7 @@ function openStationingReceiptModal(recordKey) {
   receiptStayKey = record.key;
   receiptBarMode = "combined";
   receiptDraft = receiptDraftForStationing(record);
+  if (stationingModal.classList.contains("is-open")) closeStationingModal();
   const amount = receiptDraft.amount;
   if (amount <= 0) {
     showToast("Staționarea este deja achitată");
@@ -2580,13 +2615,45 @@ function openStationingReceiptModal(recordKey) {
     <strong>Plata cu numerar, card sau voucher</strong>
     <span class="person-name">${receiptDraft.stationing.owner}</span>
     <span>${receiptDraft.stationing.caravan} - staționare rulotă</span>
-    <span>${details.paidNights} nopți plătite din ${details.prepaidNights}; rest curent ${formatCurrency(receiptDraft.stationing.balance)}</span>
+    <span>${details.paidNights} nopți de staționare plătite din ${details.chargeableDays}; ${details.prepaidNights} nopți preplătite albastre; rest curent ${formatCurrency(receiptDraft.stationing.balance)}</span>
+    <div class="stationing-payment-choice" role="radiogroup" aria-label="Alege calculul plății de staționare">
+      <label>
+        <input type="radio" name="stationingPaymentMode" value="amount" checked />
+        <span>Plată după sumă</span>
+      </label>
+      <label>
+        <input type="radio" name="stationingPaymentMode" value="days" />
+        <span>Plată după număr de zile</span>
+      </label>
+      <label class="stationing-payment-days" hidden>
+        Număr zile
+        <input id="stationingReceiptDays" type="number" min="1" max="${Math.max(1, details.unpaidDays)}" value="1" />
+      </label>
+      <small>${formatCurrency(details.record.pricePerDayCents / 100)}/zi; zilele albastre sunt sărite automat.</small>
+    </div>
   `;
   receiptAmountInput.value = amount.toFixed(2);
   receiptAmountInput.max = amount.toFixed(2);
+  receiptAmountInput.readOnly = false;
   receiptModal.classList.add("is-open");
   document.body.style.overflow = "hidden";
   refreshIcons();
+}
+
+function syncStationingReceiptPaymentChoice() {
+  if (receiptTargetType !== "stationing" || !receiptDraft?.stationing) return;
+  const selectedMode = receiptSummary.querySelector('input[name="stationingPaymentMode"]:checked')?.value || "amount";
+  const daysField = receiptSummary.querySelector(".stationing-payment-days");
+  const daysInput = receiptSummary.querySelector("#stationingReceiptDays");
+  if (daysField) daysField.hidden = selectedMode !== "days";
+  receiptAmountInput.readOnly = selectedMode === "days";
+  if (selectedMode !== "days" || !daysInput) return;
+
+  const details = stationingDetails(receiptDraft.stationing);
+  const days = Math.max(1, Math.min(details.unpaidDays, Math.round(Number(daysInput.value || 1))));
+  daysInput.value = String(days);
+  const amountCents = Math.max(0, days * details.record.pricePerDayCents - details.creditCents);
+  receiptAmountInput.value = (amountCents / 100).toFixed(2);
 }
 
 function closeReceiptModal() {
@@ -2596,6 +2663,7 @@ function closeReceiptModal() {
   receiptTargetType = "stay";
   receiptBarMode = "combined";
   receiptPaymentRequestId = null;
+  receiptAmountInput.readOnly = false;
   setReceiptPaymentBusy(false);
   if (!bookingModal.classList.contains("is-open") && !stationingModal.classList.contains("is-open")) {
     document.body.style.overflow = "";
@@ -3061,13 +3129,9 @@ function stationingDeductionAlreadyApplied(record, stayKey) {
 }
 
 function stationingDeductionEntryForStay(stay, record) {
-  const remainingDeductibleNights = Math.max(0, Math.max(1, Number(record?.prepaidNights || 1)) - stationingDeductedNights(record));
-  const nights = Math.min(
-    Math.max(1, Number(stay?.stationingDeduction?.nights || stayDetails(stay).nights || 1)),
-    Math.max(1, remainingDeductibleNights)
-  );
+  const nights = Math.max(1, Number(stay?.stationingDeduction?.nights || stayDetails(stay).nights || 1));
   return {
-    key: `stationing-deduction-${stay.key}-${Date.now()}`,
+    key: `stationing-deduction-${stay.key}`,
     stayKey: stay.key,
     guest: stay.guest,
     unitId: stay.id,
@@ -3075,39 +3139,41 @@ function stationingDeductionEntryForStay(stay, record) {
     end: stay.end,
     nights,
     amount: 0,
+    subtractDays: true,
     appliedAt: new Date().toISOString()
   };
 }
 
 async function applyStationingDeductionForStay(stay, options = {}) {
   const deduction = normalizeStayStationingDeduction(stay?.stationingDeduction);
-  if (!stay || !deduction || deduction.appliedAt) return null;
+  if (!stay || !deduction || deduction.subtractDays !== true) return null;
   const recordIndex = stationing.findIndex((item) => item.key === deduction.recordKey);
   if (recordIndex < 0) return null;
   const record = stationing[recordIndex];
-  if (stationingDeductionAlreadyApplied(record, stay.key)) return null;
-  const remainingDeductibleNights = Math.max(0, Math.max(1, Number(record.prepaidNights || 1)) - stationingDeductedNights(record));
-  if (remainingDeductibleNights <= 0) return null;
-
-  const nights = Math.min(remainingDeductibleNights, Math.max(1, Number(deduction.nights || stayDetails(stay).nights || 1)));
+  const nights = Math.max(1, Number(deduction.nights || stayDetails(stay).nights || 1));
+  if (options.ask !== false && deduction.appliedAt) return null;
   if (options.ask !== false) {
     const confirmed = await window.appDialog.confirm(
-      `Inregistrezi ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationarea pentru ${stationingRecordLabel(record)}?`,
-      { title: "Confirmare staționare", confirmLabel: "Înregistrează" }
+      `Scazi din staționare zilele în care ${stay.guest} stă în rulotă (${formatDateLabel(stay.start)}–${formatDateLabel(stationingCalculator.addCalendarDays(stay.end, -1))})?`,
+      { title: "Confirmare staționare", confirmLabel: "Scade zilele" }
     );
     if (!confirmed) return null;
   }
 
   const previousRecord = { ...record, deductions: normalizeStationingDeductions(record.deductions) };
   const entry = stationingDeductionEntryForStay(stay, record);
+  const deductions = normalizeStationingDeductions(record.deductions).filter((item) => item.stayKey !== stay.key);
+  const stayLinks = stationingCalculator.normalizeStayLinks(record).filter((item) => item.stayKey !== stay.key);
   const nextRecord = normalizeStationingRecord({
     ...record,
-    deductions: [...normalizeStationingDeductions(record.deductions), entry]
+    deductions: [...deductions, entry],
+    stayLinks: [...stayLinks, { stayKey: stay.key, subtractDays: true, linkedAt: entry.appliedAt }]
   });
   stationing[recordIndex] = nextRecord;
 
   const updatedDeduction = normalizeStayStationingDeduction({
     ...deduction,
+    subtractDays: true,
     appliedAt: entry.appliedAt,
     appliedNights: entry.nights,
     appliedAmount: entry.amount
@@ -3121,7 +3187,7 @@ async function applyStationingDeductionForStay(stay, options = {}) {
     entityLabel: activityStationingLabel(nextRecord),
     amount: entry.amount,
     method: "client-rv-deduction",
-    message: `${entry.nights} ${entry.nights === 1 ? "noapte" : "nopti"} au fost inregistrate in stationarea ${stationingRecordLabel(nextRecord)} pentru clientul ${stay.guest}, fara scadere din pret.`,
+    message: `${entry.nights} ${entry.nights === 1 ? "noapte" : "nopti"} au fost legate la staționarea ${stationingRecordLabel(nextRecord)} pentru ${stay.guest}; zilele de cazare sunt albastre și nu se taxează.`,
     data: {
       previous: previousRecord,
       current: nextRecord,
@@ -3131,6 +3197,16 @@ async function applyStationingDeductionForStay(stay, options = {}) {
   });
 
   return { record: nextRecord, deduction: updatedDeduction };
+}
+
+function removeStationingLinkForStay(stayKey, recordKey = "") {
+  stationing = stationing.map((record) => {
+    if (recordKey && record.key !== recordKey) return record;
+    const deductions = normalizeStationingDeductions(record.deductions).filter((item) => item.stayKey !== stayKey);
+    const stayLinks = stationingCalculator.normalizeStayLinks(record).filter((item) => item.stayKey !== stayKey);
+    if (deductions.length === normalizeStationingDeductions(record.deductions).length && stayLinks.length === stationingCalculator.normalizeStayLinks(record).length) return record;
+    return normalizeStationingRecord({ ...record, deductions, stayLinks });
+  });
 }
 
 // Retained temporarily during the payment-endpoint migration; UI uses generateCommittedReceipt.
@@ -4518,9 +4594,102 @@ function renderStationingMetrics() {
     .join("");
 }
 
+function stationingTimelineWindowStart() {
+  return addMonths(monthStart(stationingTimelineMonth), -4);
+}
+
+function stationingTimelineStatusLabel(status) {
+  if (status === stationingCalculator.DAY_STATUS.PAID) return "Plătit";
+  if (status === stationingCalculator.DAY_STATUS.CLIENT_STAY_EXCLUDED) return "Client cazat, fără taxă";
+  if (status === stationingCalculator.DAY_STATUS.UNPAID) return "Neplătit";
+  return "În afara perioadei";
+}
+
+function renderStationingTimeline(options = {}) {
+  if (!stationingTimelineShell || !stationingTimelineScale || !stationingTimelineRows) return;
+  const previousScrollLeft = stationingTimelineShell.scrollLeft;
+  const windowStart = stationingTimelineWindowStart();
+  const windowEnd = addMonths(windowStart, 9);
+  const dayCount = daysBetween(windowStart, windowEnd);
+  const weekdayLabels = ["Du", "Lu", "Ma", "Mi", "Jo", "Vi", "Sâ"];
+  const dates = Array.from({ length: dayCount }, (_, index) => toISODate(addDays(windowStart, index)));
+  const days = dates.map((dateText, index) => {
+    const date = dateFromISO(dateText);
+    const isMonthStart = date.getDate() === 1;
+    const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+    const isToday = dateText === toISODate(today);
+    return `<span class="timeline-day ${isMonthStart ? "is-month-start" : ""} ${isWeekend ? "is-weekend" : ""} ${isToday ? "is-today" : ""}" style="grid-column:${index + 2};grid-row:2"><strong>${weekdayLabels[date.getDay()]}</strong><small>${String(date.getDate()).padStart(2, "0")}</small></span>`;
+  });
+  const weeks = [];
+  let weekStartIndex = 0;
+  for (let index = 1; index <= dayCount; index += 1) {
+    const date = index < dayCount ? addDays(windowStart, index) : null;
+    if (index < dayCount && date.getDay() !== 1) continue;
+    const firstDate = addDays(windowStart, weekStartIndex);
+    const lastDate = addDays(windowStart, index - 1);
+    const label = `${firstDate.toLocaleDateString("ro-RO", { day: "numeric", month: "short" }).replace(".", "")}–${lastDate.toLocaleDateString("ro-RO", { day: "numeric", month: "short" }).replace(".", "")}`;
+    weeks.push(`<span class="timeline-week" style="grid-column:${weekStartIndex + 2}/${index + 2};grid-row:1">${label}</span>`);
+    weekStartIndex = index;
+  }
+  stationingTimelineMonthLabel.textContent = stationingTimelineMonth.toLocaleDateString("ro-RO", { month: "long", year: "numeric" });
+  stationingTimelineShell.style.setProperty("--timeline-days", dayCount);
+  stationingTimelineShell.style.setProperty("--timeline-day-width", `${stationingTimelineDayWidth}px`);
+  stationingTimelineShell.style.setProperty("--timeline-unit-width", "240px");
+  stationingTimelineScale.innerHTML = `<span class="timeline-corner"><strong>Client</strong><small>staționare</small></span>${weeks.join("")}${days.join("")}`;
+
+  const records = visibleStationingRecords();
+  stationingTimelineRows.innerHTML = records.map((record) => {
+    const details = stationingDetails(record);
+    const daysByDate = new Map(details.days.map((day) => [day.date, day]));
+    const fixedSummary = details.days.length
+      ? ""
+      : `<small class="stationing-timeline-empty-summary">Nu există încă zile finalizate · Total ${formatCurrency(details.generatedTotalCents / 100)}</small>`;
+    const cells = dates.map((dateText, index) => {
+      const day = daysByDate.get(dateText);
+      if (!day) {
+        return `<span class="stationing-day-cell is-outside" style="grid-column:${index + 2}" role="img" aria-label="${formatDateLabel(dateText)}: În afara perioadei"></span>`;
+      }
+      const className = day.status === stationingCalculator.DAY_STATUS.PAID
+        ? "is-paid"
+        : day.status === stationingCalculator.DAY_STATUS.CLIENT_STAY_EXCLUDED
+          ? "is-excluded"
+          : "is-unpaid";
+      const exclusionText = day.exclusionSources.length
+        ? ` Cazare: ${day.exclusionSources.map((source) => `${source.guest || source.stayKey} (${source.start}–${source.end}, plecare exclusivă)`).join(", ")}.`
+        : "";
+      const paymentText = day.paymentIds.length ? ` Plată: ${day.paymentIds.join(", ")}.` : "";
+      const dynamicText = day.dynamicallyGenerated ? " Generată dinamic pentru o staționare deschisă." : "";
+      const label = `${formatDateLabel(dateText)}: ${stationingTimelineStatusLabel(day.status)}. Taxă ${formatCurrency(day.chargeCents / 100)}.${paymentText}${exclusionText}${dynamicText}`;
+      const summary = dateText === details.effectiveEndDate
+        ? `<span class="stationing-day-summary" title="Total ${formatCurrency(details.generatedTotalCents / 100)} · Plătit ${formatCurrency(details.amountPaidCents / 100)} · Rest ${formatCurrency(details.remainingBalanceCents / 100)} · Credit ${formatCurrency(details.creditCents / 100)}">T ${formatCompactMoney(details.generatedTotalCents / 100)} · R ${formatCompactMoney(details.remainingBalanceCents / 100)}</span>`
+        : "";
+      return `<button class="stationing-day-cell ${className}" type="button" style="grid-column:${index + 2}" data-stationing-day-key="${escapeHtml(record.key)}" data-stationing-day-date="${dateText}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${summary}</button>`;
+    }).join("");
+    return `<div class="timeline-row" data-stationing-key="${escapeHtml(record.key)}">
+      <div class="timeline-unit">
+        <strong class="person-name">${escapeHtml(record.owner)}</strong>
+        <span>${escapeHtml(record.caravan)}</span>
+        <small>${formatCurrency(details.record.pricePerDayCents / 100)}/zi · Total ${formatCurrency(details.generatedTotalCents / 100)} · Plătit ${formatCurrency(details.amountPaidCents / 100)} · Rest ${formatCurrency(details.remainingBalanceCents / 100)}${details.creditCents ? ` · Credit ${formatCurrency(details.creditCents / 100)}` : ""}</small>
+        ${fixedSummary}
+      </div>${cells}
+    </div>`;
+  }).join("");
+
+  if (!records.length) {
+    stationingTimelineRows.innerHTML = `<p class="empty-state">Nu există înregistrări de staționare pentru timeline.</p>`;
+  }
+  if (options.preserveScroll) {
+    stationingTimelineShell.scrollLeft = previousScrollLeft;
+  } else {
+    stationingTimelineShell.scrollLeft = Math.max(0, daysBetween(windowStart, stationingTimelineMonth) * stationingTimelineDayWidth);
+  }
+  stationingTimelineHasRendered = true;
+}
+
 function renderStationing() {
   if (!stationingCards) return;
   renderStationingMetrics();
+  renderStationingTimeline({ preserveScroll: stationingTimelineHasRendered });
   const records = visibleStationingRecords();
 
   stationingCards.innerHTML = records
@@ -4541,8 +4710,16 @@ function renderStationing() {
               <dd>${formatDateLabel(record.startDate)}</dd>
             </div>
             <div>
-              <dt>Deduse</dt>
-              <dd>${details.deductedNights} ${details.deductedNights === 1 ? "noapte" : "nopți"}</dd>
+              <dt>Nopți deduse</dt>
+              <dd>${details.prepaidNights} ${details.prepaidNights === 1 ? "noapte" : "nopți"}</dd>
+            </div>
+            <div>
+              <dt>Nopți plătite</dt>
+              <dd>${details.paidNights}</dd>
+            </div>
+            <div>
+              <dt>Nopți neplătite</dt>
+              <dd>${details.remainingNights}</dd>
             </div>
           </dl>
           <div class="client-card-actions">
@@ -4565,7 +4742,7 @@ function renderStationing() {
     stationingCards.innerHTML = `
       <div class="empty-state stationing-empty">
         <strong>Nu există rulote în staționare.</strong>
-        <span>Adaugă o rulotă cu nopți preplătite ca să vezi automat nopțile rămase.</span>
+        <span>Adaugă o rulotă ca să urmărești automat nopțile de staționare.</span>
         <button class="primary-button" type="button" data-open-stationing-empty>
           <i data-lucide="plus" aria-hidden="true"></i>
           <span>Staționare nouă</span>
@@ -5507,26 +5684,76 @@ function changeReservationBarItem(stayKey, itemId, delta, options = {}) {
   return true;
 }
 
+function stationingPaymentTransactionsForForm(existingRecord, includeCorrection = false) {
+  const payments = stationingCalculator.normalizePayments(existingRecord || {});
+  const currentCents = Math.max(0, payments.filter((payment) => !payment.voidedAt).reduce((sum, payment) => sum + payment.amountCents, 0));
+  const enteredCents = stationingCalculator.toCents(stationingForm.elements.paidAmount.value);
+  const difference = enteredCents - currentCents;
+  if (!includeCorrection || difference === 0) return payments;
+  return [...payments, {
+    id: `stationing-adjustment-${existingRecord?.key || "new"}-${Date.now()}`,
+    paymentDate: toISODate(today),
+    amountCents: difference,
+    method: "manual",
+    kind: "adjustment",
+    note: "Corecție din fișa veche Plătit",
+    createdAt: new Date().toISOString(),
+    voidedAt: ""
+  }];
+}
+
+function stationingFormCalculation(includeCorrection = false) {
+  const existingRecord = editingStationingKey ? stationing.find((item) => item.key === editingStationingKey) : null;
+  const startDate = stationingForm.elements.startDate.value || toISODate(today);
+  const endDate = stationingForm.elements.periodEndDate.value || "";
+  const pricePerDayCents = stationingCalculator.toCents(stationingForm.elements.nightlyPrice.value);
+  const source = {
+    ...(existingRecord || {}),
+    key: existingRecord?.key || "stationing-form-preview",
+    schemaVersion: 2,
+    startDate,
+    endDate,
+    openEnded: !endDate,
+    pricePerDayCents,
+    nightlyPrice: pricePerDayCents / 100,
+    paymentTransactions: stationingPaymentTransactionsForForm(existingRecord, includeCorrection),
+    stayLinks: existingRecord?.stayLinks || [],
+    deductions: existingRecord?.deductions || []
+  };
+  return stationingCalculator.calculate(source, stays, { todayISO: toISODate(today), allowZeroPrice: true });
+}
+
+function renderStationingPaymentHistory(payments = []) {
+  if (!stationingPaymentHistory) return;
+  const active = payments.filter((payment) => !payment.voidedAt);
+  stationingPaymentHistory.innerHTML = active.length
+    ? `<strong>Istoric plăți</strong>${active.map((payment) => `<div><span>${formatDateLabel(payment.paymentDate)} · ${escapeHtml(payment.method)}${payment.note ? ` · ${escapeHtml(payment.note)}` : ""}</span><b>${payment.amountCents < 0 ? "−" : ""}${formatCurrency(Math.abs(payment.amountCents) / 100)}</b><button class="icon-button compact" type="button" data-void-stationing-payment="${escapeHtml(payment.id)}" title="Anulează plata" aria-label="Anulează plata din ${formatDateLabel(payment.paymentDate)}"><i data-lucide="undo-2" aria-hidden="true"></i></button></div>`).join("")}`
+    : `<span>Nicio plată înregistrată.</span>`;
+}
+
 function syncStationingTotals() {
   if (!stationingForm) return;
   const startDate = stationingForm.elements.startDate.value || toISODate(today);
-  const prepaidNights = Math.max(1, Number(stationingForm.elements.prepaidNights.value || 1));
-  const nightlyPrice = normalizeMoneyValue(stationingForm.elements.nightlyPrice.value);
-  const existingRecord = editingStationingKey ? stationing.find((item) => item.key === editingStationingKey) : null;
-  const totalPrice = normalizeMoneyValue(prepaidNights * nightlyPrice);
-  const paidAmount = Math.min(totalPrice, normalizeMoneyValue(stationingForm.elements.paidAmount.value));
-  const balance = Math.max(0, totalPrice - paidAmount);
-  const endDate = stationingEndDate({ startDate, prepaidNights });
-  const details = stationingDetails({ startDate, prepaidNights, nightlyPrice, totalPrice, paidAmount, deductions: existingRecord?.deductions || [] });
-
-  stationingForm.elements.totalPrice.value = totalPrice.toFixed(2);
-  if (normalizeMoneyValue(stationingForm.elements.paidAmount.value) > totalPrice) {
-    stationingForm.elements.paidAmount.value = paidAmount.toFixed(2);
+  const periodEndDate = stationingForm.elements.periodEndDate.value;
+  stationingForm.elements.periodEndDate.setCustomValidity(periodEndDate && periodEndDate < startDate ? "Data de sfârșit nu poate fi înaintea datei de început." : "");
+  stationingForm.elements.nightlyPrice.setCustomValidity(Number(stationingForm.elements.nightlyPrice.value || 0) <= 0 ? "Prețul pe zi trebuie să fie mai mare decât zero." : "");
+  let details;
+  try {
+    details = stationingFormCalculation(true);
+  } catch (error) {
+    stationingRangeSummary.textContent = error.message;
+    return;
   }
-  stationingForm.elements.balance.value = balance.toFixed(2);
-  stationingForm.elements.endDate.value = formatDateLabel(endDate);
-  const deductedLabel = details.deductedNights > 0 ? ` · ${details.deductedNights} ${details.deductedNights === 1 ? "noapte înregistrată" : "nopți înregistrate"}` : "";
-  stationingRangeSummary.textContent = `Final ${formatDateLabel(endDate)} · Total ${formatCurrency(totalPrice)} · Rest ${formatCurrency(balance)}${deductedLabel}`;
+  const endDate = details.effectiveEndDate;
+  stationingForm.elements.totalPrice.value = (details.generatedTotalCents / 100).toFixed(2);
+  stationingForm.elements.balance.value = (details.remainingBalanceCents / 100).toFixed(2);
+  stationingForm.elements.endDate.value = endDate || "";
+  stationingForm.elements.prepaidNights.value = String(details.excludedDays);
+  const deductedLabel = details.excludedDays > 0 ? ` · ${details.excludedDays} ${details.excludedDays === 1 ? "zi albastră" : "zile albastre"}` : "";
+  const creditLabel = details.creditCents > 0 ? ` · Credit ${formatCurrency(details.creditCents / 100)}` : "";
+  const endLabel = endDate ? formatDateLabel(endDate) : `încă fără zile finalizate`;
+  stationingRangeSummary.textContent = `${periodEndDate ? "Final" : "Calculat până la"} ${endLabel} · Total ${formatCurrency(details.generatedTotalCents / 100)} · Plătit ${formatCurrency(details.amountPaidCents / 100)} · Rest ${formatCurrency(details.remainingBalanceCents / 100)}${creditLabel}${deductedLabel}`;
+  renderStationingPaymentHistory(details.record.paymentTransactions);
 }
 
 function openStationingModal(recordKey = null, defaults = {}) {
@@ -5563,7 +5790,8 @@ function openStationingModal(recordKey = null, defaults = {}) {
   stationingForm.elements.phone.value = record?.phone || defaults.phone || "";
   stationingForm.elements.caravan.value = record?.caravan || defaults.caravan || "";
   stationingForm.elements.startDate.value = record?.startDate || defaults.startDate || toISODate(today);
-  stationingForm.elements.prepaidNights.value = record?.prepaidNights || defaults.prepaidNights || 30;
+  stationingForm.elements.periodEndDate.value = record?.openEnded === false ? record.endDate || "" : "";
+  stationingForm.elements.prepaidNights.value = "0";
   stationingForm.elements.nightlyPrice.value = Number(record?.nightlyPrice ?? defaults.nightlyPrice ?? 0).toFixed(2);
   stationingForm.elements.paidAmount.value = Number(record?.paidAmount ?? defaults.paidAmount ?? 0).toFixed(2);
   stationingForm.elements.note.value = record?.note || defaults.note || "";
@@ -5607,7 +5835,7 @@ function saveStationingRecord(record) {
     entityLabel: activityStationingLabel(normalized),
     message: previousRecord
       ? `Staționarea pentru ${normalized.owner} a fost actualizată${changes.length ? `: ${changes.join("; ")}` : "."}`
-      : `Staționare adăugată pentru ${normalized.owner}, ${normalized.caravan}, ${normalized.prepaidNights} nopți.`,
+      : `Staționare adăugată pentru ${normalized.owner}, ${normalized.caravan}.`,
     data: {
       previous: previousRecord,
       current: normalized,
@@ -6212,20 +6440,19 @@ function exactAvailableStationingMatches(guest) {
   if (!normalizedGuest) return [];
   return stationing.filter((record) => {
     if (normalizeSearchText(record.owner) !== normalizedGuest) return false;
-    return stationingDetails(record).remainingNights > 0;
+    const normalized = normalizeStationingRecord(record);
+    return normalized.openEnded || Boolean(normalized.endDate && normalized.endDate >= toISODate(today));
   });
 }
 
 function bookingStationingCreateDefaults() {
   const owner = bookingForm.elements.guest.value.trim();
   if (!owner || !currentBookingIsRv()) return null;
-  const nights = Math.max(30, bookingDeductionNights());
   return {
     owner,
     phone: bookingForm.elements.phone.value.trim(),
     caravan: bookingForm.elements.car.value.trim(),
     startDate: bookingForm.elements.arrival.value || toISODate(today),
-    prepaidNights: nights,
     note: "Adaugata din formularul de client.",
     context: { source: "booking" }
   };
@@ -6260,7 +6487,8 @@ function autoLinkStationingForFutureBooking(booking = {}) {
     recordLabel: stationingRecordLabel(record),
     selectedAt: new Date().toISOString(),
     nights: bookingDeductionNights(),
-    autoLinked: true
+    autoLinked: true,
+    subtractDays: false
   });
   return true;
 }
@@ -6307,7 +6535,7 @@ function renderBookingStationingLink() {
   const nights = bookingDeductionNights();
   const selectedRecord = stationing.find((item) => item.key === bookingStationingDeductionDraft?.recordKey);
   const selectedDeduction = selectedRecord ? stationingDeductionFromDraft() : null;
-  if (bookingStationingDeductionDraft && !selectedRecord) {
+  if (bookingStationingDeductionDraft && !selectedRecord && bookingStationingDeductionDraft.cleared !== true) {
     bookingStationingDeductionDraft = null;
   }
 
@@ -6317,11 +6545,11 @@ function renderBookingStationingLink() {
     ? `
       <div class="stationing-link-selected">
         <span><strong class="person-name">${escapeHtml(stationingRecordLabel(selectedRecord))}</strong> ${selectedAlreadyApplied ? "are nopțile înregistrate" : selectedAutomatically ? "legata automat dupa numele clientului" : "selectata pentru inregistrare"}</span>
-        <span>${selectedDeduction.nights} ${selectedDeduction.nights === 1 ? "noapte" : "nopti"} ${selectedAlreadyApplied ? "au fost inregistrate in stationare, fara scadere din pret." : selectedAutomatically ? "se vor inregistra automat la salvarea rezervarii, fara scadere din pret." : "se vor inregistra la plata, fara scadere din pret."}</span>
-        ${selectedAlreadyApplied ? "" : `<button class="ghost-button compact-text" type="button" data-clear-stationing-deduction>
+        <span>${selectedDeduction.nights} ${selectedDeduction.nights === 1 ? "noapte" : "nopti"} ${selectedDeduction.subtractDays ? "devin albastre și se scad din prețul staționării." : "sunt legate fără scădere din preț."}</span>
+        <button class="ghost-button compact-text" type="button" data-clear-stationing-deduction>
           <i data-lucide="x" aria-hidden="true"></i>
-          <span>Elimina</span>
-        </button>`}
+          <span>${selectedAlreadyApplied ? "Nu mai scădea" : "Elimină"}</span>
+        </button>
       </div>
     `
     : `<p class="empty-state">Scrie numele clientului ca sa gasesti rulota din stationare.</p>`;
@@ -6372,15 +6600,16 @@ async function selectBookingStationingDeduction(recordKey) {
   if (!record) return;
   const nights = bookingDeductionNights();
   const confirmed = await window.appDialog.confirm(
-    `Folosesti ${stationingRecordLabel(record)} pentru a inregistra ${nights} ${nights === 1 ? "noapte" : "nopti"} in stationare?`,
-    { title: "Confirmare staționare", confirmLabel: "Folosește" }
+    `Scazi din staționarea ${stationingRecordLabel(record)} cele ${nights} ${nights === 1 ? "noapte" : "nopți"} în care clientul stă în rulotă? Zilele vor deveni albastre și nu vor fi taxate.`,
+    { title: "Confirmare staționare", confirmLabel: "Da, scade zilele" }
   );
   if (!confirmed) return;
   bookingStationingDeductionDraft = normalizeStayStationingDeduction({
     recordKey: record.key,
     recordLabel: stationingRecordLabel(record),
     selectedAt: new Date().toISOString(),
-    nights
+    nights,
+    subtractDays: true
   });
   renderBookingStationingLink();
 }
@@ -7217,6 +7446,9 @@ async function deleteClient(stayKey) {
   });
   if (!confirmed) return false;
 
+  const linkedStationingKey = stay.stationingDeduction?.recordKey || "";
+  stay.stationingDeduction = null;
+  if (linkedStationingKey) removeStationingLinkForStay(stay.key, linkedStationingKey);
   stays.splice(stayIndex, 1);
   if (!stays.some((item) => item.id === stay.id)) {
     stays.push(availablePlaceholderFor(stay));
@@ -7703,6 +7935,10 @@ function setActivePage(page) {
   if (!page) return;
   const previousPage = activePage;
   activePage = page;
+  if (page === "stationing" && previousPage !== page) {
+    stationingTimelineHasRendered = false;
+    dirtyPages.add("stationing");
+  }
   renderSidebarOccupancy();
   if (page === "clients" && dirtyPages.has("clients")) {
     reservationPage = 1;
@@ -7914,6 +8150,30 @@ closeUnitModalButton.addEventListener("click", closeUnitModal);
 closeCloneUnitModalButton.addEventListener("click", closeCloneUnitModal);
 openStationingModalButton.addEventListener("click", () => openStationingModal());
 closeStationingModalButton.addEventListener("click", closeStationingModal);
+stationingTimelinePrevButton?.addEventListener("click", () => {
+  stationingTimelineMonth = addMonths(stationingTimelineMonth, -1);
+  renderStationingTimeline();
+});
+stationingTimelineNextButton?.addEventListener("click", () => {
+  stationingTimelineMonth = addMonths(stationingTimelineMonth, 1);
+  renderStationingTimeline();
+});
+stationingTimelineTodayButton?.addEventListener("click", () => {
+  stationingTimelineMonth = monthStart(today);
+  renderStationingTimeline();
+});
+stationingTimelineZoomOutButton?.addEventListener("click", () => {
+  stationingTimelineDayWidth = Math.max(28, stationingTimelineDayWidth - 6);
+  renderStationingTimeline({ preserveScroll: true });
+});
+stationingTimelineZoomInButton?.addEventListener("click", () => {
+  stationingTimelineDayWidth = Math.min(72, stationingTimelineDayWidth + 6);
+  renderStationingTimeline({ preserveScroll: true });
+});
+stationingTimelineRows?.addEventListener("click", (event) => {
+  const dayCell = event.target.closest("[data-stationing-day-key]");
+  if (dayCell) openStationingModal(dayCell.dataset.stationingDayKey);
+});
 openBarArticleModalButton.addEventListener("click", () => openBarArticleModal());
 closeBarArticleModalButton.addEventListener("click", closeBarArticleModal);
 barAttachReservationButton?.addEventListener("click", openBarAttachModal);
@@ -7998,7 +8258,10 @@ window.addEventListener("beforeunload", saveStays);
 window.addEventListener("focus", refreshTodayIfNeeded);
 window.addEventListener("resize", () => {
   window.clearTimeout(updateTimelineDayWidth.resizeTimer);
-  updateTimelineDayWidth.resizeTimer = window.setTimeout(() => setVisibleMonth(visibleMonth), 120);
+  updateTimelineDayWidth.resizeTimer = window.setTimeout(() => {
+    setVisibleMonth(visibleMonth);
+    if (activePage === "stationing") renderStationingTimeline({ preserveScroll: true });
+  }, 120);
 });
 bookingForm.elements.kind.addEventListener("change", () => {
   renderUnitSelect();
@@ -8062,7 +8325,7 @@ bookingStationingLinkSection?.addEventListener("click", (event) => {
   }
   const clearButton = event.target.closest("[data-clear-stationing-deduction]");
   if (clearButton) {
-    bookingStationingDeductionDraft = null;
+    bookingStationingDeductionDraft = { cleared: true };
     renderBookingStationingLink();
     return;
   }
@@ -8092,7 +8355,12 @@ document.addEventListener("pointerdown", clearStaleInteractionState, true);
 document.addEventListener("pointerdown", guardEditableTextFocus, true);
 document.addEventListener("focusin", guardEditableTextFocus, true);
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) releaseTransientInteractionState({ force: true });
+  if (document.hidden) {
+    releaseTransientInteractionState({ force: true });
+  } else {
+    refreshTodayIfNeeded();
+    scheduleStationingMidnightRefresh();
+  }
 });
 window.addEventListener("pagehide", () => releaseTransientInteractionState({ force: true }));
 window.addEventListener("blur", () => releaseTransientInteractionState({ force: true }));
@@ -8251,9 +8519,38 @@ bookingBarItems?.addEventListener("click", (event) => {
   );
 });
 
-["startDate", "prepaidNights", "nightlyPrice", "paidAmount"].forEach((name) => {
+["startDate", "periodEndDate", "nightlyPrice", "paidAmount"].forEach((name) => {
   stationingForm.elements[name].addEventListener("input", syncStationingTotals);
   stationingForm.elements[name].addEventListener("change", syncStationingTotals);
+});
+
+stationingForm.elements.periodEndDate.addEventListener("change", () => {
+  syncStationingTotals();
+});
+
+stationingPaymentHistory?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-void-stationing-payment]");
+  if (!button || !editingStationingKey) return;
+  const record = stationing.find((item) => item.key === editingStationingKey);
+  if (!record) return;
+  const confirmed = await window.appDialog.confirm("Anulezi această plată? Zilele verzi vor fi recalculate cronologic.", {
+    title: "Anulare plată staționare",
+    confirmLabel: "Anulează plata",
+    danger: true
+  });
+  if (!confirmed) return;
+  const paymentId = button.dataset.voidStationingPayment;
+  const voidedAt = new Date().toISOString();
+  const saved = saveStationingRecord({
+    ...record,
+    paymentTransactions: stationingCalculator.normalizePayments(record).map((payment) =>
+      payment.id === paymentId ? { ...payment, voidedAt } : payment
+    )
+  });
+  stationingForm.elements.paidAmount.value = Number(saved.paidAmount || 0).toFixed(2);
+  syncStationingTotals();
+  refreshIcons(stationingPaymentHistory);
+  showToast("Plata a fost anulată și zilele au fost recalculate");
 });
 
 stationingForm.addEventListener("submit", (event) => {
@@ -8265,22 +8562,40 @@ stationingForm.addEventListener("submit", (event) => {
     showToast("Proprietarul și rulota sunt obligatorii");
     return;
   }
+  const startDate = String(data.get("startDate") || toISODate(today));
+  const endDate = String(data.get("periodEndDate") || "");
+  const pricePerDayCents = stationingCalculator.toCents(data.get("nightlyPrice"));
+  if (endDate && endDate < startDate) {
+    showToast("Data de sfârșit nu poate fi înaintea datei de început");
+    return;
+  }
+  if (pricePerDayCents <= 0) {
+    showToast("Prețul pe zi trebuie să fie mai mare decât zero");
+    return;
+  }
 
   const wasEditing = Boolean(editingStationingKey);
   const createdFromBooking = stationingModalContext?.source === "booking" && bookingModal.classList.contains("is-open");
   const key = editingStationingKey || `stationing-${Date.now()}`;
+  const previousRecord = stationing.find((item) => item.key === key) || null;
   const savedRecord = saveStationingRecord({
+    ...(previousRecord || {}),
     key,
+    schemaVersion: 2,
     owner,
     phone: String(data.get("phone") || "").trim(),
     caravan,
-    startDate: String(data.get("startDate") || toISODate(today)),
-    prepaidNights: Number(data.get("prepaidNights") || 1),
-    nightlyPrice: Number(data.get("nightlyPrice") || 0),
+    startDate,
+    endDate,
+    openEnded: !endDate,
+    prepaidNights: Number(data.get("prepaidNights") || 0),
+    pricePerDayCents,
+    nightlyPrice: pricePerDayCents / 100,
     totalPrice: Number(data.get("totalPrice") || 0),
-    paidAmount: Number(data.get("paidAmount") || 0),
+    paymentTransactions: stationingPaymentTransactionsForForm(previousRecord, true),
     balance: Number(data.get("balance") || 0),
-    deductions: stationing.find((item) => item.key === key)?.deductions || [],
+    deductions: previousRecord?.deductions || [],
+    stayLinks: previousRecord?.stayLinks || [],
     note: String(data.get("note") || "").trim()
   });
 
@@ -8290,7 +8605,8 @@ stationingForm.addEventListener("submit", (event) => {
       recordLabel: stationingRecordLabel(savedRecord),
       selectedAt: new Date().toISOString(),
       nights: bookingDeductionNights(),
-      autoLinked: true
+      autoLinked: true,
+      subtractDays: false
     });
   }
   closeStationingModal();
@@ -8323,8 +8639,17 @@ receiptForm.addEventListener("click", (event) => {
 });
 
 receiptForm.addEventListener("change", (event) => {
-  if (!event.target.closest('input[name="receiptBarMode"]')) return;
-  syncReceiptAmountForBarMode();
+  if (event.target.closest('input[name="receiptBarMode"]')) {
+    syncReceiptAmountForBarMode();
+    return;
+  }
+  if (event.target.closest('input[name="stationingPaymentMode"]')) {
+    syncStationingReceiptPaymentChoice();
+  }
+});
+
+receiptForm.addEventListener("input", (event) => {
+  if (event.target.closest("#stationingReceiptDays")) syncStationingReceiptPaymentChoice();
 });
 
 unitPricingPrevButton.addEventListener("click", () => {
@@ -8556,7 +8881,9 @@ bookingForm.addEventListener("submit", async (event) => {
   const personId = existingStay?.personId || bookingPersonId || createPersonId(data.get("guest") || id);
   const paymentMethod = String(data.get("paymentMethod") || existingStay?.paymentMethod || "");
   const stationingDeduction = currentBookingIsRv()
-    ? stationingDeductionFromDraft() || normalizeStayStationingDeduction(existingStay?.stationingDeduction)
+    ? bookingStationingDeductionDraft?.cleared === true
+      ? null
+      : stationingDeductionFromDraft() || normalizeStayStationingDeduction(existingStay?.stationingDeduction)
     : null;
 
   const nextStay = {
@@ -8607,7 +8934,12 @@ bookingForm.addEventListener("submit", async (event) => {
     }
   }
 
-  const automaticDeduction = nextStay.stationingDeduction?.autoLinked && reservationIsFuture(nextStay)
+  const previousStationingKey = previousStay?.stationingDeduction?.recordKey || "";
+  const nextStationingKey = nextStay.stationingDeduction?.recordKey || "";
+  if (previousStationingKey && previousStationingKey !== nextStationingKey) {
+    removeStationingLinkForStay(nextStay.key, previousStationingKey);
+  }
+  const automaticDeduction = nextStay.stationingDeduction?.subtractDays === true
     ? await applyStationingDeductionForStay(nextStay, { ask: false })
     : null;
   saveStays();

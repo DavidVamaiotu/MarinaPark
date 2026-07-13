@@ -12,6 +12,7 @@ files:
   - electron-main.js
   - persistent-files.js
   - client-directory.js
+  - stationing-calculator.js
   - server.js
   - app.js
   - app-dialog.js

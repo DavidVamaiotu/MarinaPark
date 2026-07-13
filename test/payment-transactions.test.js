@@ -5,6 +5,10 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const test = require("node:test");
 
+function localDateISO(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 async function startTestServer() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "parkline-payment-test-"));
   const dataDir = path.join(root, "data");
@@ -117,6 +121,7 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
     units: [{ id: "D-1", group: "room", kind: "Room" }, { id: "D-2", group: "room", kind: "Room" }],
     stationing: [
       { key: "station-a", owner: "Owner", caravan: "RV", startDate: "2026-07-01", prepaidNights: 10, nightlyPrice: 10, totalPrice: 100, paidAmount: 0, balance: 100 },
+      { key: "station-open", schemaVersion: 2, owner: "Open Owner", caravan: "RV Open", startDate: localDateISO(), endDate: "", openEnded: true, pricePerDayCents: 1000, paymentTransactions: [] },
       {
         key: "station-deducted",
         owner: "Linked Nights",
@@ -255,6 +260,14 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
     body: JSON.stringify({ paymentId: "station-over-test", type: "stationing", method: "voucher", amount: 150, stationingKey: "station-a" })
   });
   assert.equal(overpayment.status, 400);
+
+  const openCredit = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({ paymentId: "station-open-credit-test", type: "stationing", method: "voucher", amount: 150, stationingKey: "station-open" })
+  });
+  assert.equal(openCredit.status, 200);
+  assert.equal(openCredit.body.stationing.paidAmount, 150);
+  assert.equal(openCredit.body.stationing.credit, 150);
 
   const stationingWithLinkedNights = await request(server.url, "/api/payment", {
     method: "POST",

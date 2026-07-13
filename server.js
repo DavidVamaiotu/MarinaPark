@@ -7,6 +7,7 @@ const { execFile } = require("child_process");
 const { DatabaseSync } = require("node:sqlite");
 const mysql = require("mysql2/promise");
 const { ClientHistoryStore, mergeClientDirectory, normalizeClientName } = require("./client-directory");
+const stationingCalculator = require("./stationing-calculator");
 
 const rootDir = path.resolve(process.env.MARINA_APP_ROOT || __dirname);
 const dataDir = path.resolve(process.env.MARINA_DATA_DIR || path.join(rootDir, "data"));
@@ -58,6 +59,7 @@ let clientDirectoryCache = null;
 let roomAvailabilityCache = null;
 db.exec(`
   PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
   CREATE TABLE IF NOT EXISTS reservations (
     key TEXT PRIMARY KEY,
     order_index INTEGER NOT NULL,
@@ -93,12 +95,35 @@ db.exec(`
     owner TEXT NOT NULL,
     caravan TEXT NOT NULL,
     start_date TEXT NOT NULL,
-    end_date TEXT NOT NULL,
+    end_date TEXT,
+    price_per_day_cents INTEGER NOT NULL DEFAULT 0,
+    open_ended INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL,
     data TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_stationing_dates ON stationing(start_date, end_date);
   CREATE INDEX IF NOT EXISTS idx_stationing_owner ON stationing(owner);
+  CREATE TABLE IF NOT EXISTS stationing_payments (
+    payment_id TEXT PRIMARY KEY,
+    stationing_key TEXT NOT NULL,
+    payment_date TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL,
+    method TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'payment',
+    voided_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(stationing_key) REFERENCES stationing(key) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_stationing_payments_record ON stationing_payments(stationing_key, payment_date, created_at);
+  CREATE TABLE IF NOT EXISTS stationing_stay_links (
+    stationing_key TEXT NOT NULL,
+    stay_key TEXT NOT NULL,
+    subtract_days INTEGER NOT NULL DEFAULT 0,
+    linked_at TEXT NOT NULL,
+    PRIMARY KEY(stationing_key, stay_key),
+    FOREIGN KEY(stationing_key) REFERENCES stationing(key) ON DELETE CASCADE
+  );
   CREATE TABLE IF NOT EXISTS bar_articles (
     key TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -139,6 +164,14 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_payment_transactions_status ON payment_transactions(status, updated_at);
 `);
+
+function ensureColumn(tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (!columns.some((column) => column.name === columnName)) db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+}
+
+ensureColumn("stationing", "price_per_day_cents", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("stationing", "open_ended", "INTEGER NOT NULL DEFAULT 1");
 
 function send(response, status, body, contentType = "application/json; charset=utf-8") {
   response.writeHead(status, {
@@ -251,16 +284,7 @@ async function writeActivityLogLocalFiles(entries, options = {}) {
 }
 
 function stationingEndDate(record) {
-  const startDate = String(record.startDate || "");
-  const prepaidNights = Math.max(1, Number(record.prepaidNights || 1));
-  const start = /^\d{4}-\d{2}-\d{2}$/.test(startDate)
-    ? new Date(...startDate.split("-").map((value, index) => Number(value) - (index === 1 ? 1 : 0)))
-    : new Date();
-  start.setDate(start.getDate() + prepaidNights);
-  const year = start.getFullYear();
-  const month = String(start.getMonth() + 1).padStart(2, "0");
-  const day = String(start.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return stationingCalculator.normalizeRecord(record).endDate || "";
 }
 
 function normalizeMoneyValue(value) {
@@ -364,8 +388,17 @@ function replaceDatabaseData(stays, config, units = [], stationing = [], barArti
     ON CONFLICT(key) DO UPDATE SET updated_at = excluded.updated_at, data = excluded.data
   `);
   const insertStationing = db.prepare(`
-    INSERT INTO stationing (key, owner, caravan, start_date, end_date, updated_at, data)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO stationing (key, owner, caravan, start_date, end_date, price_per_day_cents, open_ended, updated_at, data)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertStationingPayment = db.prepare(`
+    INSERT INTO stationing_payments
+      (payment_id, stationing_key, payment_date, amount_cents, method, note, kind, voided_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertStationingStayLink = db.prepare(`
+    INSERT INTO stationing_stay_links (stationing_key, stay_key, subtract_days, linked_at)
+    VALUES (?, ?, ?, ?)
   `);
   const insertBarArticle = db.prepare(`
     INSERT INTO bar_articles (key, name, stock, vat_rate, updated_at, data)
@@ -402,19 +435,41 @@ function replaceDatabaseData(stays, config, units = [], stationing = [], barArti
         JSON.stringify(unit)
       );
     });
+    db.exec("DELETE FROM stationing_payments");
+    db.exec("DELETE FROM stationing_stay_links");
     db.exec("DELETE FROM stationing");
     stationing.forEach((record, index) => {
       const key = String(record.key || `stationing-${index}`);
       const startDate = String(record.startDate || now.slice(0, 10));
+      const normalized = stationingCalculator.normalizeRecord({ ...record, key, startDate });
+      const stored = { ...normalized, key, startDate };
       insertStationing.run(
         key,
-        String(record.owner || ""),
-        String(record.caravan || ""),
+        String(stored.owner || ""),
+        String(stored.caravan || ""),
         startDate,
-        stationingEndDate({ ...record, startDate }),
+        stored.endDate || "",
+        stored.pricePerDayCents,
+        stored.openEnded ? 1 : 0,
         now,
-        JSON.stringify({ ...record, key, startDate })
+        JSON.stringify(stored)
       );
+      stored.paymentTransactions.forEach((payment) => {
+        insertStationingPayment.run(
+          payment.id,
+          key,
+          payment.paymentDate,
+          payment.amountCents,
+          payment.method,
+          payment.note,
+          payment.kind,
+          payment.voidedAt,
+          payment.createdAt
+        );
+      });
+      stored.stayLinks.forEach((link) => {
+        insertStationingStayLink.run(key, link.stayKey, link.subtractDays ? 1 : 0, link.linkedAt || now);
+      });
     });
     db.exec("DELETE FROM bar_articles");
     barArticles.forEach((article, index) => {
@@ -1216,21 +1271,41 @@ function updateReservationRow(stay, now) {
 }
 
 function updateStationingRow(record, now) {
-  const startDate = String(record.startDate || now.slice(0, 10));
+  const normalized = stationingCalculator.normalizeRecord(record);
+  const startDate = String(normalized.startDate || now.slice(0, 10));
   const result = db.prepare(`
     UPDATE stationing
-    SET owner = ?, caravan = ?, start_date = ?, end_date = ?, updated_at = ?, data = ?
+    SET owner = ?, caravan = ?, start_date = ?, end_date = ?, price_per_day_cents = ?, open_ended = ?, updated_at = ?, data = ?
     WHERE key = ?
   `).run(
-    String(record.owner || ""),
-    String(record.caravan || ""),
+    String(normalized.owner || ""),
+    String(normalized.caravan || ""),
     startDate,
-    stationingEndDate({ ...record, startDate }),
+    normalized.endDate || "",
+    normalized.pricePerDayCents,
+    normalized.openEnded ? 1 : 0,
     now,
-    JSON.stringify(record),
-    String(record.key || "")
+    JSON.stringify(normalized),
+    String(normalized.key || "")
   );
-  if (!result.changes) throw requestError(404, `Staționarea ${record.key || ""} nu există`);
+  if (!result.changes) throw requestError(404, `Staționarea ${normalized.key || ""} nu există`);
+  db.prepare("DELETE FROM stationing_payments WHERE stationing_key = ?").run(normalized.key);
+  const insertPayment = db.prepare(`
+    INSERT INTO stationing_payments
+      (payment_id, stationing_key, payment_date, amount_cents, method, note, kind, voided_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  normalized.paymentTransactions.forEach((payment) => {
+    insertPayment.run(payment.id, normalized.key, payment.paymentDate, payment.amountCents, payment.method, payment.note, payment.kind, payment.voidedAt, payment.createdAt);
+  });
+  db.prepare("DELETE FROM stationing_stay_links WHERE stationing_key = ?").run(normalized.key);
+  const insertLink = db.prepare(`
+    INSERT INTO stationing_stay_links (stationing_key, stay_key, subtract_days, linked_at)
+    VALUES (?, ?, ?, ?)
+  `);
+  normalized.stayLinks.forEach((link) => {
+    insertLink.run(normalized.key, link.stayKey, link.subtractDays ? 1 : 0, link.linkedAt || now);
+  });
 }
 
 function coveredReservationAmount(stay) {
@@ -1548,12 +1623,20 @@ function prepareStayPayment(payload, context) {
 }
 
 function normalizeStationingPaymentRecord(record) {
-  const prepaidNights = Math.max(1, Math.min(1095, Math.round(Number(record.prepaidNights || 1))));
-  const nightlyPrice = Math.max(0, Math.round(receiptNumber(record.nightlyPrice) * 100) / 100);
-  const deductions = Array.isArray(record.deductions) ? record.deductions : [];
-  const totalPrice = Math.round((nightlyPrice > 0 ? nightlyPrice * prepaidNights : receiptNumber(record.totalPrice)) * 100) / 100;
-  const paidAmount = Math.min(totalPrice, Math.max(0, Math.round(receiptNumber(record.paidAmount) * 100) / 100));
-  return { ...record, prepaidNights, nightlyPrice, totalPrice, paidAmount, balance: Math.max(0, Math.round((totalPrice - paidAmount) * 100) / 100), deductions };
+  const normalized = stationingCalculator.normalizeRecord(record);
+  const calculation = stationingCalculator.calculate(normalized, reservationRows(), { allowZeroPrice: true });
+  return {
+    ...normalized,
+    totalPrice: calculation.generatedTotalCents / 100,
+    totalPriceCents: calculation.generatedTotalCents,
+    paidAmount: calculation.amountPaidCents / 100,
+    paidAmountCents: calculation.amountPaidCents,
+    appliedPaymentCents: calculation.appliedPaymentCents,
+    balance: calculation.remainingBalanceCents / 100,
+    balanceCents: calculation.remainingBalanceCents,
+    credit: calculation.creditCents / 100,
+    creditCents: calculation.creditCents
+  };
 }
 
 function prepareStationingPayment(payload, context) {
@@ -1561,9 +1644,20 @@ function prepareStationingPayment(payload, context) {
   if (!current) throw requestError(404, "Staționarea nu mai există");
   const draft = payload.draftStationing && typeof payload.draftStationing === "object" ? payload.draftStationing : {};
   const source = normalizeStationingPaymentRecord({ ...current, ...draft, key: current.key });
-  const amount = receiptNumber(payload.amount == null ? source.balance : payload.amount);
-  if (amount <= 0 || amount - source.balance > 0.001) throw requestError(400, "Suma depășește restul staționării");
-  const next = normalizeStationingPaymentRecord({ ...source, paidAmount: source.paidAmount + amount });
+  const amountNeeded = Math.max(0, Math.round((source.balance - source.credit) * 100) / 100);
+  const amount = receiptNumber(payload.amount == null ? amountNeeded : payload.amount);
+  if (amount <= 0 || (!source.openEnded && amount - amountNeeded > 0.001)) {
+    throw requestError(400, "Suma depășește restul staționării");
+  }
+  const payment = stationingCalculator.normalizePayment({
+    id: context.paymentId,
+    paymentDate: stationingCalculator.localDateISO(),
+    amountCents: Math.round(amount * 100),
+    method: context.method,
+    note: String(payload.note || ""),
+    createdAt: context.now
+  });
+  const next = normalizeStationingPaymentRecord({ ...source, paymentTransactions: [...source.paymentTransactions, payment] });
   updateStationingRow(next, context.now);
   const activity = normalizeActivityLogEntry({
     id: `payment-${context.paymentId}`,

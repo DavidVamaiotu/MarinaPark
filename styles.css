@@ -1407,6 +1407,176 @@ h3 {
   gap: 10px;
 }
 
+.stationing-timeline-panel {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.stationing-timeline-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.stationing-timeline-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.stationing-timeline-toggle-label::after {
+  content: "Deschide";
+}
+
+.stationing-timeline-panel[open] .stationing-timeline-toggle-label::after {
+  content: "Închide";
+}
+
+.stationing-timeline-toggle-label {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.stationing-timeline-content {
+  display: grid;
+  gap: 10px;
+}
+
+.stationing-timeline-content > .timeline-actions {
+  justify-content: flex-start;
+}
+
+.stationing-timeline-legend,
+.stationing-timeline-zoom {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.stationing-timeline-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stationing-timeline-legend b {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 5px;
+  color: #fff;
+}
+
+.stationing-timeline-legend .is-unpaid b { background: #b74b43; }
+.stationing-timeline-legend .is-paid b { background: #2f7f5d; }
+.stationing-timeline-legend .is-excluded b { background: #2c78a0; }
+
+.stationing-timeline-shell {
+  max-height: min(720px, calc(100vh - 270px));
+  --timeline-unit-width: 240px;
+  --timeline-day-width: 54px;
+}
+
+.stationing-timeline {
+  min-height: 180px;
+}
+
+.stationing-timeline .timeline-row {
+  grid-template-rows: minmax(78px, auto);
+  min-height: 92px;
+}
+
+.stationing-timeline .timeline-unit {
+  gap: 3px;
+  padding: 10px 12px;
+}
+
+.stationing-timeline .timeline-unit small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.stationing-day-cell {
+  position: relative;
+  display: grid;
+  align-self: stretch;
+  align-content: center;
+  justify-items: center;
+  min-width: 0;
+  padding: 20px 2px 4px;
+  border: 0;
+  border-right: 1px solid rgba(255, 253, 248, 0.35);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.stationing-day-cell::after {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.stationing-day-cell.is-unpaid {
+  background: repeating-linear-gradient(135deg, #b74b43 0 8px, #a73f38 8px 12px);
+}
+
+.stationing-day-cell.is-unpaid::after { content: "!"; }
+
+.stationing-day-cell.is-paid {
+  background: repeating-linear-gradient(45deg, #2f7f5d 0 9px, #397f62 9px 13px);
+}
+
+.stationing-day-cell.is-paid::after { content: "✓"; }
+
+.stationing-day-cell.is-excluded {
+  background: repeating-linear-gradient(135deg, #2c78a0 0 7px, #3c86aa 7px 12px);
+}
+
+.stationing-day-cell.is-excluded::after { content: "−"; }
+
+.stationing-day-cell.is-outside {
+  background: rgba(255, 253, 248, 0.38);
+  border-right-color: rgba(221, 212, 197, 0.55);
+  cursor: default;
+}
+
+.stationing-day-cell:focus-visible {
+  z-index: 3;
+  outline: 3px solid var(--gold);
+  outline-offset: -3px;
+}
+
+.stationing-day-summary {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  right: 2px;
+  overflow: hidden;
+  padding: 2px 3px;
+  border-radius: 3px;
+  background: rgba(255, 253, 248, 0.9);
+  color: var(--ink);
+  font-size: 8px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stationing-timeline-empty-summary {
+  padding: 10px 12px;
+  color: var(--muted);
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+}
+
 .stationing-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -3144,6 +3314,56 @@ h3 {
   color: var(--ink);
   background: var(--accent-soft);
   border-radius: var(--radius);
+}
+
+.stationing-payment-history {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stationing-payment-history > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px;
+  background: rgba(255, 253, 248, 0.72);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.stationing-payment-history > div > span {
+  min-width: 0;
+  flex: 1;
+}
+
+.stationing-payment-history .icon-button {
+  flex: 0 0 auto;
+}
+
+.stationing-payment-choice {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.stationing-payment-choice > label:not(.stationing-payment-days) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stationing-payment-choice input[type="radio"] {
+  width: auto;
+}
+
+.stationing-payment-days[hidden] {
+  display: none;
 }
 
 .stationing-notes-section {
