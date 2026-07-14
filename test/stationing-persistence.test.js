@@ -62,6 +62,7 @@ test("stationing payments and idempotent stay links survive an application resta
     startDate: "2026-07-01",
     endDate: "2026-07-04",
     openEnded: false,
+    manualPrepaidNights: 2,
     pricePerDayCents: 2000,
     paymentTransactions: [{ id: "cash-1", paymentDate: "2026-07-01", amountCents: 4000, method: "cash", createdAt: "2026-07-01T10:00:00Z" }],
     stayLinks: [
@@ -103,5 +104,6 @@ test("stationing payments and idempotent stay links survive an application resta
   assert.equal(restored.paymentTransactions[0].amountCents, 4000);
   assert.deepEqual(restored.stayLinks.map((link) => link.stayKey), ["stay-1"]);
   assert.equal(restored.openEnded, false);
+  assert.equal(restored.manualPrepaidNights, 2);
   assert.equal(restored.endDate, "2026-07-04");
 });

@@ -1580,6 +1580,7 @@ function normalizeStationingRecord(record = {}, index = 0) {
     endDate: normalized.endDate,
     openEnded: normalized.openEnded,
     prepaidNights,
+    manualPrepaidNights: normalized.manualPrepaidNights,
     pricePerDayCents: normalized.pricePerDayCents,
     nightlyPrice: normalized.pricePerDayCents / 100,
     totalPrice: calculation.generatedTotalCents / 100,
@@ -4655,7 +4656,10 @@ function renderStationingTimeline(options = {}) {
           ? "is-excluded"
           : "is-unpaid";
       const exclusionText = day.exclusionSources.length
-        ? ` Cazare: ${day.exclusionSources.map((source) => `${source.guest || source.stayKey} (${source.start}–${source.end}, plecare exclusivă)`).join(", ")}.`
+        ? ` ${day.exclusionSources.map((source) => source.type === "manual-prepaid"
+            ? "Zi albastră adăugată din numărul de nopți preplătite."
+            : `Cazare: ${source.guest || source.stayKey} (${source.start}–${source.end}, plecare exclusivă).`
+          ).join(" ")}`
         : "";
       const paymentText = day.paymentIds.length ? ` Plată: ${day.paymentIds.join(", ")}.` : "";
       const dynamicText = day.dynamicallyGenerated ? " Generată dinamic pentru o staționare deschisă." : "";
@@ -5716,10 +5720,14 @@ function stationingFormCalculation(includeCorrection = false) {
     openEnded: !endDate,
     pricePerDayCents,
     nightlyPrice: pricePerDayCents / 100,
+    manualPrepaidNights: 0,
     paymentTransactions: stationingPaymentTransactionsForForm(existingRecord, includeCorrection),
     stayLinks: existingRecord?.stayLinks || [],
     deductions: existingRecord?.deductions || []
   };
+  const requestedPrepaidNights = Math.max(0, Math.round(Number(stationingForm.elements.prepaidNights.value || 0)));
+  const linkedOnly = stationingCalculator.calculate(source, stays, { todayISO: toISODate(today), allowZeroPrice: true });
+  source.manualPrepaidNights = Math.max(0, requestedPrepaidNights - linkedOnly.linkedExcludedDays);
   return stationingCalculator.calculate(source, stays, { todayISO: toISODate(today), allowZeroPrice: true });
 }
 
@@ -5791,7 +5799,7 @@ function openStationingModal(recordKey = null, defaults = {}) {
   stationingForm.elements.caravan.value = record?.caravan || defaults.caravan || "";
   stationingForm.elements.startDate.value = record?.startDate || defaults.startDate || toISODate(today);
   stationingForm.elements.periodEndDate.value = record?.openEnded === false ? record.endDate || "" : "";
-  stationingForm.elements.prepaidNights.value = "0";
+  stationingForm.elements.prepaidNights.value = String(record?.prepaidNights ?? defaults.prepaidNights ?? 0);
   stationingForm.elements.nightlyPrice.value = Number(record?.nightlyPrice ?? defaults.nightlyPrice ?? 0).toFixed(2);
   stationingForm.elements.paidAmount.value = Number(record?.paidAmount ?? defaults.paidAmount ?? 0).toFixed(2);
   stationingForm.elements.note.value = record?.note || defaults.note || "";
@@ -8519,7 +8527,7 @@ bookingBarItems?.addEventListener("click", (event) => {
   );
 });
 
-["startDate", "periodEndDate", "nightlyPrice", "paidAmount"].forEach((name) => {
+["startDate", "periodEndDate", "prepaidNights", "nightlyPrice", "paidAmount"].forEach((name) => {
   stationingForm.elements[name].addEventListener("input", syncStationingTotals);
   stationingForm.elements[name].addEventListener("change", syncStationingTotals);
 });
@@ -8574,6 +8582,14 @@ stationingForm.addEventListener("submit", (event) => {
     return;
   }
 
+  let calculation;
+  try {
+    calculation = stationingFormCalculation(true);
+  } catch (error) {
+    showToast(error.message);
+    return;
+  }
+
   const wasEditing = Boolean(editingStationingKey);
   const createdFromBooking = stationingModalContext?.source === "booking" && bookingModal.classList.contains("is-open");
   const key = editingStationingKey || `stationing-${Date.now()}`;
@@ -8588,12 +8604,13 @@ stationingForm.addEventListener("submit", (event) => {
     startDate,
     endDate,
     openEnded: !endDate,
-    prepaidNights: Number(data.get("prepaidNights") || 0),
+    prepaidNights: calculation.excludedDays,
+    manualPrepaidNights: calculation.record.manualPrepaidNights,
     pricePerDayCents,
     nightlyPrice: pricePerDayCents / 100,
-    totalPrice: Number(data.get("totalPrice") || 0),
-    paymentTransactions: stationingPaymentTransactionsForForm(previousRecord, true),
-    balance: Number(data.get("balance") || 0),
+    totalPrice: calculation.generatedTotalCents / 100,
+    paymentTransactions: calculation.record.paymentTransactions,
+    balance: calculation.remainingBalanceCents / 100,
     deductions: previousRecord?.deductions || [],
     stayLinks: previousRecord?.stayLinks || [],
     note: String(data.get("note") || "").trim()

@@ -122,6 +122,7 @@
     const endDate = validISODate(record.endDate) ? record.endDate : hasExplicitPeriodModel ? "" : legacyEndDate({ ...record, startDate });
     const openEnded = hasExplicitPeriodModel ? record.openEnded !== false && !endDate : !endDate;
     const pricePerDayCents = centsFrom(record, "pricePerDayCents", "nightlyPrice");
+    const manualPrepaidNights = Math.max(0, Math.round(Number(record.manualPrepaidNights || 0)));
     return {
       ...record,
       schemaVersion: 2,
@@ -130,6 +131,7 @@
       openEnded,
       pricePerDayCents,
       nightlyPrice: pricePerDayCents / 100,
+      manualPrepaidNights,
       paymentTransactions: normalizePayments(record),
       stayLinks: normalizeStayLinks(record)
     };
@@ -222,7 +224,19 @@
       }
       return { date, status: DAY_STATUS.UNPAID, chargeCents: normalized.pricePerDayCents, exclusionSources: [], paymentIds: [], dynamicallyGenerated: normalized.openEnded };
     });
+    let manualExcludedDays = 0;
+    for (const day of days) {
+      if (manualExcludedDays >= normalized.manualPrepaidNights) break;
+      if (day.status !== DAY_STATUS.UNPAID) continue;
+      day.status = DAY_STATUS.CLIENT_STAY_EXCLUDED;
+      day.chargeCents = 0;
+      day.exclusionSources = [{ type: "manual-prepaid" }];
+      manualExcludedDays += 1;
+    }
     const chargeableDays = days.filter((day) => day.status !== DAY_STATUS.CLIENT_STAY_EXCLUDED).length;
+    const linkedExcludedDays = days.filter((day) =>
+      day.status === DAY_STATUS.CLIENT_STAY_EXCLUDED && day.exclusionSources.some((source) => source.type !== "manual-prepaid")
+    ).length;
     const generatedTotalCents = chargeableDays * normalized.pricePerDayCents;
     const remainingBalanceCents = Math.max(0, generatedTotalCents - appliedPaymentCents);
     return {
@@ -232,6 +246,8 @@
       days,
       chargeableDays,
       excludedDays: days.length - chargeableDays,
+      linkedExcludedDays,
+      manualExcludedDays,
       generatedTotalCents,
       amountPaidCents,
       appliedPaymentCents,

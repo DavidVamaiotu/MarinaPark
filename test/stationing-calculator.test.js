@@ -79,6 +79,49 @@ test("payments combine chronologically, skip excluded stays, and never pay a dat
   assert.equal(result.remainingBalanceCents, 2000);
 });
 
+test("manual prepaid nights start from the beginning and skip already paid days", () => {
+  const result = calculator.calculate(record({
+    openEnded: false,
+    endDate: "2026-07-06",
+    paymentTransactions: [payment("cash", 4000)],
+    manualPrepaidNights: 3
+  }));
+  assert.deepEqual(statuses(result), {
+    "2026-07-01": calculator.DAY_STATUS.PAID,
+    "2026-07-02": calculator.DAY_STATUS.PAID,
+    "2026-07-03": calculator.DAY_STATUS.CLIENT_STAY_EXCLUDED,
+    "2026-07-04": calculator.DAY_STATUS.CLIENT_STAY_EXCLUDED,
+    "2026-07-05": calculator.DAY_STATUS.CLIENT_STAY_EXCLUDED,
+    "2026-07-06": calculator.DAY_STATUS.UNPAID
+  });
+  assert.equal(result.linkedExcludedDays, 0);
+  assert.equal(result.manualExcludedDays, 3);
+  assert.equal(result.excludedDays, 3);
+  assert.equal(result.remainingBalanceCents, 2000);
+});
+
+test("manual prepaid nights are additional to linked blue ranges", () => {
+  const source = record({
+    openEnded: false,
+    endDate: "2026-07-06",
+    paymentTransactions: [payment("cash", 2000)],
+    stayLinks: [{ stayKey: "stay-blue", subtractDays: true }],
+    manualPrepaidNights: 2
+  });
+  const result = calculator.calculate(source, [{ key: "stay-blue", start: "2026-07-02", end: "2026-07-04" }]);
+  assert.deepEqual(statuses(result), {
+    "2026-07-01": calculator.DAY_STATUS.PAID,
+    "2026-07-02": calculator.DAY_STATUS.CLIENT_STAY_EXCLUDED,
+    "2026-07-03": calculator.DAY_STATUS.CLIENT_STAY_EXCLUDED,
+    "2026-07-04": calculator.DAY_STATUS.CLIENT_STAY_EXCLUDED,
+    "2026-07-05": calculator.DAY_STATUS.CLIENT_STAY_EXCLUDED,
+    "2026-07-06": calculator.DAY_STATUS.UNPAID
+  });
+  assert.equal(result.linkedExcludedDays, 2);
+  assert.equal(result.manualExcludedDays, 2);
+  assert.equal(result.excludedDays, 4);
+});
+
 test("partial money and overpayment remain explicit credit without falsely paying a day", () => {
   const partial = calculator.calculate(record({
     openEnded: false,
