@@ -2104,14 +2104,32 @@ async function fetchSourceBookings(mode, query = "", options = {}) {
   try {
     const [rows] = await connection.execute(
       isCamping
-        ? `SELECT form, modification_date FROM wp_booking ORDER BY modification_date DESC${readAllRows ? "" : " LIMIT 5000"}`
-        : `SELECT remark, form, cost, booking_type, modification_date FROM wp_booking ORDER BY modification_date DESC${readAllRows ? "" : " LIMIT 5000"}`
+        ? `SELECT b.form, b.modification_date,
+            DATE_FORMAT(MIN(d.booking_date), '%Y-%m-%d') AS database_start,
+            DATE_FORMAT(MAX(d.booking_date), '%Y-%m-%d') AS database_end
+          FROM wp_booking b
+          LEFT JOIN wp_bookingdates d ON d.booking_id = b.booking_id
+          WHERE COALESCE(b.trash, 0) = 0 AND b.is_trash IS NULL
+          GROUP BY b.booking_id
+          ORDER BY b.modification_date DESC${readAllRows ? "" : " LIMIT 5000"}`
+        : `SELECT b.remark, b.form, b.cost, b.booking_type, b.modification_date,
+            DATE_FORMAT(MIN(d.booking_date), '%Y-%m-%d') AS database_start,
+            DATE_FORMAT(MAX(d.booking_date), '%Y-%m-%d') AS database_end
+          FROM wp_booking b
+          LEFT JOIN wp_bookingdates d ON d.booking_id = b.booking_id
+          WHERE COALESCE(b.trash, 0) = 0 AND b.is_trash IS NULL
+          GROUP BY b.booking_id
+          ORDER BY b.modification_date DESC${readAllRows ? "" : " LIMIT 5000"}`
     );
 
     const bookings = rows
       .map((row, index) => {
         const form = parseBookingForm(row.form);
-        const range = parseRomanianDateRange(form.datesText);
+        const range = parseRomanianDateRange(form.datesText) || (
+          row.database_start && row.database_end
+            ? { start: row.database_start, end: row.database_end }
+            : null
+        );
         if (!range || !form.guest) return null;
 
         const adults = Number(form.adults || 0);
