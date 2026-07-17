@@ -19,10 +19,6 @@ test("renderer pages use the in-app dialog instead of native JavaScript dialogs"
     assert.ok(dialogScript < pageScript, `${filename} loads app-dialog.js before its page script`);
   }
 
-  const serverSource = fs.readFileSync(path.join(root, "server.js"), "utf8");
-  assert.match(serverSource, /"\/app-dialog\.css"/);
-  assert.match(serverSource, /"\/app-dialog\.js"/);
-
   for (const filename of ["electron-builder.yml", "scripts/New-MarinaParkRelease.ps1"]) {
     const source = fs.readFileSync(path.join(root, filename), "utf8");
     assert.match(source, /app-dialog\.css/);
