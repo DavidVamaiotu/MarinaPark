@@ -1717,7 +1717,7 @@ function syncReceiptAmountForBarMode() {
   if (mode === "separate") {
     const accommodationAmount = Math.max(0, normalizeMoneyValue(amount - barTotal));
     receiptAmountInput.value = accommodationAmount.toFixed(2);
-    receiptAmountInput.max = accommodationAmount.toFixed(2);
+    receiptAmountInput.removeAttribute("max");
   } else {
     receiptAmountInput.value = amount.toFixed(2);
     receiptAmountInput.removeAttribute("max");
@@ -3538,10 +3538,6 @@ async function generateCommittedReceipt(stayKey, method) {
       return false;
     }
     const amount = paymentAmount;
-    if (amount > availableAmount) {
-      showToast("Suma depășește suma disponibilă pentru plată");
-      return false;
-    }
 
     if (targetType === "stay") {
       const deductionTargets = draft.isLinkedTotal && Array.isArray(draft.linkedKeys)

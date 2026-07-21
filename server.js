@@ -1555,10 +1555,19 @@ function prepareStayPayment(payload, context) {
   if (totalOutstanding <= 0 && !repeatPayment && !zeroPriceMarkPaid) throw requestError(409, "Rezervarea este deja achitată");
   const availableAmount = repeatPayment ? receiptNumber(paymentStays[0].price) : totalOutstanding;
   const amount = receiptNumber(payload.amount == null ? availableAmount : payload.amount);
-  if ((zeroPriceMarkPaid ? amount !== 0 : amount <= 0) || amount - availableAmount > 0.001) {
-    throw requestError(400, "Suma depășește suma disponibilă pentru plată");
+  if (zeroPriceMarkPaid ? amount !== 0 : amount <= 0) {
+    throw requestError(400, "Suma trebuie să fie mai mare decât 0");
   }
-  const allocations = repeatPayment || zeroPriceMarkPaid ? [amount] : allocateProportionally(amount, outstanding);
+  const overpaymentAmount = zeroPriceMarkPaid
+    ? 0
+    : repeatPayment
+      ? amount
+      : Math.max(0, Math.round((amount - totalOutstanding) * 100) / 100);
+  const allocations = repeatPayment || zeroPriceMarkPaid ? [amount] : allocateProportionally(Math.min(amount, totalOutstanding), outstanding);
+  if (!repeatPayment && overpaymentAmount > 0) {
+    const creditIndex = Math.max(0, outstanding.findIndex((value) => value > 0));
+    allocations[creditIndex] = Math.round((allocations[creditIndex] + overpaymentAmount) * 100) / 100;
+  }
 
   const updatedStays = paymentStays.map((stay, index) => {
     const price = Math.round(receiptNumber(stay.price) * 100) / 100;
@@ -1606,17 +1615,25 @@ function prepareStayPayment(payload, context) {
       newPrice: customerPriceAtPayment,
       repeatPayment,
       zeroPriceMarkPaid,
+      overpaymentAmount,
       receiptBarMode,
       receiptAccommodationAmount,
       linkedPayment: isLinked,
-      allocations: updatedStays.map((stay, index) => ({ key: stay.key, id: stay.id, outstanding: outstanding[index], allocatedAmount: allocations[index] }))
+      allocations: updatedStays.map((stay, index) => ({
+        key: stay.key,
+        id: stay.id,
+        outstanding: outstanding[index],
+        allocatedAmount: allocations[index],
+        appliedAmount: Math.min(outstanding[index], allocations[index]),
+        creditAmount: Math.max(0, Math.round((allocations[index] - outstanding[index]) * 100) / 100)
+      }))
     }
   });
   const receiptStay = { ...first, price: paymentStays.reduce((sum, stay) => sum + receiptNumber(stay.price), 0) };
   return {
     entityKey: first.key,
     amount,
-    result: { type: "stay", stays: updatedStays, allocations: activity.data.allocations, receiptBarMode, receiptAccommodationAmount },
+    result: { type: "stay", stays: updatedStays, allocations: activity.data.allocations, overpaymentAmount, receiptBarMode, receiptAccommodationAmount },
     activity,
     outbox: accommodationReceiptOutbox(receiptStay, context.method, amount, context.config, context.paymentId, { barMode: receiptBarMode, accommodationAmount: receiptAccommodationAmount })
   };

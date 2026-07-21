@@ -40,11 +40,33 @@ function dateLabel(dateKey) {
   if (dateKey === "Fără dată") return dateKey;
   const [year, month, day] = dateKey.split("-").map(Number);
   return new Date(year, month - 1, day).toLocaleDateString("ro-RO", {
-    weekday: "long",
     day: "numeric",
-    month: "long",
+    month: "short",
     year: "numeric"
   });
+}
+
+function displayDateValue(value) {
+  const text = String(value ?? "").trim();
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:T.*)?$/);
+  const localMatch = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  const parts = isoMatch
+    ? [Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3])]
+    : localMatch
+      ? [Number(localMatch[3]), Number(localMatch[2]), Number(localMatch[1])]
+      : null;
+  if (!parts) return text;
+  const [year, month, day] = parts;
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return text;
+  return date.toLocaleDateString("ro-RO", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function displayDatesInText(value) {
+  return String(value ?? "").replace(
+    /\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{4})\b/g,
+    (date) => displayDateValue(date)
+  );
 }
 
 function timeLabel(timestamp) {
@@ -56,14 +78,11 @@ function timeLabel(timestamp) {
 function exactTimeLabel(timestamp) {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) return "--";
-  return date.toLocaleString("ro-RO", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
+  return `${displayDateValue(localDateKey(timestamp))}, ${date.toLocaleTimeString("ro-RO", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit"
-  });
+  })}`;
 }
 
 function formatCurrency(value) {
@@ -107,16 +126,41 @@ function finiteMoney(...values) {
   return null;
 }
 
-function paymentComparison(entry) {
-  if (entry.eventType !== "payment" || entry.entityType === "bar") return null;
-  const initialPrice = finiteMoney(
+function loggedMoney(value) {
+  let text = String(value ?? "").replace(/\s/g, "");
+  if (!text) return null;
+  if (text.includes(",") && text.includes(".")) {
+    text = text.lastIndexOf(",") > text.lastIndexOf(".")
+      ? text.replaceAll(".", "").replace(",", ".")
+      : text.replaceAll(",", "");
+  } else if (text.includes(",")) {
+    text = text.replace(",", ".");
+  }
+  const number = Number(text);
+  return Number.isFinite(number) ? number : null;
+}
+
+function paymentInitialPrice(entry) {
+  const structuredPrice = finiteMoney(
     entry.data?.initialEditPrice,
     entry.data?.originalCustomerPrice,
     entry.data?.originalTotalPrice,
+    entry.data?.previousPrice,
     entry.data?.totalPrice
   );
+  if (structuredPrice !== null) return structuredPrice;
+
+  const messageMatch = String(entry.message || "").match(
+    /Pre(?:ț|t) ini(?:ț|t)ial(?: client| sta(?:ț|t)ionare)?:\s*([\d\s.,]+)/i
+  );
+  return messageMatch ? loggedMoney(messageMatch[1]) : null;
+}
+
+function paymentComparison(entry) {
+  if (entry.eventType !== "payment" || entry.entityType === "bar") return null;
+  const initialPrice = paymentInitialPrice(entry);
   const paidAmount = finiteMoney(entry.data?.actualPaidAmount, entry.data?.amount, entry.amount);
-  if (initialPrice === null || paidAmount === null || initialPrice <= 0) return null;
+  if (initialPrice === null || paidAmount === null || initialPrice < 0) return null;
   return {
     initialPrice,
     paidAmount,
@@ -174,14 +218,13 @@ function readableChanges(entry) {
     : Array.isArray(entry.data?.savedEdits)
       ? entry.data.savedEdits
       : [];
-  if (explicitChanges.length) return explicitChanges.map(String).filter(Boolean);
+  if (explicitChanges.length) return explicitChanges.map(String).filter((change) => change && !/^rest\s*:/i.test(change));
 
   const changes = [];
   const pairs = [
     ["Început", entry.data?.previousStart, entry.data?.newStart],
     ["Final", entry.data?.previousEnd, entry.data?.newEnd],
-    ["Preț", entry.data?.previousPrice, entry.data?.newPrice],
-    ["Rest", entry.data?.previousBalance, entry.data?.newBalance]
+    ["Preț", entry.data?.previousPrice, entry.data?.newPrice]
   ];
   pairs.forEach(([label, previous, current]) => {
     if (previous === undefined || current === undefined || String(previous) === String(current)) return;
@@ -192,7 +235,7 @@ function readableChanges(entry) {
 }
 
 function changeDetails(entry) {
-  if (entry.eventType !== "update") return "";
+  if (!["update", "payment"].includes(entry.eventType)) return "";
   const changes = readableChanges(entry);
   if (!changes.length) return "";
   const rows = changes.map((change) => {
@@ -201,9 +244,9 @@ function changeDetails(entry) {
     return `
       <div class="change-row">
         <span>${escapeHtml(labelPart)}</span>
-        <del>${escapeHtml(previous)}</del>
+        <del>${escapeHtml(displayDateValue(previous))}</del>
         <b aria-hidden="true">→</b>
-        <ins>${escapeHtml(current)}</ins>
+        <ins>${escapeHtml(displayDateValue(current))}</ins>
       </div>
     `;
   }).join("");
@@ -212,14 +255,26 @@ function changeDetails(entry) {
 
 function eventLabel(entry) {
   const labels = {
-    payment: "Plată",
-    update: "Modificare",
-    create: "Adăugare",
-    delete: "Ștergere",
+    payment: "Plată înregistrată",
+    update: "Modificat",
+    create: "Adăugat",
+    delete: "Șters",
     open: "Deschis",
-    settings: "Setări"
+    settings: "Setări schimbate"
   };
   return labels[entry.eventType] || "Eveniment";
+}
+
+function eventIcon(entry) {
+  const icons = {
+    payment: "₤",
+    update: "↻",
+    create: "+",
+    delete: "×",
+    open: "↗",
+    settings: "⚙"
+  };
+  return icons[entry.eventType] || "•";
 }
 
 function entityLabel(entry) {
@@ -246,6 +301,40 @@ function priceChangeAlert(entry) {
   `;
 }
 
+function entryVisualDetails(entry) {
+  const content = [changeDetails(entry), paymentComparisonView(entry), priceChangeAlert(entry)].filter(Boolean).join("");
+  if (!content) return "";
+  return `<div class="entry-visual-details">${content}</div>`;
+}
+
+function stationingDeductedNights(entry) {
+  if (entry.entityType !== "stationing") return null;
+  return finiteMoney(
+    entry.data?.deduction?.nights,
+    entry.data?.deduction?.appliedNights,
+    entry.data?.current?.prepaidNights,
+    entry.data?.record?.prepaidNights,
+    entry.data?.prepaidNights
+  );
+}
+
+function entryActionSummary(entry) {
+  const amount = Number(entry.amount || 0);
+  if (entry.eventType === "payment" && amount > 0) {
+    const person = entry.data?.client || entry.data?.owner || entry.entityLabel || entityLabel(entry);
+    const method = entry.method ? ` prin ${entry.method}` : "";
+    return `<p class="action-summary"><span class="person-name">${escapeHtml(person)}</span> a plătit <strong>${formatCurrency(amount)}</strong>${escapeHtml(method)}.</p>`;
+  }
+
+  const deductedNights = stationingDeductedNights(entry);
+  if (deductedNights !== null) {
+    const count = Math.max(0, Math.round(deductedNights));
+    return `<p class="action-summary"><strong>${count}</strong> ${count === 1 ? "noapte dedusă" : "nopți deduse"}.</p>`;
+  }
+
+  return "";
+}
+
 function paymentMethodTotals(payments) {
   return payments.reduce(
     (totals, entry) => {
@@ -267,28 +356,26 @@ function paymentMethodTotalText(payments) {
 
 function logCard(entry) {
   const amount = Number(entry.amount || 0);
-  const method = entry.method ? `<span class="chip">${escapeHtml(entry.method)}</span>` : "";
-  const amountChip = amount > 0 ? `<span class="chip">${formatCurrency(amount)}</span>` : "";
-  const entityNameClass = entry.entityType === "client" || entry.entityType === "stationing" ? " class=\"person-name\"" : "";
+  const subject = entry.entityLabel || entityLabel(entry);
   return `
     <article class="log-card is-${escapeHtml(entry.eventType)}${suspiciousReasons(entry).length ? " is-suspicious" : ""}">
-      <header>
-        <div>
-          <h3${entityNameClass}>${escapeHtml(entry.entityLabel || entityLabel(entry))}</h3>
-          <div class="log-meta">
-            <span class="chip">${escapeHtml(eventLabel(entry))}</span>
-            <span class="chip">${escapeHtml(entityLabel(entry))}</span>
-            ${method}
-            ${amountChip}
-            <time>${escapeHtml(timeLabel(entry.timestamp))}</time>
-          </div>
+      <header class="log-row-heading">
+        <time>${escapeHtml(timeLabel(entry.timestamp))}</time>
+        <span class="event-marker" aria-hidden="true">${eventIcon(entry)}</span>
+        <div class="log-row-main">
+          <span class="event-name">${escapeHtml(eventLabel(entry))}</span>
+          <h3 class="person-name">${escapeHtml(subject)}</h3>
+          <span class="entity-name">${escapeHtml(entityLabel(entry))}</span>
         </div>
+        ${
+          amount > 0 || entry.method
+            ? `<div class="log-row-value">${amount > 0 ? `<strong>${formatCurrency(amount)}</strong>` : ""}${entry.method ? `<span>${escapeHtml(entry.method)}</span>` : ""}</div>`
+            : ""
+        }
       </header>
-      <p>${escapeHtml(entry.message)}</p>
-      ${changeDetails(entry)}
-      ${paymentComparisonView(entry)}
+      ${entryActionSummary(entry)}
+      ${entryVisualDetails(entry)}
       ${suspiciousAlert(entry)}
-      ${priceChangeAlert(entry)}
     </article>
   `;
 }
@@ -360,21 +447,18 @@ function sectionTimestamp(section) {
 
 function sessionActionRow(entry) {
   const amount = Number(entry.amount || 0);
-  const amountText = amount > 0 ? `<span>${formatCurrency(amount)}</span>` : "";
-  const methodText = entry.method ? `<span>${escapeHtml(entry.method)}</span>` : "";
 
   return `
-    <div class="session-action-row is-${escapeHtml(entry.eventType)}${suspiciousReasons(entry).length ? " is-suspicious" : ""}">
-      <time>${escapeHtml(timeLabel(entry.timestamp))}</time>
-      <span>${escapeHtml(eventLabel(entry))}</span>
-      <p>${escapeHtml(entry.message)}</p>
-      ${methodText}
-      ${amountText}
+    <div class="session-action is-${escapeHtml(entry.eventType)}${suspiciousReasons(entry).length ? " is-suspicious" : ""}">
+      <div class="session-action-row">
+        <time>${escapeHtml(timeLabel(entry.timestamp))}</time>
+        <span class="event-marker" aria-hidden="true">${eventIcon(entry)}</span>
+        <span class="event-name">${escapeHtml(eventLabel(entry))}</span>
+        ${amount > 0 || entry.method ? `<div class="session-action-value">${amount > 0 ? `<strong>${formatCurrency(amount)}</strong>` : ""}${entry.method ? `<span>${escapeHtml(entry.method)}</span>` : ""}</div>` : ""}
+      </div>
+      ${entryVisualDetails(entry)}
+      ${suspiciousAlert(entry)}
     </div>
-    ${changeDetails(entry)}
-    ${paymentComparisonView(entry)}
-    ${suspiciousAlert(entry)}
-    ${priceChangeAlert(entry)}
   `;
 }
 
@@ -388,15 +472,8 @@ function clientSessionSection(section) {
   return `
     <article class="log-session">
       <header class="session-heading">
-        <div>
-          <h3 class="person-name">${escapeHtml(section.openEntry.entityLabel || entityLabel(section.openEntry))}</h3>
-          <div class="log-meta">
-            <time>${escapeHtml(timeLabel(section.openEntry.timestamp))}</time>
-            <span class="chip">Fișă deschisă</span>
-            <span class="chip">${escapeHtml(entityLabel(section.openEntry))}</span>
-            <span class="chip">${escapeHtml(actionText)}</span>
-          </div>
-        </div>
+        <h3 class="person-name">${escapeHtml(section.openEntry.entityLabel || entityLabel(section.openEntry))}</h3>
+        <p>Fișă deschisă la ${escapeHtml(timeLabel(section.openEntry.timestamp))} · ${escapeHtml(actionText)}</p>
       </header>
       <div class="session-actions">
         ${actionList}
@@ -405,10 +482,115 @@ function clientSessionSection(section) {
   `;
 }
 
+function dailyClientKey(entry) {
+  const personId = entry.data?.personId || entry.data?.editSession?.personId;
+  if (personId) return `person:${personId}`;
+  if (entry.entityKey) return `${entry.entityType || "entry"}:${entry.entityKey}`;
+  return `${entry.entityType || "entry"}:${entry.entityLabel || entityLabel(entry)}`;
+}
+
+function dailyClientName(entry) {
+  return entry.data?.client || entry.data?.owner || entry.entityLabel || entityLabel(entry);
+}
+
+function readableActionText(entry) {
+  if (entry.eventType === "payment") {
+    const comparison = paymentComparison(entry);
+    const paidAmount = comparison?.paidAmount ?? finiteMoney(entry.data?.actualPaidAmount, entry.data?.amount, entry.amount) ?? 0;
+    const method = entry.method ? ` prin ${entry.method}` : "";
+    const initialPriceText = comparison ? ` Preț inițial: ${formatCurrency(comparison.initialPrice)}.` : "";
+    return `A plătit ${formatCurrency(paidAmount)}${method}.${initialPriceText}`;
+  }
+
+  if (entry.eventType === "delete") return "Fișa a fost ștearsă.";
+  if (entry.eventType === "create") return "Fișa a fost adăugată.";
+  if (entry.eventType === "settings") return "Setările au fost modificate.";
+
+  const deductedNights = stationingDeductedNights(entry);
+  if (deductedNights !== null) {
+    const count = Math.max(0, Math.round(deductedNights));
+    return `${count} ${count === 1 ? "noapte a fost dedusă" : "nopți au fost deduse"}.`;
+  }
+
+  return "Fișa a fost modificată.";
+}
+
+function actionFacts(entry) {
+  const data = entry.data || {};
+  const record = data.stay || data.record || data.current || {};
+  const facts = [];
+  const addFact = (label, value) => {
+    const text = displayDatesInText(value).trim();
+    if (!text || facts.some((fact) => fact.label === label && fact.value === text)) return;
+    facts.push({ label, value: text });
+  };
+
+  if (entry.entityType === "client") {
+    addFact("Unitate", data.unit || record.id);
+    addFact("Perioadă", record.dates);
+  }
+  if (entry.entityType === "stationing") addFact("Rulotă", data.caravan || record.caravan);
+
+  const linkedCount = Array.isArray(data.linkedReservations) ? data.linkedReservations.length : 0;
+  if (linkedCount) addFact("Rezervări", `${linkedCount} legate`);
+  if (data.repeatPayment) addFact("Tip plată", "Plată suplimentară");
+  if (data.zeroPriceMarkPaid) addFact("Stare", "Marcat achitat cu voucher");
+  if (data.receiptBarMode === "separate") addFact("Bon bar", "Separat de cazare");
+  if (data.receiptBarMode === "combined") addFact("Bon bar", "Împreună cu cazarea");
+  if (data.savedFromPaymentPopup) addFact("Salvare", "Din fereastra de plată");
+
+  if (!facts.length) return "";
+  return `
+    <dl class="action-facts">
+      ${facts.map((fact) => `<div><dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value)}</dd></div>`).join("")}
+    </dl>
+  `;
+}
+
+function renderClientDayAction(entry) {
+  return `
+    <div class="client-day-action is-${escapeHtml(entry.eventType)}${suspiciousReasons(entry).length ? " is-suspicious" : ""}">
+      <div class="client-action-heading">
+        <time>${escapeHtml(timeLabel(entry.timestamp))}</time>
+        <span class="event-marker" aria-hidden="true">${eventIcon(entry)}</span>
+        <span class="event-name">${escapeHtml(eventLabel(entry))}</span>
+      </div>
+      <p class="client-action-text">${escapeHtml(readableActionText(entry))}</p>
+      ${actionFacts(entry)}
+      ${entryVisualDetails(entry)}
+      ${suspiciousAlert(entry)}
+    </div>
+  `;
+}
+
 function renderDayLog(dayEntries) {
-  return organizeDayEntries(dayEntries)
-    .map((section) => (section.type === "session" ? clientSessionSection(section) : logCard(section.entry)))
-    .join("");
+  const clients = new Map();
+  dayEntries.forEach((entry) => {
+    const key = dailyClientKey(entry);
+    if (!clients.has(key)) clients.set(key, { name: dailyClientName(entry), entityType: entry.entityType, entries: [] });
+    clients.get(key).entries.push(entry);
+  });
+
+  const groups = [...clients.values()]
+    .map((client) => ({
+      ...client,
+      entries: client.entries.sort((first, second) => activityTimestamp(first) - activityTimestamp(second))
+    }))
+    .sort((first, second) => activityTimestamp(second.entries[second.entries.length - 1]) - activityTimestamp(first.entries[first.entries.length - 1]));
+
+  return `
+    <div class="client-day-list">
+      ${groups.map((client) => `
+        <article class="client-day-card">
+          <header class="client-day-heading">
+            <h3 class="person-name">${escapeHtml(client.name)}</h3>
+            <span>${escapeHtml(entityLabel({ entityType: client.entityType }))} · ${client.entries.length} ${client.entries.length === 1 ? "acțiune" : "acțiuni"}</span>
+          </header>
+          <div class="client-day-actions">${client.entries.map(renderClientDayAction).join("")}</div>
+        </article>
+      `).join("")}
+    </div>
+  `;
 }
 
 function dayCountLabel(count) {
@@ -469,31 +651,24 @@ function setEventFilter(nextFilter) {
 }
 
 function renderSummary(currentEntries) {
+  const summaryEntries = currentEntries.filter((entry) => entry.eventType !== "open");
   const todayKey = localDateKey(new Date().toISOString());
-  const todayPayments = currentEntries.filter((entry) => localDateKey(entry.timestamp) === todayKey && entry.eventType === "payment");
+  const todayPayments = summaryEntries.filter((entry) => localDateKey(entry.timestamp) === todayKey && entry.eventType === "payment");
   const totalToday = todayPayments.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
   const todayMethodText = paymentMethodTotalText(todayPayments);
-  const updates = currentEntries.filter((entry) => entry.eventType === "update").length;
-  const suspicious = currentEntries.filter((entry) => suspiciousReasons(entry).length > 0).length;
+  const updates = summaryEntries.filter((entry) => entry.eventType === "update").length;
+  const suspicious = summaryEntries.filter((entry) => suspiciousReasons(entry).length > 0).length;
 
-  summaryGrid.innerHTML = [
-    ["Evenimente", currentEntries.length, "în filtrul curent"],
-    ["Plăți azi", formatCurrency(totalToday), `${todayPayments.length} încasări · ${todayMethodText}`],
-    ["Modificări", updates, "editări și mutări"],
-    ["De verificat", suspicious, suspicious ? "plăți sau prețuri suspecte" : "nimic suspect"]
-  ]
-    .map(
-      ([label, value, detail]) => `
-        <article class="summary-card">
-          <div>
-            <span>${escapeHtml(label)}</span>
-            <strong>${escapeHtml(value)}</strong>
-            <span>${escapeHtml(detail)}</span>
-          </div>
-        </article>
-      `
-    )
-    .join("");
+  summaryGrid.innerHTML = `
+    <p class="summary-line">
+      <span><strong>${summaryEntries.length}</strong> înregistrări</span>
+      <span><strong>${todayPayments.length}</strong> plăți azi</span>
+      <span><strong>${formatCurrency(totalToday)}</strong> încasat azi</span>
+      <span>${escapeHtml(todayMethodText)}</span>
+      <span><strong>${updates}</strong> modificări</span>
+      ${suspicious ? `<span class="summary-warning"><strong>${suspicious}</strong> de verificat</span>` : ""}
+    </p>
+  `;
 }
 
 function renderLog() {
@@ -501,7 +676,7 @@ function renderLog() {
   renderSummary(currentEntries);
   const visibleEntries = dailyTotalsOnly
     ? currentEntries.filter((entry) => entry.eventType === "payment" && Number(entry.amount || 0) > 0)
-    : currentEntries;
+    : currentEntries.filter((entry) => entry.eventType !== "open");
 
   if (!visibleEntries.length) {
     logFeed.innerHTML = `<p class="empty-state">${dailyTotalsOnly ? "Nu există plăți pentru filtrul curent." : "Nu există activitate pentru filtrul curent."}</p>`;

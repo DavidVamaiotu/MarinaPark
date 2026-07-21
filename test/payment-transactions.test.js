@@ -84,6 +84,7 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
       { key: "stay-e", id: "D-5", guest: "Rounding", personId: "person-2", group: "room", kind: "Room", price: 1, balance: 0, paid: true, settledPrice: 1, actualPaidAmount: 1 },
       { key: "stay-zero", id: "D-6", guest: "Complimentary", personId: "person-3", group: "room", kind: "Room", price: 0, balance: 0, paid: false },
       { key: "stay-edit", id: "D-7", guest: "Edited Price", personId: "person-4", group: "room", kind: "Room", price: 100, balance: 100 },
+      { key: "stay-over", id: "D-11", guest: "Overpaid", personId: "person-8", group: "room", kind: "Room", price: 100, balance: 100 },
       {
         key: "stay-bar-combined",
         id: "D-8",
@@ -253,7 +254,19 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
     method: "POST",
     body: JSON.stringify({ paymentId: "stay-repeat-over-test", type: "stay", method: "voucher", amount: 1.01, stayKey: "stay-e" })
   });
-  assert.equal(repeatedOverpayment.status, 400);
+  assert.equal(repeatedOverpayment.status, 200);
+  assert.equal(repeatedOverpayment.body.stays[0].actualPaidAmount, 3.01);
+  assert.equal(repeatedOverpayment.body.allocations[0].creditAmount, 1.01);
+
+  const reservationOverpayment = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({ paymentId: "stay-over-test", type: "stay", method: "voucher", amount: 150, stayKey: "stay-over" })
+  });
+  assert.equal(reservationOverpayment.status, 200);
+  assert.equal(reservationOverpayment.body.stays[0].actualPaidAmount, 150);
+  assert.equal(reservationOverpayment.body.allocations[0].appliedAmount, 100);
+  assert.equal(reservationOverpayment.body.allocations[0].creditAmount, 50);
+  assert.equal(reservationOverpayment.body.overpaymentAmount, 50);
 
   const overpayment = await request(server.url, "/api/payment", {
     method: "POST",
