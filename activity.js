@@ -502,7 +502,14 @@ function readableActionText(entry) {
     return `A plătit ${formatCurrency(paidAmount)}${method}.${initialPriceText}`;
   }
 
-  if (entry.eventType === "delete") return "Fișa a fost ștearsă.";
+  if (entry.eventType === "delete") {
+    const deletedPrice = entry.entityType === "client"
+      ? finiteMoney(entry.data?.stay?.price, entry.data?.record?.price, entry.data?.price)
+      : null;
+    return deletedPrice === null
+      ? "Fișa a fost ștearsă."
+      : `Fișa a fost ștearsă (${formatCurrency(deletedPrice)}).`;
+  }
   if (entry.eventType === "create") return "Fișa a fost adăugată.";
   if (entry.eventType === "settings") return "Setările au fost modificate.";
 

@@ -7443,6 +7443,12 @@ async function deleteClient(stayKey) {
 
   const stay = stays[stayIndex];
   if (stay.guest === "Disponibil") return false;
+  if (!isStayFullyPaid(stay)) {
+    await window.appDialog.alert("Rezervarea trebuie marcată ca plătită înainte de ștergere.", {
+      title: "Client neachitat"
+    });
+    return false;
+  }
   const confirmed = await window.appDialog.confirm(`Ștergi clientul ${stay.guest}?`, {
     title: "Ștergere client",
     confirmLabel: "Șterge",
