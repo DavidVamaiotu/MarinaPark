@@ -559,6 +559,13 @@ function createdClientDetails(entry) {
   const client = entry.data?.current || entry.data?.stay || entry.data?.record || {};
   const phone = String(client.phone || "").trim() || "Nespecificat";
   const car = String(client.car || "").trim() || "Nespecificat";
+  const peopleCount = (value) => {
+    if (value === undefined || value === null || String(value).trim() === "") return "Nespecificat";
+    const count = Number(value);
+    return Number.isFinite(count) ? String(Math.max(0, Math.round(count))) : "Nespecificat";
+  };
+  const adults = peopleCount(client.adults);
+  const children = peopleCount(client.children);
   const facilities = Array.isArray(client.facilities) ? client.facilities : [];
   const facilityAnswer = (key, name) => {
     const facility = facilities.find((item) => item?.key === key || String(item?.name || "").toLowerCase() === name);
@@ -579,6 +586,8 @@ function createdClientDetails(entry) {
       <dl class="client-created-details" hidden>
         <div><dt>Telefon</dt><dd>${escapeHtml(phone)}</dd></div>
         <div><dt>Nr. mașină</dt><dd>${escapeHtml(car)}</dd></div>
+        <div><dt>Adulți</dt><dd>${escapeHtml(adults)}</dd></div>
+        <div><dt>Copii</dt><dd>${escapeHtml(children)}</dd></div>
         <div><dt>Electricitate</dt><dd>${escapeHtml(electricity)}</dd></div>
         <div><dt>Pat suplimentar</dt><dd>${escapeHtml(extraBed)}</dd></div>
         <div><dt>Preț</dt><dd>${escapeHtml(price)}</dd></div>
