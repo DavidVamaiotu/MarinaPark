@@ -22,6 +22,29 @@ function syncWindowZoom() {
   mainWindow.webContents.setZoomFactor(zoomFactor);
 }
 
+async function captureMainWindowJpeg() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
+    throw new Error("Fereastra Marina Park nu este disponibilă");
+  }
+  const image = await mainWindow.webContents.capturePage();
+  if (image.isEmpty()) throw new Error("Fereastra Marina Park nu poate fi capturată momentan");
+  const bounds = mainWindow.getContentBounds();
+  const pointer = screen.getCursorScreenPoint();
+  const pointerVisible =
+    bounds.width > 0 && bounds.height > 0 &&
+    pointer.x >= bounds.x && pointer.x < bounds.x + bounds.width && pointer.y >= bounds.y && pointer.y < bounds.y + bounds.height;
+  return {
+    frame: image.toJPEG(68),
+    pointer: {
+      visible: pointerVisible,
+      x: pointerVisible ? Math.max(0, Math.min(1, (pointer.x - bounds.x) / bounds.width)) : 0,
+      y: pointerVisible ? Math.max(0, Math.min(1, (pointer.y - bounds.y) / bounds.height)) : 0,
+      width: bounds.width > 0 ? 18 / bounds.width : 0,
+      height: bounds.height > 0 ? 26 / bounds.height : 0
+    }
+  };
+}
+
 function bundledCustomDefaultsPath() {
   return app.isPackaged
     ? path.join(process.resourcesPath, "custom-defaults")
@@ -181,6 +204,7 @@ async function startApplication() {
   serverController = require("./server");
   const { url } = await serverController.startServer({ host: "0.0.0.0", localHost: "127.0.0.1", port: 4173, portAttempts: 100 });
   await createWindow(url, customDir);
+  serverController.setLiveScreenCaptureProvider(captureMainWindowJpeg);
   setupAutoUpdater();
 }
 
@@ -209,5 +233,6 @@ if (!hasSingleInstanceLock) {
 app.on("window-all-closed", () => app.quit());
 app.on("before-quit", () => {
   if (updateTimer) clearInterval(updateTimer);
+  serverController?.setLiveScreenCaptureProvider(null);
   void serverController?.stopServer();
 });

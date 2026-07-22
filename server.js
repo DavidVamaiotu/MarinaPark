@@ -33,6 +33,8 @@ const port = Number(process.env.PORT || 4173);
 const mysqlHost = process.env.MARINA_MYSQL_HOST || "81.181.112.114";
 const mysqlUser = process.env.MARINA_MYSQL_USER || "david";
 const mysqlPassword = process.env.MARINA_MYSQL_PASSWORD || "DavidG2023";
+let liveScreenCaptureProvider = null;
+let liveScreenFramePromise = null;
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -173,12 +175,44 @@ function ensureColumn(tableName, columnName, definition) {
 ensureColumn("stationing", "price_per_day_cents", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("stationing", "open_ended", "INTEGER NOT NULL DEFAULT 1");
 
-function send(response, status, body, contentType = "application/json; charset=utf-8") {
+function send(response, status, body, contentType = "application/json; charset=utf-8", headers = {}) {
   response.writeHead(status, {
     "Content-Type": contentType,
-    "Cache-Control": "no-store"
+    "Cache-Control": "no-store",
+    ...headers
   });
   response.end(body);
+}
+
+function setLiveScreenCaptureProvider(provider) {
+  liveScreenCaptureProvider = typeof provider === "function" ? provider : null;
+}
+
+async function captureLiveScreenFrame() {
+  if (!liveScreenCaptureProvider) throw requestError(503, "Captura este disponibilă numai în aplicația Marina Park");
+  if (!liveScreenFramePromise) {
+    liveScreenFramePromise = Promise.resolve()
+      .then(() => liveScreenCaptureProvider())
+      .then((capture) => {
+        const frame = Buffer.isBuffer(capture) ? capture : capture?.frame;
+        if (!Buffer.isBuffer(frame) || frame.length === 0) throw requestError(503, "Fereastra Marina Park nu poate fi capturată momentan");
+        const pointer = Buffer.isBuffer(capture) ? {} : capture?.pointer || {};
+        return {
+          frame,
+          pointer: {
+            visible: pointer.visible === true,
+            x: Math.max(0, Math.min(1, Number(pointer.x || 0))),
+            y: Math.max(0, Math.min(1, Number(pointer.y || 0))),
+            width: Math.max(0, Math.min(0.2, Number(pointer.width || 0))),
+            height: Math.max(0, Math.min(0.2, Number(pointer.height || 0)))
+          }
+        };
+      })
+      .finally(() => {
+        liveScreenFramePromise = null;
+      });
+  }
+  return liveScreenFramePromise;
 }
 
 async function readJson(filePath, fallback) {
@@ -606,6 +640,73 @@ async function writeData(payload) {
   clientDirectoryCache = null;
   await enqueueDatabaseBackup({ afterMutation: true });
   return { savedAt: nextConfig.savedAt };
+}
+
+async function writeReservation(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw requestError(400, "Payload invalid: rezervarea trebuie să fie un obiect JSON.");
+  }
+
+  const stay = payload.stay && typeof payload.stay === "object" && !Array.isArray(payload.stay)
+    ? payload.stay
+    : null;
+  if (!stay) throw requestError(400, "Payload invalid: rezervarea lipsește.");
+
+  const key = String(stay.key || "").trim();
+  const id = String(stay.id || "").trim();
+  const guest = String(stay.guest || "").trim();
+  if (!key || !id || !guest) {
+    throw requestError(400, "Rezervarea trebuie să conțină key, id și guest.");
+  }
+
+  const previousKey = String(payload.previousKey || key).trim() || key;
+  const existing = db.prepare("SELECT order_index FROM reservations WHERE key = ?").get(previousKey)
+    || db.prepare("SELECT order_index FROM reservations WHERE key = ?").get(key);
+  const firstOrder = db.prepare("SELECT MIN(order_index) AS value FROM reservations").get()?.value;
+  const orderIndex = existing ? Number(existing.order_index) : Number(firstOrder ?? 0) - 1;
+  const now = new Date().toISOString();
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (previousKey !== key) {
+      db.prepare("DELETE FROM reservations WHERE key = ?").run(previousKey);
+    }
+    db.prepare(`
+      INSERT INTO reservations (key, order_index, id, guest, group_name, kind, start_date, end_date, updated_at, data)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        order_index = excluded.order_index,
+        id = excluded.id,
+        guest = excluded.guest,
+        group_name = excluded.group_name,
+        kind = excluded.kind,
+        start_date = excluded.start_date,
+        end_date = excluded.end_date,
+        updated_at = excluded.updated_at,
+        data = excluded.data
+    `).run(
+      key,
+      orderIndex,
+      id,
+      guest,
+      String(stay.group || ""),
+      String(stay.kind || ""),
+      stay.start || null,
+      stay.end || null,
+      now,
+      JSON.stringify({ ...stay, key, id, guest })
+    );
+    bumpDatabaseSavedAt(now);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  clientHistoryStore.syncReservations([{ ...stay, key, id, guest }]);
+  clientDirectoryCache = null;
+  await enqueueDatabaseBackup({ afterMutation: true });
+  return { savedAt: now, stay: { ...stay, key, id, guest } };
 }
 
 async function exportedDatabaseFile() {
@@ -1231,7 +1332,7 @@ async function retryPendingPaymentOutbox() {
   }
 }
 
-function bumpPaymentSavedAt(now) {
+function bumpDatabaseSavedAt(now) {
   const config = { ...configRow(), savedAt: now };
   db.prepare(`
     INSERT INTO app_config (key, updated_at, data)
@@ -1728,7 +1829,7 @@ async function commitPayment(payload) {
       : type === "stationing"
         ? prepareStationingPayment(payload, context)
         : prepareStayPayment(payload, context);
-    const savedAt = bumpPaymentSavedAt(now);
+    const savedAt = bumpDatabaseSavedAt(now);
     mutation.result.savedAt = savedAt;
     activityResult = addActivityLogEntry(mutation.activity);
     const initialStatus = method === "voucher" ? "completed" : "committed";
@@ -2388,7 +2489,9 @@ async function requestBody(request) {
 
 async function serveStatic(request, response) {
   const url = new URL(request.url, `http://${request.headers.host}`);
-  const requestedPath = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname === "/log" ? "/activity.html" : url.pathname);
+  const requestedPath = decodeURIComponent(
+    url.pathname === "/" ? "/index.html" : url.pathname === "/log" ? "/activity.html" : url.pathname === "/screen" ? "/screen.html" : url.pathname
+  );
   const filePath = path.resolve(rootDir, `.${requestedPath}`);
 
   if (filePath !== rootDir && !filePath.startsWith(`${rootDir}${path.sep}`)) {
@@ -2406,6 +2509,25 @@ async function serveStatic(request, response) {
 
 const server = http.createServer(async (request, response) => {
   try {
+    if (request.url.startsWith("/api/live-screen/frame") && request.method === "GET") {
+      const { frame, pointer } = await captureLiveScreenFrame();
+      if (request.aborted || response.destroyed) return;
+      response.writeHead(200, {
+        "Content-Type": "image/jpeg",
+        "Content-Length": frame.length,
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff",
+        "X-Live-Screen-Pointer-Visible": pointer.visible ? "1" : "0",
+        "X-Live-Screen-Pointer-X": pointer.x.toFixed(6),
+        "X-Live-Screen-Pointer-Y": pointer.y.toFixed(6),
+        "X-Live-Screen-Pointer-Width": pointer.width.toFixed(6),
+        "X-Live-Screen-Pointer-Height": pointer.height.toFixed(6)
+      });
+      response.end(frame);
+      return;
+    }
+
     if (request.url.startsWith("/api/data") && request.method === "GET") {
       send(response, 200, JSON.stringify(await readData()));
       return;
@@ -2413,6 +2535,12 @@ const server = http.createServer(async (request, response) => {
 
     if (request.url.startsWith("/api/data") && request.method === "POST") {
       const result = await writeData(JSON.parse(await requestBody(request)));
+      send(response, 200, JSON.stringify({ ok: true, database: "data/marina-park.sqlite", ...result }));
+      return;
+    }
+
+    if (request.url.startsWith("/api/reservation") && request.method === "POST") {
+      const result = await writeReservation(JSON.parse(await requestBody(request)));
       send(response, 200, JSON.stringify({ ok: true, database: "data/marina-park.sqlite", ...result }));
       return;
     }
@@ -2586,4 +2714,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { startServer, stopServer };
+module.exports = { setLiveScreenCaptureProvider, startServer, stopServer };

@@ -2275,6 +2275,12 @@ function ensureStayKeys() {
 function saveStays() {
   markPagesDirty();
   ensureStayKeys();
+  cacheCurrentData();
+  rebuildStaysByUnitIndex();
+  queueFileSave();
+}
+
+function cacheCurrentData() {
   try {
     localStorage.setItem(staysStorageKey, JSON.stringify(stays));
     localStorage.setItem(stationingStorageKey, JSON.stringify(stationing));
@@ -2282,8 +2288,29 @@ function saveStays() {
   } catch {
     // Local storage can fail in private browsing or restricted file contexts.
   }
-  rebuildStaysByUnitIndex();
-  queueFileSave();
+}
+
+async function saveBookingReservation(stay, previousStay = null) {
+  try {
+    const response = await fetch("/api/reservation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stay, previousKey: previousStay?.key || stay.key })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok === false) throw new Error(result.error || `HTTP ${response.status}`);
+    lastDatabaseSavedAt = result.savedAt || lastDatabaseSavedAt;
+    markPagesDirty();
+    cacheCurrentData();
+    rebuildStaysByUnitIndex();
+    return true;
+  } catch (error) {
+    await loadFileBackedData();
+    rebuildStaysByUnitIndex();
+    renderAll();
+    showToast(error.message || "Rezervarea nu a putut fi salvată");
+    return false;
+  }
 }
 
 function configSnapshot() {
@@ -8958,10 +8985,11 @@ bookingForm.addEventListener("submit", async (event) => {
   if (previousStationingKey && previousStationingKey !== nextStationingKey) {
     removeStationingLinkForStay(nextStay.key, previousStationingKey);
   }
+  const reservationSaved = await saveBookingReservation(nextStay, previousStay);
+  if (!reservationSaved) return;
   const automaticDeduction = nextStay.stationingDeduction?.subtractDays === true
     ? await applyStationingDeductionForStay(nextStay, { ask: false })
     : null;
-  saveStays();
   const linkedAfterSave = linkedReservationsForPerson(nextStay.personId);
   const createdForSameClient = !previousStay && linkedAfterSave.length >= 2;
   const changes = previousStay ? stayChangeList(previousStay, nextStay) : [];

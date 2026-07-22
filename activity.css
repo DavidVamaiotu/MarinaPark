@@ -142,6 +142,24 @@ button {
   cursor: pointer;
 }
 
+.live-screen-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 16px;
+  color: #ffffff;
+  background: var(--sea);
+  border: 1px solid var(--sea);
+  border-radius: var(--radius);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.live-screen-link:hover {
+  background: #5d98f4;
+}
+
 button:disabled {
   cursor: progress;
   opacity: 0.62;
@@ -441,7 +459,8 @@ button:focus-visible {
   }
 
   .search-box input,
-  button {
+  button,
+  .live-screen-link {
     width: 100%;
   }
 
@@ -1506,6 +1525,58 @@ body *::after {
   line-height: 1.45;
 }
 
+.client-created-details-control {
+  grid-column: 2;
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.client-details-toggle {
+  min-height: 32px;
+  padding: 5px 10px;
+  color: #315f9f;
+  background: #f3f7fd;
+  border-color: #cbdaf0;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.client-details-toggle:hover {
+  color: #244e87;
+  background: #e8f0fb;
+}
+
+.client-created-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0;
+}
+
+.client-created-details[hidden] {
+  display: none;
+}
+
+.client-created-details > div {
+  display: flex;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid #dfe5e2;
+  border-radius: 8px;
+  background: #f7f9f8;
+  font-size: 12px;
+}
+
+.client-created-details dt {
+  color: #74807b;
+}
+
+.client-created-details dd {
+  margin: 0;
+  color: #27332f;
+}
+
 .client-day-action > .entry-visual-details,
 .client-day-action > .action-facts,
 .client-day-action > .suspicious-alert {
@@ -1633,7 +1704,8 @@ body *::after {
 
   .client-day-action > .entry-visual-details,
   .client-day-action > .action-facts,
-  .client-day-action > .suspicious-alert {
+  .client-day-action > .suspicious-alert,
+  .client-created-details-control {
     grid-column: 1;
   }
 

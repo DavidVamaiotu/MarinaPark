@@ -554,6 +554,39 @@ function actionFacts(entry) {
   `;
 }
 
+function createdClientDetails(entry) {
+  if (entry.eventType !== "create" || entry.entityType !== "client") return "";
+  const client = entry.data?.current || entry.data?.stay || entry.data?.record || {};
+  const phone = String(client.phone || "").trim() || "Nespecificat";
+  const car = String(client.car || "").trim() || "Nespecificat";
+  const facilities = Array.isArray(client.facilities) ? client.facilities : [];
+  const facilityAnswer = (key, name) => {
+    const facility = facilities.find((item) => item?.key === key || String(item?.name || "").toLowerCase() === name);
+    if (!facility) return "Nu";
+    const nights = Number(facility.nights);
+    if (!Number.isFinite(nights) || nights <= 0) return "Da";
+    const roundedNights = Math.round(nights);
+    return `Da (${roundedNights} ${roundedNights === 1 ? "noapte" : "nopți"})`;
+  };
+  const electricity = facilityAnswer("electricitate", "electricitate");
+  const extraBed = facilityAnswer("pat-suplimentar", "pat suplimentar");
+  const hasPrice = client.price !== undefined && client.price !== null && String(client.price).trim() !== "";
+  const price = hasPrice ? formatCurrency(client.price) : "Nespecificat";
+
+  return `
+    <div class="client-created-details-control">
+      <button class="client-details-toggle" type="button" aria-expanded="false">Vezi date client</button>
+      <dl class="client-created-details" hidden>
+        <div><dt>Telefon</dt><dd>${escapeHtml(phone)}</dd></div>
+        <div><dt>Nr. mașină</dt><dd>${escapeHtml(car)}</dd></div>
+        <div><dt>Electricitate</dt><dd>${escapeHtml(electricity)}</dd></div>
+        <div><dt>Pat suplimentar</dt><dd>${escapeHtml(extraBed)}</dd></div>
+        <div><dt>Preț</dt><dd>${escapeHtml(price)}</dd></div>
+      </dl>
+    </div>
+  `;
+}
+
 function renderClientDayAction(entry) {
   return `
     <div class="client-day-action is-${escapeHtml(entry.eventType)}${suspiciousReasons(entry).length ? " is-suspicious" : ""}">
@@ -563,6 +596,7 @@ function renderClientDayAction(entry) {
         <span class="event-name">${escapeHtml(eventLabel(entry))}</span>
       </div>
       <p class="client-action-text">${escapeHtml(readableActionText(entry))}</p>
+      ${createdClientDetails(entry)}
       ${actionFacts(entry)}
       ${entryVisualDetails(entry)}
       ${suspiciousAlert(entry)}
@@ -799,4 +833,14 @@ dailyTotalsFilterButton.addEventListener("click", () => {
 refreshButton.addEventListener("click", loadLog);
 exportDatabaseButton.addEventListener("click", exportDatabase);
 clearActivityLogButton.addEventListener("click", clearActivityLog);
+logFeed.addEventListener("click", (event) => {
+  const button = event.target.closest(".client-details-toggle");
+  if (!button) return;
+  const details = button.closest(".client-created-details-control")?.querySelector(".client-created-details");
+  if (!details) return;
+  const expanded = button.getAttribute("aria-expanded") === "true";
+  button.setAttribute("aria-expanded", String(!expanded));
+  button.textContent = expanded ? "Vezi date client" : "Ascunde date client";
+  details.hidden = expanded;
+});
 loadLog();

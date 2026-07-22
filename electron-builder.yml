@@ -22,6 +22,9 @@ files:
   - activity.js
   - activity.html
   - activity.css
+  - screen.js
+  - screen.html
+  - screen.css
   - version.json
   - package.json
   - node_modules/**/*
