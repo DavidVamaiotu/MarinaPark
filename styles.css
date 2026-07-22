@@ -8416,3 +8416,11 @@ body *::after {
     height: 50px;
   }
 }
+
+.receipt-method-actions button.is-voucher-selected,
+.receipt-method-actions button.is-voucher-selected:hover,
+.receipt-method-actions button.is-voucher-selected:disabled {
+  color: #ffffff;
+  background: var(--danger);
+  border-color: var(--danger);
+}

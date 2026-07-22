@@ -11,7 +11,6 @@ const localActivityAccess = ["127.0.0.1", "localhost", "::1"].includes(window.lo
 
 if (!localActivityAccess) {
   exportDatabaseButton.hidden = true;
-  clearActivityLogButton.hidden = true;
 }
 
 let entries = [];

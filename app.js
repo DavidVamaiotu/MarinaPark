@@ -2692,6 +2692,7 @@ function closeReceiptModal() {
   receiptBarMode = "combined";
   receiptPaymentRequestId = null;
   receiptAmountInput.readOnly = false;
+  setVoucherButtonState(receiptForm);
   setReceiptPaymentBusy(false);
   if (!bookingModal.classList.contains("is-open") && !stationingModal.classList.contains("is-open")) {
     document.body.style.overflow = "";
@@ -2704,6 +2705,13 @@ function setReceiptPaymentBusy(isBusy) {
   receiptForm.querySelectorAll("[data-receipt-method]").forEach((button) => {
     button.disabled = isBusy;
   });
+}
+
+function setVoucherButtonState(form, clickedButton = null, method = "") {
+  form.querySelectorAll(".is-voucher-selected").forEach((button) => {
+    button.classList.remove("is-voucher-selected");
+  });
+  if (method === "voucher") clickedButton?.classList.add("is-voucher-selected");
 }
 
 function createPaymentRequestId(prefix) {
@@ -5133,6 +5141,7 @@ function closeBarPaymentModal(options = {}) {
   if (barPaymentInProgress && !options.force) return;
   barPaymentModal.classList.remove("is-open");
   barPaymentRequestId = null;
+  setVoucherButtonState(barPaymentForm);
   if (!receiptModal.classList.contains("is-open") && !bookingModal.classList.contains("is-open") && !stationingModal.classList.contains("is-open") && !barArticleModal.classList.contains("is-open") && !sagaExportModal.classList.contains("is-open")) {
     document.body.style.overflow = "";
   }
@@ -8524,7 +8533,9 @@ deleteBarArticleButton.addEventListener("click", deleteBarArticle);
 barPaymentForm.addEventListener("click", (event) => {
   const methodButton = event.target.closest("[data-bar-payment-method]");
   if (!methodButton) return;
-  generateCommittedBarReceipt(methodButton.dataset.barPaymentMethod);
+  const method = methodButton.dataset.barPaymentMethod;
+  setVoucherButtonState(barPaymentForm, methodButton, method);
+  generateCommittedBarReceipt(method);
 });
 
 sagaExportForm.elements.allSales.addEventListener("change", syncSagaExportDateFields);
@@ -8681,7 +8692,9 @@ receiptFromStationingButton.addEventListener("click", () => {
 receiptForm.addEventListener("click", (event) => {
   const methodButton = event.target.closest("[data-receipt-method]");
   if (!methodButton || !receiptStayKey) return;
-  generateCommittedReceipt(receiptStayKey, methodButton.dataset.receiptMethod);
+  const method = methodButton.dataset.receiptMethod;
+  setVoucherButtonState(receiptForm, methodButton, method);
+  generateCommittedReceipt(receiptStayKey, method);
 });
 
 receiptForm.addEventListener("change", (event) => {
@@ -8985,11 +8998,6 @@ bookingForm.addEventListener("submit", async (event) => {
   if (previousStationingKey && previousStationingKey !== nextStationingKey) {
     removeStationingLinkForStay(nextStay.key, previousStationingKey);
   }
-  const reservationSaved = await saveBookingReservation(nextStay, previousStay);
-  if (!reservationSaved) return;
-  const automaticDeduction = nextStay.stationingDeduction?.subtractDays === true
-    ? await applyStationingDeductionForStay(nextStay, { ask: false })
-    : null;
   const linkedAfterSave = linkedReservationsForPerson(nextStay.personId);
   const createdForSameClient = !previousStay && linkedAfterSave.length >= 2;
   const changes = previousStay ? stayChangeList(previousStay, nextStay) : [];
@@ -9014,6 +9022,11 @@ bookingForm.addEventListener("submit", async (event) => {
       createdForSameClient
     }
   });
+  const reservationSaved = await saveBookingReservation(nextStay, previousStay);
+  if (!reservationSaved) return;
+  const automaticDeduction = nextStay.stationingDeduction?.subtractDays === true
+    ? await applyStationingDeductionForStay(nextStay, { ask: false })
+    : null;
   visibleMonth = monthStart(arrival);
   activeMode = group === "camping" ? campingModeForUnit(unitById(id) || { id, kind }) : "room";
   document.body.dataset.mode = groupForMode(activeMode);

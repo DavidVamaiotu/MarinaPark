@@ -1,9 +1,25 @@
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+
+const appSource = fs.readFileSync(path.resolve(__dirname, "..", "app.js"), "utf8");
+
+test("booking details are logged before persistence so failed reservations remain recoverable", () => {
+  const submitStart = appSource.indexOf('bookingForm.addEventListener("submit"');
+  const submitEnd = appSource.indexOf("async function initializeApp", submitStart);
+  const submitSource = appSource.slice(submitStart, submitEnd);
+  const logPosition = submitSource.indexOf("logActivity({");
+  const savePosition = submitSource.indexOf("await saveBookingReservation(nextStay, previousStay)");
+
+  assert.ok(submitStart >= 0 && submitEnd > submitStart, "booking submit handler exists");
+  assert.ok(logPosition >= 0, "booking attempt is logged");
+  assert.ok(savePosition > logPosition, "logging happens regardless of the persistence result");
+  assert.doesNotMatch(submitSource, /showToast\([^)]*(?:log|jurnal)/i);
+});
 
 test("reservation upserts remain writable after the full-database revision changes", async (context) => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "marina-reservation-test-"));
