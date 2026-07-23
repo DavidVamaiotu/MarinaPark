@@ -7261,8 +7261,15 @@ function orderedSourceBookings(todayText = toISODate(new Date())) {
   const todayValue = sourceRecordDateValue(todayText);
   return [...sourceBookings].sort((first, second) => {
     if (sourceBookingQuery) {
-      const scoreCompare = fuzzyMatchScore(sourceBookingQuery, first.guest) - fuzzyMatchScore(sourceBookingQuery, second.guest);
-      if (scoreCompare !== 0) return scoreCompare;
+      const firstPhone = String(first.phone || "").replace(/\D/g, "");
+      const secondPhone = String(second.phone || "").replace(/\D/g, "");
+      const sameClient =
+        normalizeSearchText(first.guest) === normalizeSearchText(second.guest) ||
+        (firstPhone && firstPhone === secondPhone);
+      if (!sameClient) {
+        const scoreCompare = fuzzyMatchScore(sourceBookingQuery, first.guest) - fuzzyMatchScore(sourceBookingQuery, second.guest);
+        if (scoreCompare !== 0) return scoreCompare;
+      }
     }
 
     const firstStart = sourceRecordDateValue(first.start);

@@ -2200,7 +2200,14 @@ function filteredSourceBookings(bookings, query, limit) {
   return bookings
     .map((booking) => ({ booking, score: fuzzyMatchScore(query, booking.guest) }))
     .filter((match) => Number.isFinite(match.score))
-    .sort((first, second) => first.score - second.score || sortSourceBookings(first.booking, second.booking))
+    .sort((first, second) => {
+      const firstPhone = String(first.booking.phone || "").replace(/\D/g, "");
+      const secondPhone = String(second.booking.phone || "").replace(/\D/g, "");
+      const sameClient =
+        normalizeClientName(first.booking.guest) === normalizeClientName(second.booking.guest) ||
+        (firstPhone && firstPhone === secondPhone);
+      return (sameClient ? 0 : first.score - second.score) || sortSourceBookings(first.booking, second.booking);
+    })
     .slice(0, limit)
     .map((match) => match.booking);
 }
