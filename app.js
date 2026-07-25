@@ -6221,11 +6221,17 @@ function applySelectedUnitPricing() {
 }
 
 function recalculateBookingPrice(options = {}) {
+  const wasImported = options.unlockImported && isImportedPricingLocked();
   if (options.unlockImported) {
     clearImportedPricing();
+    if (wasImported) {
+      bookingFacilityDraft = bookingFacilityDraft.map((facility) =>
+        facility.includedInBasePrice ? { ...facility, includedInBasePrice: false } : facility
+      );
+    }
   }
   updatePartyTotal();
-  if (options.onlyWhenBillableChanged && !billablePricingQuantityChanged()) {
+  if (options.onlyWhenBillableChanged && !wasImported && !billablePricingQuantityChanged()) {
     savePricingSnapshot();
     renderBookingRangeCalendar();
     return;
