@@ -6531,7 +6531,7 @@ button:focus-visible {
   box-shadow: 0 1px 3px rgba(47, 112, 69, 0.3);
 }
 
-/* Client progress status colors. Paid green always wins over urgency colors. */
+/* Client progress status colors. Checkout-today and overdue urgency stays red after payment. */
 .client-card .progress-fill {
   background: #cbd5e1;
 }
@@ -6556,11 +6556,11 @@ button:focus-visible {
   background: #df5c5c;
 }
 
-.client-card.is-paid .progress-fill {
+.client-card.is-paid:not(.is-overdue):not(.is-leaving-today) .progress-fill {
   background: #72c58d !important;
 }
 
-.client-card.is-paid .progress-track {
+.client-card.is-paid:not(.is-overdue):not(.is-leaving-today) .progress-track {
   background: #ccebd6;
 }
 
