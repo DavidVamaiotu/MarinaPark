@@ -221,7 +221,7 @@ let googleReviewData = {
 };
 
 let activeMode = "room";
-let activePage = "calendar";
+let activePage = "clients";
 let searchTerm = "";
 let sidebarCollapsed = localStorage.getItem("marinaParkSidebarCollapsed") === "true";
 const clientModeImagesStorageKey = "marinaParkClientModeImages";
@@ -4408,7 +4408,7 @@ function visibleClientStays() {
     .filter(
       (stay) =>
         stay.guest !== "Disponibil" &&
-        unitMatchesTimelineMode(stay) &&
+        (searchTerm || unitMatchesTimelineMode(stay)) &&
         matchesSearch(stay)
     )
     .sort((first, second) => {
@@ -8920,7 +8920,6 @@ timelineContextMenu.addEventListener("click", (event) => {
 
 bookingForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const pageAtSubmit = activePage;
   const shouldOpenLinkedDraftAfterSave = openLinkedDraftAfterSave;
   openLinkedDraftAfterSave = false;
   const data = new FormData(bookingForm);
@@ -9089,8 +9088,7 @@ bookingForm.addEventListener("submit", async (event) => {
     showToast(deductionToast);
     if (!existingStay) {
       window.requestAnimationFrame(() => {
-        if (pageAtSubmit === "clients") jumpToClientCard(nextStay.key);
-        else jumpToTimelineStay(nextStay.key);
+        jumpToClientCard(nextStay.key);
       });
     }
   }
