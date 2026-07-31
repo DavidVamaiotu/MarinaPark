@@ -7,7 +7,13 @@ const eventFilterButtons = [...document.querySelectorAll("[data-event-filter]")]
 const refreshButton = document.querySelector("#refreshLog");
 const exportDatabaseButton = document.querySelector("#exportDatabase");
 const clearActivityLogButton = document.querySelector("#clearActivityLog");
+const clearReservationLogsButton = document.querySelector("#clearReservationLogs");
+const clearBarLogsButton = document.querySelector("#clearBarLogs");
+const loadMoreLogButton = document.querySelector("#loadMoreLog");
 const localActivityAccess = ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
+const logPageSize = 250;
+let logOffset = 0;
+let logHasMore = false;
 
 if (!localActivityAccess) {
   exportDatabaseButton.hidden = true;
@@ -736,6 +742,7 @@ function renderSummary(currentEntries) {
 function renderLog() {
   const currentEntries = filteredEntries();
   renderSummary(currentEntries);
+  loadMoreLogButton.hidden = !logHasMore;
   const visibleEntries = dailyTotalsOnly
     ? currentEntries.filter((entry) => entry.eventType === "payment" && Number(entry.amount || 0) > 0)
     : currentEntries.filter((entry) => entry.eventType !== "open");
@@ -768,24 +775,46 @@ function renderLog() {
     .join("");
 }
 
-async function loadLog() {
-  refreshButton.disabled = true;
+function mergedLogEntries(serverEntries, localEntries, append) {
+  const byId = new Map();
+  [...(append ? entries : []), ...serverEntries, ...localEntries].forEach((entry) => {
+    if (entry?.id) byId.set(entry.id, entry);
+  });
+  return [...byId.values()].sort((first, second) =>
+    String(second.timestamp || "").localeCompare(String(first.timestamp || ""))
+  );
+}
+
+async function loadLogPage({ append = false } = {}) {
+  const offset = append ? logOffset : 0;
+  const activeButton = append ? loadMoreLogButton : refreshButton;
+  activeButton.disabled = true;
   try {
-    const response = await fetch("/api/log?limit=1500", { cache: "no-store" });
+    const response = await fetch(`/api/log?limit=${logPageSize}&offset=${offset}`, { cache: "no-store" });
     const result = await response.json();
     const serverEntries = response.ok && result.ok && Array.isArray(result.entries) ? result.entries : [];
     const localEntries = JSON.parse(localStorage.getItem(activityLogStorageKey) || "[]");
-    const byId = new Map();
-    [...serverEntries, ...localEntries].forEach((entry) => {
-      if (entry?.id) byId.set(entry.id, entry);
-    });
-    entries = [...byId.values()].sort((first, second) => String(second.timestamp || "").localeCompare(String(first.timestamp || "")));
+    entries = mergedLogEntries(serverEntries, localEntries, append);
+    logOffset = response.ok && result.ok ? Number(result.nextOffset || offset + serverEntries.length) : offset;
+    logHasMore = Boolean(response.ok && result.ok && result.hasMore);
   } catch {
-    entries = JSON.parse(localStorage.getItem(activityLogStorageKey) || "[]");
+    if (!append) {
+      entries = JSON.parse(localStorage.getItem(activityLogStorageKey) || "[]");
+      logOffset = 0;
+      logHasMore = false;
+    }
   } finally {
-    refreshButton.disabled = false;
+    activeButton.disabled = false;
     renderLog();
   }
+}
+
+function loadLog() {
+  return loadLogPage();
+}
+
+function loadMoreLog() {
+  return loadLogPage({ append: true });
 }
 
 function exportDatabase() {
@@ -797,41 +826,88 @@ function exportDatabase() {
   link.remove();
 }
 
-async function clearActivityLog() {
+function matchesLogClearScope(entry, scope) {
+  if (scope === "reservations") return entry?.entityType === "client";
+  if (scope === "bar") {
+    return ["bar", "bar_article"].includes(entry?.entityType) || entry?.method === "bar-reservation";
+  }
+  return true;
+}
+
+async function clearActivityLogScope(options) {
+  const { scope, confirmationText, title, message, successMessage, button } = options;
   const confirmation = await window.appDialog.prompt(
-    "Această acțiune șterge doar jurnalul de activitate. Clienții și articolele de bar rămân în baza de date. Scrie exact STERGE LOG pentru confirmare.",
+    message,
     {
-      title: "Ștergere jurnal",
+      title,
       confirmLabel: "Continuă",
-      inputLabel: "Scrie STERGE LOG",
+      inputLabel: `Scrie ${confirmationText}`,
       danger: true
     }
   );
-  if (confirmation !== "STERGE LOG") return;
+  if (confirmation !== confirmationText) return;
 
-  clearActivityLogButton.disabled = true;
+  button.disabled = true;
   try {
     const response = await fetch("/api/clear-activity-log", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: confirmation })
+      body: JSON.stringify({ confirm: confirmation, scope })
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) {
       throw new Error(result.error || "Nu am putut șterge jurnalul de activitate");
     }
-    localStorage.removeItem(activityLogStorageKey);
-    entries = [];
-    renderLog();
-    await window.appDialog.alert("Jurnalul de activitate a fost șters. Clienții și articolele de bar au rămas neschimbate.");
+    const localEntries = JSON.parse(localStorage.getItem(activityLogStorageKey) || "[]");
+    const remainingLocalEntries = localEntries.filter((entry) => !matchesLogClearScope(entry, scope));
+    if (remainingLocalEntries.length) {
+      localStorage.setItem(activityLogStorageKey, JSON.stringify(remainingLocalEntries));
+    } else {
+      localStorage.removeItem(activityLogStorageKey);
+    }
+    await loadLog();
+    await window.appDialog.alert(successMessage);
   } catch (error) {
     await window.appDialog.alert(error.message || "Nu am putut șterge jurnalul de activitate", {
       title: "Eroare",
       danger: true
     });
   } finally {
-    clearActivityLogButton.disabled = false;
+    button.disabled = false;
   }
+}
+
+function clearActivityLog() {
+  return clearActivityLogScope({
+    scope: "all",
+    confirmationText: "STERGE LOG",
+    title: "Ștergere jurnal",
+    message: "Această acțiune șterge doar jurnalul de activitate. Clienții, articolele de bar și exporturile contabile rămân în baza de date. Scrie exact STERGE LOG pentru confirmare.",
+    successMessage: "Jurnalul de activitate a fost șters. Datele aplicației și exporturile contabile au rămas neschimbate.",
+    button: clearActivityLogButton
+  });
+}
+
+function clearReservationLogs() {
+  return clearActivityLogScope({
+    scope: "reservations",
+    confirmationText: "STERGE REZERVARI",
+    title: "Ștergere jurnal rezervări",
+    message: "Se șterg doar intrările de jurnal legate de rezervări și clienți. Rezervările și plățile rămân neschimbate. Scrie exact STERGE REZERVARI pentru confirmare.",
+    successMessage: "Intrările de jurnal pentru rezervări au fost șterse.",
+    button: clearReservationLogsButton
+  });
+}
+
+function clearBarLogs() {
+  return clearActivityLogScope({
+    scope: "bar",
+    confirmationText: "STERGE BAR",
+    title: "Ștergere jurnal bar",
+    message: "Se șterg doar intrările de jurnal legate de bar. Articolele, plățile și exporturile SAGA rămân neschimbate. Scrie exact STERGE BAR pentru confirmare.",
+    successMessage: "Intrările de jurnal pentru bar au fost șterse.",
+    button: clearBarLogsButton
+  });
 }
 
 searchInput.addEventListener("input", renderLog);
@@ -852,8 +928,11 @@ dailyTotalsFilterButton.addEventListener("click", () => {
   renderLog();
 });
 refreshButton.addEventListener("click", loadLog);
+loadMoreLogButton.addEventListener("click", loadMoreLog);
 exportDatabaseButton.addEventListener("click", exportDatabase);
 clearActivityLogButton.addEventListener("click", clearActivityLog);
+clearReservationLogsButton.addEventListener("click", clearReservationLogs);
+clearBarLogsButton.addEventListener("click", clearBarLogs);
 logFeed.addEventListener("click", (event) => {
   const button = event.target.closest(".client-details-toggle");
   if (!button) return;

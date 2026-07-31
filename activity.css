@@ -207,6 +207,19 @@ button:disabled {
   gap: 18px;
 }
 
+.load-more-log {
+  display: flex;
+  justify-content: center;
+}
+
+.load-more-log button {
+  min-width: 180px;
+}
+
+.load-more-log button[hidden] {
+  display: none;
+}
+
 .day-group {
   display: grid;
   gap: 12px;

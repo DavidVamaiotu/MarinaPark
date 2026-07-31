@@ -779,10 +779,10 @@
             </div>
           </div>
           <label class="bar-sgr-toggle">
-            Toate vânzările
+            Toate vânzările neexportate
             <span class="checkbox-row">
               <input name="allSales" type="checkbox" />
-              <span>Ignoră intervalul de date</span>
+              <span>Ignoră intervalul de date și exportă tot ce este nou</span>
             </span>
           </label>
           <div class="field-grid">
@@ -841,7 +841,7 @@
           <i data-lucide="file-down" aria-hidden="true"></i>
           <span>Generează XML SAGA</span>
         </button>
-        <p class="settings-note">Fișierul se importă în SAGA la Import Date / Facturi și intră în Ieșiri când codul fiscal al firmei este același cu cel din SAGA. Articolele sunt linii de bon, iar AMBALAJ SGR este linie separată cu TVA 0%.</p>
+        <p class="settings-note">Fișierul se importă în SAGA la Import Date / Facturi și intră în Ieșiri când codul fiscal al firmei este același cu cel din SAGA. Sunt incluse numai liniile neexportate; după generare sunt marcate cu exported_at ca să nu fie exportate din nou. Pentru rezervări, intră aici doar articolele pentru care bonul a fost ales separat de cazare.</p>
       </form>
     </section>
 

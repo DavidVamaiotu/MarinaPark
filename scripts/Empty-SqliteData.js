@@ -71,6 +71,9 @@ function tableCounts(db, tables) {
     if (table === "payment_transactions") {
       protectedCount = db.prepare("SELECT COUNT(*) AS count FROM payment_transactions WHERE LOWER(type) = 'bar'").get().count;
     }
+    if (table === "bar_export_lines") {
+      protectedCount = db.prepare("SELECT COUNT(*) AS count FROM bar_export_lines WHERE LOWER(source_type) = 'bar'").get().count;
+    }
     return { table, total, protectedCount, deleteCount: total - protectedCount };
   });
 }
@@ -80,7 +83,8 @@ function protectedDataSnapshot(db) {
     appConfig: db.prepare("SELECT * FROM app_config ORDER BY key").all(),
     barArticles: db.prepare("SELECT * FROM bar_articles ORDER BY key").all(),
     barActivity: db.prepare("SELECT * FROM activity_log WHERE LOWER(entity_type) = 'bar' ORDER BY id").all(),
-    barPayments: db.prepare("SELECT * FROM payment_transactions WHERE LOWER(type) = 'bar' ORDER BY id").all()
+    barPayments: db.prepare("SELECT * FROM payment_transactions WHERE LOWER(type) = 'bar' ORDER BY id").all(),
+    barExportLines: db.prepare("SELECT * FROM bar_export_lines WHERE LOWER(source_type) = 'bar' ORDER BY id").all()
   });
 }
 
@@ -92,6 +96,10 @@ function deleteNonBarRows(db, table) {
   }
   if (table === "payment_transactions") {
     db.exec("DELETE FROM payment_transactions WHERE LOWER(type) <> 'bar'");
+    return;
+  }
+  if (table === "bar_export_lines") {
+    db.exec("DELETE FROM bar_export_lines WHERE LOWER(source_type) <> 'bar'");
     return;
   }
   db.exec(`DELETE FROM ${quoteIdentifier(table)}`);

@@ -165,6 +165,35 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_payment_transactions_status ON payment_transactions(status, updated_at);
+  CREATE TABLE IF NOT EXISTS bar_export_lines (
+    id TEXT PRIMARY KEY,
+    payment_id TEXT NOT NULL,
+    sale_timestamp TEXT NOT NULL,
+    sale_date TEXT NOT NULL,
+    method TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    article_key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    filter_name TEXT NOT NULL,
+    unit_gross REAL NOT NULL,
+    quantity REAL NOT NULL,
+    vat_rate INTEGER NOT NULL,
+    gross_total REAL NOT NULL,
+    exported_at TEXT,
+    export_batch_id TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(payment_id) REFERENCES payment_transactions(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_bar_export_lines_pending ON bar_export_lines(exported_at, sale_date);
+  CREATE INDEX IF NOT EXISTS idx_bar_export_lines_payment ON bar_export_lines(payment_id);
+  CREATE TABLE IF NOT EXISTS reservation_bar_receipt_state (
+    stay_key TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    handled_quantity REAL NOT NULL DEFAULT 0,
+    handled_sgr_total REAL NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(stay_key, item_id)
+  );
 `);
 
 function ensureColumn(tableName, columnName, definition) {
@@ -256,10 +285,22 @@ function barArticleRows() {
     .map((row) => JSON.parse(row.data));
 }
 
-function activityLogRows(limit = 1000) {
+function activityLogRows(limit = 1000, offset = 0) {
+  const numericLimit = Number(limit);
+  const numericOffset = Number(offset);
   return db
-    .prepare("SELECT data FROM activity_log ORDER BY timestamp DESC LIMIT ?")
-    .all(Math.max(1, Math.min(5000, Number(limit || 1000))))
+    .prepare("SELECT data FROM activity_log ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?")
+    .all(
+      Number.isFinite(numericLimit) ? Math.max(1, Math.min(5000, Math.floor(numericLimit))) : 1000,
+      Number.isFinite(numericOffset) ? Math.max(0, Math.floor(numericOffset)) : 0
+    )
+    .map((row) => JSON.parse(row.data));
+}
+
+function allActivityLogRows() {
+  return db
+    .prepare("SELECT data FROM activity_log ORDER BY timestamp DESC")
+    .all()
     .map((row) => JSON.parse(row.data));
 }
 
@@ -315,6 +356,13 @@ async function writeActivityLogLocalFiles(entries, options = {}) {
   }
   if (!entries.length && !options.refreshSnapshot) return;
   await fs.writeFile(activityLogJsonPath, `${JSON.stringify(activityLogRows(5000), null, 2)}${os.EOL}`, "utf8");
+}
+
+async function rewriteActivityLogLocalFiles() {
+  const entries = allActivityLogRows();
+  await fs.writeFile(activityLogJsonPath, `${JSON.stringify(entries.slice(0, 5000), null, 2)}${os.EOL}`, "utf8");
+  const jsonl = entries.length ? `${entries.slice().reverse().map((entry) => JSON.stringify(entry)).join(os.EOL)}${os.EOL}` : "";
+  await fs.writeFile(activityLogJsonlPath, jsonl, "utf8");
 }
 
 function stationingEndDate(record) {
@@ -719,18 +767,24 @@ async function exportedDatabaseFile() {
   };
 }
 
-async function clearActivityLogData() {
+async function clearActivityLogData(scope = "all") {
+  const normalizedScope = ["all", "reservations", "bar"].includes(scope) ? scope : "all";
+  const deleteSql = normalizedScope === "reservations"
+    ? "DELETE FROM activity_log WHERE entity_type = 'client'"
+    : normalizedScope === "bar"
+      ? "DELETE FROM activity_log WHERE entity_type IN ('bar', 'bar_article') OR method = 'bar-reservation'"
+      : "DELETE FROM activity_log";
+  let deleted = 0;
   db.exec("BEGIN IMMEDIATE");
   try {
-    db.exec("DELETE FROM activity_log");
+    deleted = Number(db.prepare(deleteSql).run().changes || 0);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  await fs.writeFile(activityLogJsonPath, "[]\n", "utf8");
-  await fs.writeFile(activityLogJsonlPath, "", "utf8");
-  return { ok: true, clearedAt: new Date().toISOString() };
+  await rewriteActivityLogLocalFiles();
+  return { ok: true, scope: normalizedScope, deleted, clearedAt: new Date().toISOString() };
 }
 
 function receiptAmount(value) {
@@ -921,76 +975,62 @@ function safeFilePart(value, fallback = "BAR") {
   return sanitized || fallback;
 }
 
-function activityLocalDate(entry) {
-  const date = new Date(entry.timestamp || Date.now());
-  return Number.isFinite(date.getTime()) ? localDateText(date) : localDateText();
-}
-
-function barSalesEntriesForRange(fromDate, toDate, includeAll) {
-  return activityLogRows(5000).filter((entry) => {
-    if (entry.eventType !== "payment" || entry.entityType !== "bar") return false;
-    if (!Array.isArray(entry.data?.items) || !entry.data.items.length) return false;
-    if (includeAll) return true;
-    const saleDate = activityLocalDate(entry);
-    if (fromDate && saleDate < fromDate) return false;
-    if (toDate && saleDate > toDate) return false;
-    return true;
-  });
-}
-
 function normalizedFilterText(value) {
   return removeDiacritics(String(value || "").trim().toLowerCase());
 }
 
-function groupedBarSaleLines(entries, filters = {}) {
-  const groups = new Map();
-  const payments = { card: 0, numerar: 0, voucher: 0, other: 0 };
+function barExportDate(timestamp) {
+  const date = new Date(timestamp || Date.now());
+  return Number.isFinite(date.getTime()) ? localDateText(date) : localDateText();
+}
+
+function barExportLineRowsForRange(fromDate, toDate, includeAll, filters = {}) {
+  const rows = db
+    .prepare(`
+      SELECT *
+      FROM bar_export_lines
+      WHERE exported_at IS NULL
+        AND (? = 1 OR sale_date >= ?)
+        AND (? = 1 OR sale_date <= ?)
+      ORDER BY sale_timestamp ASC, id ASC
+    `)
+    .all(includeAll ? 1 : 0, fromDate || "", includeAll ? 1 : 0, toDate || "");
   const productNameFilter = normalizedFilterText(filters.productName);
   const vatFilter = String(filters.vatRate || "").trim();
-  const sgrName = "AMBALAJ SGR";
-  const sgrNameFilterText = normalizedFilterText(sgrName);
+  return rows.filter((row) => {
+    const productMatches =
+      !productNameFilter ||
+      normalizedFilterText(row.name).includes(productNameFilter) ||
+      normalizedFilterText(row.filter_name).includes(productNameFilter);
+    const vatMatches = !vatFilter || String(row.vat_rate) === vatFilter;
+    return productMatches && vatMatches;
+  });
+}
 
-  entries.forEach((entry) => {
-    const method = ["card", "numerar", "voucher"].includes(entry.method) ? entry.method : "other";
-    let includedPaymentTotal = 0;
-    entry.data.items.forEach((item) => {
-      const name = cleanReceiptText(item.name);
-      const nameFilterText = normalizedFilterText(name);
-      const vatRate = Number(item.vatRate || 0);
-      const grossUnit = receiptNumber(item.price);
-      const qty = receiptNumber(item.quantity);
-      if (!name || qty <= 0 || grossUnit <= 0) return;
-
-      const grossTotal = grossUnit * qty;
-      const productMatchesName = !productNameFilter || nameFilterText.includes(productNameFilter);
-      const productMatchesVat = !vatFilter || String(vatRate) === vatFilter;
-      if (productMatchesName && productMatchesVat) {
-        const netTotal = vatRate > 0 ? grossTotal / (1 + vatRate / 100) : grossTotal;
-        const vatTotal = grossTotal - netTotal;
-        const key = `${name}::${vatRate}::${money(grossUnit)}`;
-        const group = groups.get(key) || { name, vatRate, unitGross: grossUnit, quantity: 0, grossTotal: 0, netTotal: 0, vatTotal: 0 };
-        group.quantity += qty;
-        group.grossTotal += grossTotal;
-        group.netTotal += netTotal;
-        group.vatTotal += vatTotal;
-        groups.set(key, group);
-        includedPaymentTotal += grossTotal;
-      }
-
-      const sgrTotal = receiptNumber(item.sgrTotal ?? (item.hasSgr ? 0.5 * qty : 0));
-      const sgrMatchesName = !productNameFilter || nameFilterText.includes(productNameFilter) || sgrNameFilterText.includes(productNameFilter);
-      const sgrMatchesVat = !vatFilter || vatFilter === "0";
-      if (sgrTotal > 0 && sgrMatchesName && sgrMatchesVat) {
-        const sgrKey = `${sgrName}::0::0.50`;
-        const sgrGroup = groups.get(sgrKey) || { name: sgrName, vatRate: 0, unitGross: 0.5, quantity: 0, grossTotal: 0, netTotal: 0, vatTotal: 0 };
-        sgrGroup.quantity += qty;
-        sgrGroup.grossTotal += sgrTotal;
-        sgrGroup.netTotal += sgrTotal;
-        groups.set(sgrKey, sgrGroup);
-        includedPaymentTotal += sgrTotal;
-      }
-    });
-    payments[method] += includedPaymentTotal;
+function groupedBarExportLines(rows) {
+  const groups = new Map();
+  const payments = { card: 0, numerar: 0, voucher: 0, other: 0 };
+  rows.forEach((row) => {
+    const method = ["card", "numerar", "voucher"].includes(row.method) ? row.method : "other";
+    const name = cleanReceiptText(row.name);
+    const vatRate = Number(row.vat_rate);
+    const unitGross = receiptNumber(row.unit_gross);
+    const qty = receiptNumber(row.quantity);
+    const grossTotal = receiptNumber(row.gross_total);
+    if (!name || qty <= 0 || unitGross <= 0 || grossTotal <= 0 || ![0, 11, 21].includes(vatRate)) return;
+    const key = `${row.article_key}::${name}::${vatRate}::${money(unitGross)}`;
+    const group = groups.get(key) || {
+      articleKey: String(row.article_key || ""),
+      name,
+      vatRate,
+      unitGross,
+      quantity: 0,
+      grossTotal: 0
+    };
+    group.quantity += qty;
+    group.grossTotal += grossTotal;
+    groups.set(key, group);
+    payments[method] += grossTotal;
   });
 
   return {
@@ -1004,6 +1044,179 @@ function groupedBarSaleLines(entries, filters = {}) {
   };
 }
 
+function insertBarExportLines(paymentId, lines, context) {
+  if (!Array.isArray(lines) || !lines.length) return;
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO bar_export_lines
+      (id, payment_id, sale_timestamp, sale_date, method, source_type, article_key, name, filter_name,
+       unit_gross, quantity, vat_rate, gross_total, exported_at, export_batch_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+  `);
+  lines.forEach((line) => {
+    insert.run(
+      line.id,
+      paymentId,
+      context.now,
+      barExportDate(context.now),
+      context.method,
+      line.sourceType,
+      line.articleKey,
+      line.name,
+      line.filterName || line.name,
+      line.unitGross,
+      line.quantity,
+      line.vatRate,
+      line.grossTotal,
+      context.now
+    );
+  });
+}
+
+function directBarExportLines(items, paymentId) {
+  const lines = [];
+  items.forEach((item) => {
+    const quantityValue = receiptNumber(item.quantity);
+    const productTotal = receiptNumber(item.subtotal ?? receiptNumber(item.price) * quantityValue);
+    lines.push({
+      id: `${paymentId}:product:${item.key}`,
+      sourceType: "bar",
+      articleKey: String(item.key || ""),
+      name: String(item.name || "Articol bar"),
+      filterName: String(item.name || "Articol bar"),
+      unitGross: receiptNumber(item.price),
+      quantity: quantityValue,
+      vatRate: Number(item.vatRate),
+      grossTotal: productTotal
+    });
+    const sgrTotal = receiptNumber(item.sgrTotal);
+    if (sgrTotal > 0) {
+      lines.push({
+        id: `${paymentId}:sgr:${item.key}`,
+        sourceType: "bar",
+        articleKey: "AMBALAJ-SGR",
+        name: "AMBALAJ SGR",
+        filterName: String(item.name || "Articol bar"),
+        unitGross: 0.5,
+        quantity: sgrTotal / 0.5,
+        vatRate: 0,
+        grossTotal: sgrTotal
+      });
+    }
+  });
+  return lines;
+}
+
+function reservationBarReceiptLines(stays, mode, context) {
+  const lines = [];
+  const stateRow = db.prepare(`
+    SELECT handled_quantity, handled_sgr_total
+    FROM reservation_bar_receipt_state
+    WHERE stay_key = ? AND item_id = ?
+  `);
+  const saveState = db.prepare(`
+    INSERT INTO reservation_bar_receipt_state
+      (stay_key, item_id, handled_quantity, handled_sgr_total, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(stay_key, item_id) DO UPDATE SET
+      handled_quantity = excluded.handled_quantity,
+      handled_sgr_total = excluded.handled_sgr_total,
+      updated_at = excluded.updated_at
+  `);
+
+  stays.forEach((stay) => {
+    reservationReceiptBarItems(stay).forEach((item) => {
+      const previous = stateRow.get(stay.key, item.id) || { handled_quantity: 0, handled_sgr_total: 0 };
+      const quantityDelta = Math.max(0, receiptNumber(item.quantity) - receiptNumber(previous.handled_quantity));
+      const sgrDelta = Math.max(0, receiptNumber(item.sgrTotal) - receiptNumber(previous.handled_sgr_total));
+      if (mode === "separate" && quantityDelta > 0) {
+        const lineBase = `${context.paymentId}:reservation:${stay.key}:${item.id}`;
+        lines.push({
+          id: `${lineBase}:product`,
+          sourceType: "reservation-separate",
+          articleKey: item.articleKey,
+          name: item.name,
+          filterName: item.name,
+          unitGross: item.price,
+          quantity: quantityDelta,
+          vatRate: item.vatRateValue,
+          grossTotal: Math.round(item.price * quantityDelta * 100) / 100
+        });
+        if (sgrDelta > 0) {
+          lines.push({
+            id: `${lineBase}:sgr`,
+            sourceType: "reservation-separate",
+            articleKey: "AMBALAJ-SGR",
+            name: "AMBALAJ SGR",
+            filterName: item.name,
+            unitGross: 0.5,
+            quantity: sgrDelta / 0.5,
+            vatRate: 0,
+            grossTotal: sgrDelta
+          });
+        }
+      }
+      saveState.run(stay.key, item.id, item.quantity, item.sgrTotal, context.now);
+    });
+  });
+  return lines;
+}
+
+function markBarExportLinesExported(rows, batchId, exportedAt) {
+  const update = db.prepare(`
+    UPDATE bar_export_lines
+    SET exported_at = ?, export_batch_id = ?
+    WHERE id = ? AND exported_at IS NULL
+  `);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    rows.forEach((row) => update.run(exportedAt, batchId, row.id));
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function backfillBarExportLedger() {
+  const transactions = db
+    .prepare(`
+      SELECT id, type, method, result, created_at
+      FROM payment_transactions
+      WHERE type IN ('bar', 'stay')
+      ORDER BY created_at ASC, id ASC
+    `)
+    .all();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec("DELETE FROM reservation_bar_receipt_state");
+    transactions.forEach((transaction) => {
+      let result;
+      try {
+        result = JSON.parse(transaction.result || "{}");
+      } catch {
+        return;
+      }
+      const context = {
+        paymentId: transaction.id,
+        method: transaction.method,
+        now: transaction.created_at
+      };
+      if (transaction.type === "bar" && Array.isArray(result.sale?.items)) {
+        insertBarExportLines(transaction.id, directBarExportLines(result.sale.items, transaction.id), context);
+        return;
+      }
+      if (transaction.type === "stay" && Array.isArray(result.stays)) {
+        const mode = normalizedReceiptBarMode(result.receiptBarMode);
+        insertBarExportLines(transaction.id, reservationBarReceiptLines(result.stays, mode, context), context);
+      }
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function buildSagaBarSalesXml(options = {}) {
   const includeAll = options.all === "1" || options.all === "true";
   const todayText = localDateText();
@@ -1013,18 +1226,22 @@ function buildSagaBarSalesXml(options = {}) {
   const companyCif = String(options.companyCif || "INTRODU_CIF").trim();
   const companyName = String(options.companyName || "Marina Park").trim();
   const clientName = String(options.clientName || "Client generic bar").trim();
-  const documentNumber = safeFilePart(options.documentNumber || `BAR-${includeAll ? "ALL" : `${compactDate(fromDate)}-${compactDate(toDate)}`}`);
   const productName = String(options.productName || "").trim();
   const vatRate = ["0", "11", "21"].includes(String(options.vatRate || "")) ? String(options.vatRate) : "";
-  const entries = barSalesEntriesForRange(fromDate, toDate, includeAll);
-  const grouped = groupedBarSaleLines(entries, { productName, vatRate });
+  const rows = barExportLineRowsForRange(fromDate, toDate, includeAll, { productName, vatRate });
+  const grouped = groupedBarExportLines(rows);
 
   if (!grouped.lines.length) {
-    const error = new Error("Nu există vânzări de bar pentru perioada și filtrele alese");
+    const error = new Error("Nu există vânzări de bar neexportate pentru perioada și filtrele alese");
     error.statusCode = 404;
     throw error;
   }
 
+  const exportedAt = new Date().toISOString();
+  const batchId = safeFilePart(
+    `BAR-${compactDate(exportDate)}-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+  );
+  const documentNumber = safeFilePart(options.documentNumber || batchId);
   let totalNet = 0;
   let totalVat = 0;
   let totalGross = 0;
@@ -1037,7 +1254,7 @@ function buildSagaBarSalesXml(options = {}) {
       totalVat += lineVat;
       totalGross += lineGross;
       const unitNet = line.quantity > 0 ? lineNet / line.quantity : 0;
-      const articleCode = safeFilePart(`${line.name}-${line.vatRate}-${money(line.unitGross)}`, "ART");
+      const articleCode = safeFilePart(line.articleKey, "ART");
       return [
         "<Linie>",
         xmlTag("LinieNrCrt", index + 1),
@@ -1062,7 +1279,7 @@ function buildSagaBarSalesXml(options = {}) {
     `Export iesiri bar ${periodLabel}`,
     productName ? `Filtru produs: ${productName}` : "",
     vatRate ? `Filtru TVA: ${vatRate}%` : "",
-    `Bonuri/plati incluse: ${entries.length}`,
+    `Bonuri/plati incluse: ${new Set(rows.map((row) => row.payment_id)).size}`,
     `Card: ${money(grouped.payments.card)}`,
     `Numerar: ${money(grouped.payments.numerar)}`,
     `Voucher: ${money(grouped.payments.voucher)}`
@@ -1104,8 +1321,17 @@ function buildSagaBarSalesXml(options = {}) {
     "</Facturi>"
   ].join(os.EOL);
   const filename = `F_${safeFilePart(companyCif, "CIF")}_${documentNumber}_${compactDate(exportDate)}.xml`;
+  markBarExportLinesExported(rows, batchId, exportedAt);
 
-  return { xml, filename, entries: entries.length, lines: grouped.lines.length, total: money(totalGross) };
+  return {
+    xml,
+    filename,
+    entries: new Set(rows.map((row) => row.payment_id)).size,
+    lines: grouped.lines.length,
+    total: money(totalGross),
+    exportedAt,
+    batchId
+  };
 }
 
 async function receiptDirectoryFor(config = {}) {
@@ -1460,10 +1686,12 @@ function reservationReceiptBarItems(stay = {}) {
       const lineTotal = receiptNumber(item.lineTotal ?? subtotal + sgrTotal);
       return {
         id: String(item.id || `bar-${index}`),
+        articleKey: String(item.articleKey || item.key || item.id || `bar-${index}`),
         name: String(item.name || "Articol bar").trim() || "Articol bar",
         price,
         quantity,
         vatRate: receiptVatRate(item.vatRate || item.vat_rate),
+        vatRateValue: Number(item.vatRate || item.vat_rate),
         hasSgr,
         subtotal,
         sgrTotal,
@@ -1602,6 +1830,7 @@ function prepareBarPayment(payload, context) {
     return next;
   });
   const sale = { items: items.map(({ article, previousStock, newStock, ...item }) => item), productsTotal, sgrTotal, sgrQuantity, total };
+  const barExportLines = directBarExportLines(sale.items, context.paymentId);
   const stockChanges = items.map((item) => ({ key: item.key, name: item.name, quantity: item.quantity, previousStock: item.previousStock, newStock: item.newStock }));
   const activity = normalizeActivityLogEntry({
     id: `payment-${context.paymentId}`,
@@ -1620,6 +1849,7 @@ function prepareBarPayment(payload, context) {
     amount: total,
     result: { type: "bar", sale, stockChanges, barArticles: updatedArticles },
     activity,
+    barExportLines,
     outbox: barReceiptOutbox(sale, context.method, context.config, context.paymentId)
   };
 }
@@ -1691,6 +1921,7 @@ function prepareStayPayment(payload, context) {
   const customerPriceAtPayment = Math.round(paymentStays.reduce((sum, stay) => sum + receiptNumber(stay.price), 0) * 100) / 100;
   const receiptBarMode = !isLinked ? normalizedReceiptBarMode(payload.receiptBarMode) : "combined";
   const receiptAccommodationAmount = receiptBarMode === "separate" ? receiptNumber(payload.receiptAccommodationAmount) : null;
+  const barExportLines = reservationBarReceiptLines(updatedStays, receiptBarMode, context);
   const effectivePaymentLine = ` Preț inițial client: ${money(originalCustomerPrice)} lei; plătit efectiv: ${money(amount)} lei.`;
   const activity = normalizeActivityLogEntry({
     id: `payment-${context.paymentId}`,
@@ -1737,6 +1968,7 @@ function prepareStayPayment(payload, context) {
     amount,
     result: { type: "stay", stays: updatedStays, allocations: activity.data.allocations, overpaymentAmount, receiptBarMode, receiptAccommodationAmount },
     activity,
+    barExportLines,
     outbox: accommodationReceiptOutbox(receiptStay, context.method, amount, context.config, context.paymentId, { barMode: receiptBarMode, accommodationAmount: receiptAccommodationAmount })
   };
 }
@@ -1852,6 +2084,7 @@ async function commitPayment(payload) {
       now,
       now
     );
+    insertBarExportLines(paymentId, mutation.barExportLines, context);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -2515,6 +2748,8 @@ async function serveStatic(request, response) {
   }
 }
 
+backfillBarExportLedger();
+
 const server = http.createServer(async (request, response) => {
   try {
     if (request.url.startsWith("/api/live-screen/frame") && request.method === "GET") {
@@ -2570,17 +2805,34 @@ const server = http.createServer(async (request, response) => {
       request.method === "POST"
     ) {
       const payload = JSON.parse(await requestBody(request) || "{}");
-      if (payload.confirm !== "STERGE LOG") {
+      const scope = ["all", "reservations", "bar"].includes(payload.scope) ? payload.scope : "all";
+      const requiredConfirmation = scope === "reservations"
+        ? "STERGE REZERVARI"
+        : scope === "bar"
+          ? "STERGE BAR"
+          : "STERGE LOG";
+      if (payload.confirm !== requiredConfirmation) {
         send(response, 400, JSON.stringify({ ok: false, error: "Confirmarea pentru ștergerea jurnalului este invalidă" }));
         return;
       }
-      send(response, 200, JSON.stringify(await clearActivityLogData()));
+      send(response, 200, JSON.stringify(await clearActivityLogData(scope)));
       return;
     }
 
     if (request.url.startsWith("/api/log") && request.method === "GET") {
       const url = new URL(request.url, `http://${request.headers.host}`);
-      send(response, 200, JSON.stringify({ ok: true, entries: activityLogRows(url.searchParams.get("limit")) }));
+      const requestedLimit = Number(url.searchParams.get("limit") || 250);
+      const requestedOffset = Number(url.searchParams.get("offset") || 0);
+      const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(500, Math.floor(requestedLimit))) : 250;
+      const offset = Number.isFinite(requestedOffset) ? Math.max(0, Math.floor(requestedOffset)) : 0;
+      const rows = activityLogRows(limit + 1, offset);
+      const entries = rows.slice(0, limit);
+      send(response, 200, JSON.stringify({
+        ok: true,
+        entries,
+        hasMore: rows.length > limit,
+        nextOffset: offset + entries.length
+      }));
       return;
     }
 
@@ -2613,7 +2865,9 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(200, {
         "Content-Type": "application/xml; charset=utf-8",
         "Cache-Control": "no-store",
-        "Content-Disposition": `attachment; filename="${result.filename}"`
+        "Content-Disposition": `attachment; filename="${result.filename}"`,
+        "X-Saga-Export-Batch": result.batchId,
+        "X-Saga-Exported-At": result.exportedAt
       });
       response.end(result.xml);
       return;

@@ -64,7 +64,69 @@ test("log options expose the clear-all action on local and LAN pages", () => {
   const source = fs.readFileSync(path.join(projectRoot, "activity.js"), "utf8");
 
   assert.match(html, /<details class="log-maintenance">[\s\S]*id="clearActivityLog">Șterge tot jurnalul<\/button>/);
+  assert.match(html, /id="clearReservationLogs">Șterge jurnal rezervări<\/button>/);
+  assert.match(html, /id="clearBarLogs">Șterge jurnal bar<\/button>/);
+  assert.match(html, /id="loadMoreLog" hidden>Încarcă mai multe<\/button>/);
   assert.doesNotMatch(source, /clearActivityLogButton\.hidden\s*=\s*true/);
+});
+
+test("activity log pages return stable offsets and report when older entries remain", async (context) => {
+  const server = await startTestServer();
+  context.after(server.stop);
+  const entries = Array.from({ length: 5 }, (_, index) => ({
+    id: `page-${index}`,
+    timestamp: new Date(Date.UTC(2026, 6, 1, 0, 0, index)).toISOString(),
+    eventType: "update",
+    entityType: "settings",
+    message: `Page ${index}`
+  }));
+  assert.equal((await request(server.url, "/api/log", {
+    method: "POST",
+    body: JSON.stringify({ entries })
+  })).status, 200);
+
+  const first = await request(server.url, "/api/log?limit=2&offset=0");
+  assert.deepEqual(first.body.entries.map((entry) => entry.id), ["page-4", "page-3"]);
+  assert.equal(first.body.hasMore, true);
+  assert.equal(first.body.nextOffset, 2);
+
+  const last = await request(server.url, "/api/log?limit=2&offset=4");
+  assert.deepEqual(last.body.entries.map((entry) => entry.id), ["page-0"]);
+  assert.equal(last.body.hasMore, false);
+  assert.equal(last.body.nextOffset, 5);
+});
+
+test("reservation and bar log clear actions delete only their own display-log rows", async (context) => {
+  const server = await startTestServer();
+  context.after(server.stop);
+  const entries = [
+    { id: "client-log", eventType: "update", entityType: "client", message: "Reservation" },
+    { id: "bar-log", eventType: "payment", entityType: "bar", message: "Bar" },
+    { id: "bar-article-log", eventType: "update", entityType: "bar_article", message: "Bar article" },
+    { id: "stationing-log", eventType: "update", entityType: "stationing", message: "Stationing" }
+  ];
+  assert.equal((await request(server.url, "/api/log", {
+    method: "POST",
+    body: JSON.stringify({ entries })
+  })).status, 200);
+
+  const reservations = await request(server.url, "/api/clear-activity-log", {
+    method: "POST",
+    body: JSON.stringify({ confirm: "STERGE REZERVARI", scope: "reservations" })
+  });
+  assert.equal(reservations.status, 200);
+  assert.equal(reservations.body.deleted, 1);
+  let log = await request(server.url, "/api/log?limit=20");
+  assert.deepEqual(log.body.entries.map((entry) => entry.id).sort(), ["bar-article-log", "bar-log", "stationing-log"]);
+
+  const bar = await request(server.url, "/api/clear-activity-log", {
+    method: "POST",
+    body: JSON.stringify({ confirm: "STERGE BAR", scope: "bar" })
+  });
+  assert.equal(bar.status, 200);
+  assert.equal(bar.body.deleted, 2);
+  log = await request(server.url, "/api/log?limit=20");
+  assert.deepEqual(log.body.entries.map((entry) => entry.id), ["stationing-log"]);
 });
 
 test("clearing the log deletes only activity rows and preserves the SQLite file and schema", async (context) => {

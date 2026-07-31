@@ -38,6 +38,8 @@
             <div>
               <button type="button" id="refreshLog">Reîncarcă</button>
               <button type="button" id="exportDatabase">Exportă baza de date</button>
+              <button class="danger-button" type="button" id="clearReservationLogs">Șterge jurnal rezervări</button>
+              <button class="danger-button" type="button" id="clearBarLogs">Șterge jurnal bar</button>
               <button class="danger-button" type="button" id="clearActivityLog">Șterge tot jurnalul</button>
             </div>
           </details>
@@ -46,6 +48,9 @@
 
       <section class="summary-grid" id="summaryGrid" aria-label="Rezumat activitate"></section>
       <section class="log-feed" id="logFeed" aria-live="polite"></section>
+      <div class="load-more-log">
+        <button type="button" id="loadMoreLog" hidden>Încarcă mai multe</button>
+      </div>
     </main>
     <script src="app-dialog.js"></script>
     <script src="activity.js"></script>
