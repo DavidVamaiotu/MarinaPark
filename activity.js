@@ -481,8 +481,14 @@ function clientSessionSection(section) {
   `;
 }
 
-function dailyClientKey(entry) {
-  const personId = entry.data?.personId || entry.data?.editSession?.personId;
+function dailyClientKey(entry, knownPersonIds = null) {
+  const personId =
+    entry.data?.personId ||
+    entry.data?.editSession?.personId ||
+    entry.data?.current?.personId ||
+    entry.data?.previous?.personId ||
+    entry.data?.stay?.personId ||
+    knownPersonIds?.get(sessionKey(entry));
   if (personId) return `person:${personId}`;
   if (entry.entityKey) return `${entry.entityType || "entry"}:${entry.entityKey}`;
   return `${entry.entityType || "entry"}:${entry.entityLabel || entityLabel(entry)}`;
@@ -614,8 +620,15 @@ function renderClientDayAction(entry) {
 
 function renderDayLog(dayEntries) {
   const clients = new Map();
+  const knownPersonIds = new Map();
   dayEntries.forEach((entry) => {
-    const key = dailyClientKey(entry);
+    const personKey = dailyClientKey(entry);
+    if (personKey.startsWith("person:") && sessionKey(entry)) {
+      knownPersonIds.set(sessionKey(entry), personKey.slice("person:".length));
+    }
+  });
+  dayEntries.forEach((entry) => {
+    const key = dailyClientKey(entry, knownPersonIds);
     if (!clients.has(key)) clients.set(key, { name: dailyClientName(entry), entityType: entry.entityType, entries: [] });
     clients.get(key).entries.push(entry);
   });

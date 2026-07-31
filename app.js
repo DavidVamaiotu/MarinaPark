@@ -5616,6 +5616,7 @@ async function attachBarCartToReservation(stayKey) {
       method: "bar-reservation",
       message: `Articole bar adăugate pe rezervarea ${stay.guest}: ${itemMessage}. Total rezervare +${formatActivityMoney(totals.total)}.`,
       data: {
+        personId: stay.personId,
         previous: previousStay,
         current: { ...stay, barItems: normalizeStayBarItems(stay.barItems) },
         addedItems,
@@ -5708,6 +5709,7 @@ function changeReservationBarItem(stayKey, itemId, delta, options = {}) {
         ? `Cantitatea pentru ${item.name} a crescut pe rezervarea ${stay.guest}. Total +${formatActivityMoney(priceDelta)}.`
         : `Cantitatea pentru ${item.name} a fost redusă pe rezervarea ${stay.guest}. Total ${formatActivityMoney(priceDelta)}.`,
     data: {
+      personId: stay.personId,
       previous: previousStay,
       current: { ...stay, barItems: normalizeStayBarItems(stay.barItems) },
       item,
@@ -6345,27 +6347,6 @@ function openBookingModal(defaults = {}) {
         personId: bookingPersonId
       }
     : null;
-  if (bookingEditSession) {
-    logActivity({
-      eventType: "open",
-      entityType: "client",
-      entityKey: editingStayKey,
-      entityLabel: activityStayLabel(defaults),
-      message: `Fișa clientului ${defaults.guest || "client"} a fost deschisă pentru editare.`,
-      data: {
-        initialPrice: bookingEditSession.initialPrice,
-        initialBalance: bookingEditSession.initialBalance,
-        initialPaid: bookingEditSession.initialPaid,
-        initialSettledPrice: bookingEditSession.initialSettledPrice,
-        initialActualPaidAmount: bookingEditSession.initialActualPaidAmount,
-        initialPaymentMethod: bookingEditSession.initialPaymentMethod,
-        personId: bookingEditSession.personId,
-        linkedReservationCount: linkedReservationsCountFor(defaults),
-        openedAt: bookingEditSession.openedAt
-      }
-    });
-  }
-
   ensureKindOption(kind);
   bookingForm.elements.kind.value = kind;
   renderUnitSelect(bookingUnitId);
@@ -7534,7 +7515,7 @@ async function deleteClient(stayKey) {
     entityKey: stay.key,
     entityLabel: activityStayLabel(stay),
     message: `Clientul ${stay.guest} a fost șters din ${stay.id}, perioada ${stay.dates}.`,
-    data: { stay }
+    data: { personId: stay.personId, stay }
   });
   showToast(`Client șters: ${stay.guest}`);
   return true;
@@ -7942,6 +7923,7 @@ function completeTimelineDrag(commit) {
       entityLabel: activityStayLabel(completedDrag.stay),
       message: `Rezervarea ${completedDrag.stay.guest} a fost mutată/redimensionată din calendar: ${formatStayDates(toISODate(completedDrag.originalStart), toISODate(completedDrag.originalEnd))} -> ${completedDrag.stay.dates}.`,
       data: {
+        personId: completedDrag.stay.personId,
         previousStart: toISODate(completedDrag.originalStart),
         previousEnd: toISODate(completedDrag.originalEnd),
         newStart: completedDrag.stay.start,
