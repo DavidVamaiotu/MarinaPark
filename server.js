@@ -1707,6 +1707,7 @@ function prepareStayPayment(payload, context) {
       ? `${first.guest} a plătit în total ${money(amount)} lei pentru ${updatedStays.length} rezervări prin ${context.method}.`
       : `${first.guest} a plătit ${money(amount)} lei prin ${context.method}.${effectivePaymentLine}`,
     data: {
+      personId: first.personId,
       method: context.method,
       amount,
       originalCustomerPrice,

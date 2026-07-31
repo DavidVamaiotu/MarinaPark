@@ -175,6 +175,7 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
   const activity = await request(server.url, "/api/log?limit=20");
   const linkedLog = activity.body.entries.find((entry) => entry.id === "payment-linked-valid-test");
   assert.equal(linkedLog.message, "Linked a plătit în total 500.00 lei pentru 2 rezervări prin voucher.");
+  assert.equal(linkedLog.data.personId, "person-1");
 
   const zeroPrice = await request(server.url, "/api/payment", {
     method: "POST",
