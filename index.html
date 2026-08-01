@@ -774,15 +774,39 @@
         <section class="form-section">
           <div class="form-section-head">
             <div>
+              <p class="eyebrow">Format</p>
+              <h3>Alege fișierul exportat</h3>
+            </div>
+          </div>
+          <div class="saga-export-format-options" role="radiogroup" aria-label="Format export">
+            <label>
+              <input name="format" type="radio" value="xml" required />
+              <span>
+                <strong>Export XML</strong>
+                <small>Fișier compatibil cu importul SAGA existent</small>
+              </span>
+            </label>
+            <label>
+              <input name="format" type="radio" value="pdf" required />
+              <span>
+                <strong>Export PDF</strong>
+                <small>Raport lizibil cu produse, cantități și valori</small>
+              </span>
+            </label>
+          </div>
+        </section>
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
               <p class="eyebrow">Perioadă</p>
               <h3>Vânzări incluse</h3>
             </div>
           </div>
           <label class="bar-sgr-toggle">
-            Toate vânzările neexportate
+            Toate vânzările
             <span class="checkbox-row">
               <input name="allSales" type="checkbox" />
-              <span>Ignoră intervalul de date și exportă tot ce este nou</span>
+              <span>Ignoră intervalul de date și exportă toate vânzările</span>
             </span>
           </label>
           <div class="field-grid">
@@ -837,11 +861,11 @@
             <input name="clientName" type="text" value="Client generic bar" required />
           </label>
         </section>
-        <button class="primary-button full" type="submit">
+        <button class="primary-button full" type="submit" id="sagaExportSubmit">
           <i data-lucide="file-down" aria-hidden="true"></i>
-          <span>Generează XML SAGA</span>
+          <span id="sagaExportSubmitLabel">Generează exportul</span>
         </button>
-        <p class="settings-note">Fișierul se importă în SAGA la Import Date / Facturi și intră în Ieșiri când codul fiscal al firmei este același cu cel din SAGA. Sunt incluse numai liniile neexportate; după generare sunt marcate cu exported_at ca să nu fie exportate din nou. Pentru rezervări, intră aici doar articolele pentru care bonul a fost ales separat de cazare.</p>
+        <p class="settings-note">XML păstrează structura pentru importul SAGA la Import Date / Facturi. PDF generează un raport de vânzări ușor de citit. Este creat numai formatul ales, iar aceeași perioadă poate fi exportată de câte ori este nevoie. Vânzările achitate cu voucher nu sunt incluse. Pentru rezervări, intră aici doar articolele pentru care bonul a fost ales separat de cazare.</p>
       </form>
     </section>
 

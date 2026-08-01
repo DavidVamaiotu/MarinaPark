@@ -35,6 +35,7 @@ const mysqlUser = process.env.MARINA_MYSQL_USER || "david";
 const mysqlPassword = process.env.MARINA_MYSQL_PASSWORD || "DavidG2023";
 let liveScreenCaptureProvider = null;
 let liveScreenFramePromise = null;
+let pdfRenderProvider = null;
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -215,6 +216,21 @@ function send(response, status, body, contentType = "application/json; charset=u
 
 function setLiveScreenCaptureProvider(provider) {
   liveScreenCaptureProvider = typeof provider === "function" ? provider : null;
+}
+
+function setPdfRenderProvider(provider) {
+  pdfRenderProvider = typeof provider === "function" ? provider : null;
+}
+
+async function renderPdfDocument(html) {
+  if (!pdfRenderProvider) {
+    throw requestError(503, "Exportul PDF este disponibil numai în aplicația Marina Park instalată");
+  }
+  const pdf = await pdfRenderProvider(html);
+  if (!Buffer.isBuffer(pdf) || pdf.length === 0) {
+    throw requestError(503, "Raportul PDF nu a putut fi generat");
+  }
+  return pdf;
 }
 
 async function captureLiveScreenFrame() {
@@ -989,7 +1005,7 @@ function barExportLineRowsForRange(fromDate, toDate, includeAll, filters = {}) {
     .prepare(`
       SELECT *
       FROM bar_export_lines
-      WHERE exported_at IS NULL
+      WHERE method <> 'voucher'
         AND (? = 1 OR sale_date >= ?)
         AND (? = 1 OR sale_date <= ?)
       ORDER BY sale_timestamp ASC, id ASC
@@ -1161,22 +1177,6 @@ function reservationBarReceiptLines(stays, mode, context) {
   return lines;
 }
 
-function markBarExportLinesExported(rows, batchId, exportedAt) {
-  const update = db.prepare(`
-    UPDATE bar_export_lines
-    SET exported_at = ?, export_batch_id = ?
-    WHERE id = ? AND exported_at IS NULL
-  `);
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    rows.forEach((row) => update.run(exportedAt, batchId, row.id));
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
 function backfillBarExportLedger() {
   const transactions = db
     .prepare(`
@@ -1232,7 +1232,7 @@ function buildSagaBarSalesXml(options = {}) {
   const grouped = groupedBarExportLines(rows);
 
   if (!grouped.lines.length) {
-    const error = new Error("Nu există vânzări de bar neexportate pentru perioada și filtrele alese");
+    const error = new Error("Nu există vânzări de bar pentru perioada și filtrele alese");
     error.statusCode = 404;
     throw error;
   }
@@ -1321,8 +1321,6 @@ function buildSagaBarSalesXml(options = {}) {
     "</Facturi>"
   ].join(os.EOL);
   const filename = `F_${safeFilePart(companyCif, "CIF")}_${documentNumber}_${compactDate(exportDate)}.xml`;
-  markBarExportLinesExported(rows, batchId, exportedAt);
-
   return {
     xml,
     filename,
@@ -1332,6 +1330,252 @@ function buildSagaBarSalesXml(options = {}) {
     exportedAt,
     batchId
   };
+}
+
+function htmlEscape(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function buildSagaBarSalesReportHtml(report) {
+  const fontPath = path.join(rootDir, "fonts", "Rubik-Variable.ttf");
+  const fontData = fsSync.existsSync(fontPath) ? fsSync.readFileSync(fontPath).toString("base64") : "";
+  const lineRows = report.grouped.lines
+    .map(
+      (line, index) => `
+        <tr>
+          <td class="row-number">${index + 1}</td>
+          <td class="product">
+            <strong>${htmlEscape(line.name)}</strong>
+            <small>${htmlEscape(line.articleKey || "Fără cod")}</small>
+          </td>
+          <td class="number">${htmlEscape(quantity(line.quantity))}</td>
+          <td class="number">${htmlEscape(money(line.unitGross))}</td>
+          <td class="number">${htmlEscape(String(line.vatRate))}%</td>
+          <td class="number total">${htmlEscape(money(line.grossTotal))}</td>
+        </tr>`
+    )
+    .join("");
+  const filterParts = [
+    report.productName ? `Produs: ${report.productName}` : "",
+    report.vatRate ? `TVA: ${report.vatRate}%` : ""
+  ].filter(Boolean);
+
+  return `<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    ${fontData ? `@font-face { font-family: "Rubik"; src: url(data:font/ttf;base64,${fontData}) format("truetype"); font-weight: 300 900; }` : ""}
+    * { box-sizing: border-box; }
+    html { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    body {
+      margin: 0;
+      color: #172033;
+      font-family: ${fontData ? '"Rubik"' : "Arial"}, sans-serif;
+      font-size: 10.5px;
+      line-height: 1.45;
+    }
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid #0d7b66;
+    }
+    .eyebrow {
+      margin: 0 0 5px;
+      color: #0d7b66;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; font-size: 24px; line-height: 1.15; }
+    .company { max-width: 220px; text-align: right; }
+    .company strong { display: block; font-size: 13px; }
+    .company span { color: #667085; }
+    .meta-grid, .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .meta-card, .summary-card {
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid #d9e2e7;
+      border-radius: 8px;
+      background: #f7faf9;
+    }
+    .meta-card span, .summary-card span {
+      display: block;
+      margin-bottom: 3px;
+      color: #667085;
+      font-size: 8.5px;
+      font-weight: 700;
+      letter-spacing: .45px;
+      text-transform: uppercase;
+    }
+    .meta-card strong, .summary-card strong {
+      display: block;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+    }
+    .summary-card.highlight {
+      color: #fff;
+      border-color: #0d7b66;
+      background: #0d7b66;
+    }
+    .summary-card.highlight span { color: #d5f3eb; }
+    h2 { margin: 18px 0 8px; font-size: 14px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid-page; page-break-inside: avoid; }
+    th {
+      padding: 8px 7px;
+      color: #fff;
+      background: #243447;
+      font-size: 8.5px;
+      letter-spacing: .3px;
+      text-align: left;
+      text-transform: uppercase;
+    }
+    td {
+      padding: 8px 7px;
+      border-bottom: 1px solid #e3e8eb;
+      vertical-align: top;
+    }
+    tbody tr:nth-child(even) td { background: #f8fafb; }
+    .row-number { width: 5%; color: #667085; }
+    .product { width: 43%; overflow-wrap: anywhere; word-break: break-word; }
+    .product strong, .product small { display: block; }
+    .product small { margin-top: 2px; color: #7b8494; font-size: 8.5px; }
+    .number { width: 13%; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .total { font-weight: 700; }
+    .payment-summary {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 14px;
+      break-inside: avoid;
+    }
+    .payment-summary div {
+      padding: 8px 9px;
+      border-top: 2px solid #c9d4da;
+      background: #f8fafb;
+    }
+    .payment-summary span { display: block; color: #667085; font-size: 8px; text-transform: uppercase; }
+    .payment-summary strong { display: block; margin-top: 3px; font-size: 11px; }
+    .note { margin: 14px 0 0; color: #667085; font-size: 8.5px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">Raport comercial</p>
+      <h1>Raport vânzări bar</h1>
+    </div>
+    <div class="company">
+      <strong>${htmlEscape(report.companyName)}</strong>
+      <span>CIF ${htmlEscape(report.companyCif)} · ${htmlEscape(report.clientName)}</span>
+    </div>
+  </header>
+
+  <section class="meta-grid">
+    <div class="meta-card"><span>Data exportului</span><strong>${htmlEscape(report.exportDate)}</strong></div>
+    <div class="meta-card"><span>Perioada raportată</span><strong>${htmlEscape(report.periodLabel)}</strong></div>
+    <div class="meta-card"><span>Filtre</span><strong>${htmlEscape(filterParts.join(" · ") || "Fără filtre")}</strong></div>
+  </section>
+
+  <section class="summary-grid">
+    <div class="summary-card"><span>Produse distincte</span><strong>${report.grouped.lines.length}</strong></div>
+    <div class="summary-card"><span>Cantitate totală</span><strong>${htmlEscape(quantity(report.totalQuantity))}</strong></div>
+    <div class="summary-card highlight"><span>Valoare totală</span><strong>${htmlEscape(money(report.totalGross))} lei</strong></div>
+  </section>
+
+  <h2>Produse vândute</h2>
+  <table>
+    <thead>
+      <tr>
+        <th class="row-number">Nr.</th>
+        <th class="product">Produs / cod articol</th>
+        <th class="number">Cantitate</th>
+        <th class="number">Preț unitar</th>
+        <th class="number">TVA</th>
+        <th class="number">Valoare totală</th>
+      </tr>
+    </thead>
+    <tbody>${lineRows}</tbody>
+  </table>
+
+  <section class="payment-summary">
+    <div><span>Bonuri / plăți</span><strong>${report.entries}</strong></div>
+    <div><span>Card</span><strong>${htmlEscape(money(report.grouped.payments.card))} lei</strong></div>
+    <div><span>Numerar</span><strong>${htmlEscape(money(report.grouped.payments.numerar))} lei</strong></div>
+    <div><span>Voucher</span><strong>${htmlEscape(money(report.grouped.payments.voucher))} lei</strong></div>
+    <div><span>Alte metode</span><strong>${htmlEscape(money(report.grouped.payments.other))} lei</strong></div>
+  </section>
+  <p class="note">Prețurile unitare și valorile totale includ TVA. Vânzările achitate cu voucher nu sunt incluse.</p>
+</body>
+</html>`;
+}
+
+async function buildSagaBarSalesPdf(options = {}) {
+  const includeAll = options.all === "1" || options.all === "true";
+  const todayText = localDateText();
+  const fromDate = includeAll ? "" : String(options.from || todayText);
+  const toDate = includeAll ? "" : String(options.to || fromDate || todayText);
+  const exportDate = todayText;
+  const companyCif = String(options.companyCif || "INTRODU_CIF").trim();
+  const companyName = String(options.companyName || "Marina Park").trim();
+  const clientName = String(options.clientName || "Client generic bar").trim();
+  const productName = String(options.productName || "").trim();
+  const vatRate = ["0", "11", "21"].includes(String(options.vatRate || "")) ? String(options.vatRate) : "";
+  const rows = barExportLineRowsForRange(fromDate, toDate, includeAll, { productName, vatRate });
+  const grouped = groupedBarExportLines(rows);
+
+  if (!grouped.lines.length) {
+    const error = new Error("Nu există vânzări de bar pentru perioada și filtrele alese");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const exportedAt = new Date().toISOString();
+  const periodLabel = includeAll ? "Toate vânzările" : `${fromDate} - ${toDate}`;
+  const entries = new Set(rows.map((row) => row.payment_id)).size;
+  const totalQuantity = grouped.lines.reduce((sum, line) => sum + line.quantity, 0);
+  const totalGross = grouped.lines.reduce((sum, line) => sum + line.grossTotal, 0);
+  const batchId = safeFilePart(
+    `BAR-PDF-${compactDate(exportDate)}-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+  );
+  const report = {
+    companyCif,
+    companyName,
+    clientName,
+    productName,
+    vatRate,
+    exportDate,
+    periodLabel,
+    entries,
+    grouped,
+    totalQuantity,
+    totalGross
+  };
+  const pdf = await renderPdfDocument(buildSagaBarSalesReportHtml(report));
+  const filenamePeriod = includeAll ? "toate" : `${compactDate(fromDate)}-${compactDate(toDate)}`;
+  const filename = `Raport_vanzari_bar_${safeFilePart(filenamePeriod, "perioada")}_${compactDate(exportDate)}.pdf`;
+  return { pdf, filename, entries, lines: grouped.lines.length, total: money(totalGross), exportedAt, batchId };
 }
 
 async function receiptDirectoryFor(config = {}) {
@@ -2859,6 +3103,21 @@ const server = http.createServer(async (request, response) => {
     }
 
 
+    if (request.url.startsWith("/api/saga/bar-sales.pdf") && request.method === "GET") {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      const result = await buildSagaBarSalesPdf(Object.fromEntries(url.searchParams.entries()));
+      response.writeHead(200, {
+        "Content-Type": "application/pdf",
+        "Content-Length": result.pdf.length,
+        "Cache-Control": "no-store",
+        "Content-Disposition": `attachment; filename="${result.filename}"`,
+        "X-Saga-Export-Batch": result.batchId,
+        "X-Saga-Exported-At": result.exportedAt
+      });
+      response.end(result.pdf);
+      return;
+    }
+
     if (request.url.startsWith("/api/saga/bar-sales") && request.method === "GET") {
       const url = new URL(request.url, `http://${request.headers.host}`);
       const result = buildSagaBarSalesXml(Object.fromEntries(url.searchParams.entries()));
@@ -2976,4 +3235,10 @@ if (require.main === module) {
   });
 }
 
-module.exports = { setLiveScreenCaptureProvider, startServer, stopServer };
+module.exports = {
+  buildSagaBarSalesReportHtml,
+  setLiveScreenCaptureProvider,
+  setPdfRenderProvider,
+  startServer,
+  stopServer
+};

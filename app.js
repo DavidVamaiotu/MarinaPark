@@ -414,6 +414,8 @@ const sagaExportModal = document.querySelector("#saga-export-modal");
 const sagaExportForm = document.querySelector("#sagaExportForm");
 const openSagaExportModalButton = document.querySelector("#openSagaExportModal");
 const closeSagaExportModalButton = document.querySelector("#closeSagaExportModal");
+const sagaExportSubmitButton = document.querySelector("#sagaExportSubmit");
+const sagaExportSubmitLabel = document.querySelector("#sagaExportSubmitLabel");
 let today = new Date();
 today.setHours(0, 0, 0, 0);
 let visibleMonth = monthStart(today);
@@ -471,6 +473,8 @@ let barPaymentInProgress = false;
 let barAttachInProgress = false;
 let receiptPaymentRequestId = null;
 let barPaymentRequestId = null;
+let sagaExportInProgress = false;
+let sagaExportAbortController = null;
 let receiptConfig = {
   receiptDirectory: localStorage.getItem("marinaParkReceiptDirectory") || "",
   receiptVat: localStorage.getItem("marinaParkReceiptVat") || "19",
@@ -5156,6 +5160,9 @@ function syncSagaExportDateFields() {
 function openSagaExportModal() {
   const todayText = toISODate(today);
   applySagaExportSettings();
+  sagaExportForm.querySelectorAll('input[name="format"]').forEach((input) => {
+    input.checked = false;
+  });
   if (!sagaExportForm.elements.fromDate.value) sagaExportForm.elements.fromDate.value = todayText;
   if (!sagaExportForm.elements.toDate.value) sagaExportForm.elements.toDate.value = todayText;
   syncSagaExportDateFields();
@@ -5165,10 +5172,26 @@ function openSagaExportModal() {
 }
 
 function closeSagaExportModal() {
+  if (sagaExportInProgress) {
+    sagaExportAbortController?.abort();
+    setSagaExportBusy(false);
+    showToast("Exportul a fost anulat");
+  }
   sagaExportModal.classList.remove("is-open");
   if (!receiptModal.classList.contains("is-open") && !bookingModal.classList.contains("is-open") && !stationingModal.classList.contains("is-open") && !barArticleModal.classList.contains("is-open") && !barPaymentModal.classList.contains("is-open")) {
     document.body.style.overflow = "";
   }
+}
+
+function setSagaExportBusy(isBusy, format = "") {
+  sagaExportInProgress = isBusy;
+  sagaExportForm.setAttribute("aria-busy", String(isBusy));
+  sagaExportSubmitButton.disabled = isBusy;
+  sagaExportSubmitLabel.textContent = isBusy
+    ? format === "pdf"
+      ? "Se generează PDF..."
+      : "Se generează XML..."
+    : "Generează exportul";
 }
 
 function downloadBlob(blob, filename) {
@@ -5188,6 +5211,13 @@ function filenameFromDisposition(disposition) {
 }
 
 async function exportSagaBarSales() {
+  if (sagaExportInProgress) return false;
+  const format = String(sagaExportForm.elements.format.value || "");
+  if (!["xml", "pdf"].includes(format)) {
+    showToast("Alege Export XML sau Export PDF");
+    sagaExportForm.querySelector('input[name="format"]')?.focus();
+    return false;
+  }
   const config = readSagaExportSettings();
   if (!config.companyCif) {
     showToast("Completează codul fiscal al firmei pentru SAGA");
@@ -5217,7 +5247,13 @@ async function exportSagaBarSales() {
   }
 
   try {
-    const response = await fetch(`/api/saga/bar-sales?${params.toString()}`, { cache: "no-store" });
+    sagaExportAbortController = new AbortController();
+    setSagaExportBusy(true, format);
+    const endpoint = format === "pdf" ? "/api/saga/bar-sales.pdf" : "/api/saga/bar-sales";
+    const response = await fetch(`${endpoint}?${params.toString()}`, {
+      cache: "no-store",
+      signal: sagaExportAbortController.signal
+    });
     const body = await response.blob();
     if (!response.ok) {
       const text = await body.text();
@@ -5227,24 +5263,29 @@ async function exportSagaBarSales() {
       } catch {
         // Keep raw server text.
       }
-      throw new Error(errorMessage || "Nu am putut genera exportul SAGA");
+      throw new Error(errorMessage || `Nu am putut genera exportul ${format.toUpperCase()}`);
     }
 
-    const filename = filenameFromDisposition(response.headers.get("Content-Disposition")) || "saga-bar-sales.xml";
+    const filename = filenameFromDisposition(response.headers.get("Content-Disposition")) || `vanzari-bar.${format}`;
     downloadBlob(body, filename);
     logActivity({
       eventType: "export",
       entityType: "bar",
       entityKey: "saga-bar-sales",
       entityLabel: "Export SAGA bar",
-      message: `Export SAGA generat pentru vânzări bar${allSales ? " - toate vânzările" : ` ${fromDate} - ${toDate}`}${config.productName ? `, produs ${config.productName}` : ""}${config.vatRate ? `, TVA ${config.vatRate}%` : ""}.`,
-      data: { allSales, fromDate, toDate, productName: config.productName, vatRate: config.vatRate, sagaExportConfig: config }
+      message: `Export ${format.toUpperCase()} generat pentru vânzări bar${allSales ? " - toate vânzările" : ` ${fromDate} - ${toDate}`}${config.productName ? `, produs ${config.productName}` : ""}${config.vatRate ? `, TVA ${config.vatRate}%` : ""}.`,
+      data: { format, allSales, fromDate, toDate, productName: config.productName, vatRate: config.vatRate, sagaExportConfig: config }
     });
+    setSagaExportBusy(false);
+    sagaExportAbortController = null;
     closeSagaExportModal();
-    showToast("Exportul SAGA a fost generat");
+    showToast(`Exportul ${format.toUpperCase()} a fost generat`);
     return true;
   } catch (error) {
-    showToast(error.message || "Nu am putut genera exportul SAGA");
+    const wasCancelled = error?.name === "AbortError";
+    setSagaExportBusy(false);
+    sagaExportAbortController = null;
+    if (!wasCancelled) showToast(error.message || `Nu am putut genera exportul ${format.toUpperCase()}`);
     return false;
   }
 }

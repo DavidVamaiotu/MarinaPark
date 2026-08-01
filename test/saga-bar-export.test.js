@@ -39,6 +39,7 @@ async function startTestServer() {
   return {
     url,
     dataDir,
+    runtimeDir,
     stop: async () => {
       child.kill("SIGTERM");
       await new Promise((resolve) => child.once("exit", resolve));
@@ -55,7 +56,7 @@ async function jsonRequest(url, pathname, options = {}) {
   return { status: response.status, body: await response.json() };
 }
 
-test("SAGA export uses the authoritative unexported ledger and only separate reservation bar items", async (context) => {
+test("SAGA export is repeatable and excludes voucher and combined-reservation bar items", async (context) => {
   const server = await startTestServer();
   context.after(server.stop);
   const attachedItem = {
@@ -87,9 +88,27 @@ test("SAGA export uses the authoritative unexported ledger and only separate res
 
   const direct = await jsonRequest(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "direct-bar", type: "bar", method: "voucher", amount: 11, items: [{ key: "water", quantity: 2 }] })
+    body: JSON.stringify({
+      paymentId: "direct-bar",
+      type: "bar",
+      method: "card",
+      amount: 11,
+      items: [{ key: "water", quantity: 2 }],
+      receiptConfig: { receiptDirectory: server.runtimeDir }
+    })
   });
   assert.equal(direct.status, 200);
+  const voucher = await jsonRequest(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify({
+      paymentId: "voucher-bar",
+      type: "bar",
+      method: "voucher",
+      amount: 16.5,
+      items: [{ key: "water", quantity: 3 }]
+    })
+  });
+  assert.equal(voucher.status, 200);
   const combined = await jsonRequest(server.url, "/api/payment", {
     method: "POST",
     body: JSON.stringify({ paymentId: "combined-stay", type: "stay", method: "voucher", amount: 111, stayKey: "stay-combined", receiptBarMode: "combined" })
@@ -113,11 +132,12 @@ test("SAGA export uses the authoritative unexported ledger and only separate res
     body: JSON.stringify({
       paymentId: "separate-stay",
       type: "stay",
-      method: "voucher",
+      method: "numerar",
       amount: 111,
       stayKey: "stay-separate",
       receiptBarMode: "separate",
-      receiptAccommodationAmount: 100
+      receiptAccommodationAmount: 100,
+      receiptConfig: { receiptDirectory: server.runtimeDir }
     })
   });
   assert.equal(separate.status, 200);
@@ -143,14 +163,15 @@ test("SAGA export uses the authoritative unexported ledger and only separate res
   assert.match(xml, /<Descriere>AMBALAJ SGR<\/Descriere>/);
   assert.match(xml, /Bonuri\/plati incluse: 2/);
   assert.doesNotMatch(xml, /Bonuri\/plati incluse: 3/);
+  assert.match(xml, /Voucher: 0\.00/);
   assert.ok(exportResponse.headers.get("x-saga-exported-at"));
 
   const database = new DatabaseSync(path.join(server.dataDir, "marina-park.sqlite"), { readOnly: true });
   try {
     const rows = database.prepare("SELECT payment_id, exported_at FROM bar_export_lines ORDER BY payment_id, id").all();
-    assert.equal(rows.length, 4);
-    assert.deepEqual([...new Set(rows.map((row) => row.payment_id))], ["direct-bar", "separate-stay"]);
-    assert.ok(rows.every((row) => row.exported_at));
+    assert.equal(rows.length, 6);
+    assert.deepEqual([...new Set(rows.map((row) => row.payment_id))], ["direct-bar", "separate-stay", "voucher-bar"]);
+    assert.ok(rows.every((row) => row.exported_at === null));
   } finally {
     database.close();
   }
@@ -168,6 +189,10 @@ test("SAGA export uses the authoritative unexported ledger and only separate res
   });
   assert.equal(forgedLog.status, 200);
   const repeated = await fetch(`${server.url}/api/saga/bar-sales?all=1&companyCif=RO123`);
-  assert.equal(repeated.status, 404);
-  assert.match(await repeated.text(), /neexportate/);
+  assert.equal(repeated.status, 200);
+  const repeatedXml = await repeated.text();
+  assert.match(repeatedXml, /<Descriere>Water<\/Descriere>/);
+  assert.match(repeatedXml, /<Cantitate>4\.000<\/Cantitate>/);
+  assert.match(repeatedXml, /Bonuri\/plati incluse: 2/);
+  assert.doesNotMatch(repeatedXml, /Fake/);
 });

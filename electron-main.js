@@ -45,6 +45,38 @@ async function captureMainWindowJpeg() {
   };
 }
 
+async function renderHtmlToPdf(html) {
+  const reportWindow = new BrowserWindow({
+    show: false,
+    backgroundColor: "#ffffff",
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      backgroundThrottling: false
+    }
+  });
+
+  try {
+    const reportUrl = `data:text/html;base64,${Buffer.from(String(html || ""), "utf8").toString("base64")}`;
+    await reportWindow.loadURL(reportUrl);
+    await reportWindow.webContents.executeJavaScript("document.fonts.ready");
+    return await reportWindow.webContents.printToPDF({
+      pageSize: "A4",
+      printBackground: true,
+      displayHeaderFooter: true,
+      headerTemplate: "<div></div>",
+      footerTemplate: `
+        <div style="width:100%; padding:0 12mm; color:#667085; font:9px Arial, sans-serif; text-align:right;">
+          Pagina <span class="pageNumber"></span> din <span class="totalPages"></span>
+        </div>`,
+      margins: { top: 0.5, bottom: 0.55, left: 0.5, right: 0.5 }
+    });
+  } finally {
+    if (!reportWindow.isDestroyed()) reportWindow.destroy();
+  }
+}
+
 function bundledCustomDefaultsPath() {
   return app.isPackaged
     ? path.join(process.resourcesPath, "custom-defaults")
@@ -205,6 +237,7 @@ async function startApplication() {
   const { url } = await serverController.startServer({ host: "0.0.0.0", localHost: "127.0.0.1", port: 4173, portAttempts: 100 });
   await createWindow(url, customDir);
   serverController.setLiveScreenCaptureProvider(captureMainWindowJpeg);
+  serverController.setPdfRenderProvider(renderHtmlToPdf);
   setupAutoUpdater();
 }
 
