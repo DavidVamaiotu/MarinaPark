@@ -7337,17 +7337,29 @@ function applySourceBooking(booking) {
   bookingForm.elements.arrival.value = booking.start;
   bookingForm.elements.departure.value = booking.end;
   syncNightsFromDates();
+  const sourceCheckoutDate = validDateFromISO(booking.end);
+  if (sourceCheckoutDate && sourceCheckoutDate < today) {
+    bookingForm.elements.arrival.value = toISODate(today);
+    syncDepartureFromNights();
+  }
   syncBookingCalendarMonthToArrival();
   bookingForm.elements.paymentMethod.value = "";
   bookingForm.elements.note.value = booking.note || "";
   syncBookingPaymentFields();
   lockImportedPricing();
-  bookingFacilityDraft = normalizeStayFacilities(booking.facilities, { start: booking.start, end: booking.end });
+  bookingFacilityDraft = normalizeStayFacilities(booking.facilities, {
+    start: bookingForm.elements.arrival.value,
+    end: bookingForm.elements.departure.value
+  });
   setBookingBasePrice(booking.basePrice ?? booking.price);
   setMoneyField("price", booking.price);
   setMoneyField("deposit", 0);
   setMoneyField("balance", booking.price);
-  autoLinkStationingForFutureBooking(booking);
+  autoLinkStationingForFutureBooking({
+    ...booking,
+    start: bookingForm.elements.arrival.value,
+    end: bookingForm.elements.departure.value
+  });
   renderBookingFacilities();
   renderBookingRangeCalendar();
   renderBookingStationingLink();

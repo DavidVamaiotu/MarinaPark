@@ -58,6 +58,17 @@ test("local-history selection applies every retained client field", () => {
   assert.match(applySource, /bookingForm\.elements\.car\.value = booking\.car \|\| "";/);
 });
 
+test("expired SQL source reservations start today while preserving their duration", () => {
+  const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  const applySource = app.match(/function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
+
+  assert.ok(applySource, "applySourceBooking should exist");
+  assert.match(applySource, /const sourceCheckoutDate = validDateFromISO\(booking\.end\);/);
+  assert.match(applySource, /sourceCheckoutDate && sourceCheckoutDate < today/);
+  assert.match(applySource, /bookingForm\.elements\.arrival\.value = toISODate\(today\);\s*syncDepartureFromNights\(\);/);
+  assert.match(applySource, /showOldSourceBookingWarning\(booking\);/);
+});
+
 test("only SQL source records are grouped as arrivals today", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
 
