@@ -194,14 +194,16 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
       method: "voucher",
       amount: 120,
       stayKey: "stay-edit",
+      initialEditPrice: 90,
       draftStay: { price: 120, balance: 120 }
     })
   });
   assert.equal(editedPrice.status, 200);
   const editedPriceActivity = await request(server.url, "/api/log?limit=20");
   const editedPriceLog = editedPriceActivity.body.entries.find((entry) => entry.id === "payment-stay-edited-price-test");
-  assert.match(editedPriceLog.message, /Preț inițial client: 100\.00 lei; plătit efectiv: 120\.00 lei\./);
-  assert.equal(editedPriceLog.data.originalCustomerPrice, 100);
+  assert.match(editedPriceLog.message, /Preț inițial client: 90\.00 lei; plătit efectiv: 120\.00 lei\./);
+  assert.equal(editedPriceLog.data.originalCustomerPrice, 90);
+  assert.equal(editedPriceLog.data.initialEditPrice, 90);
   assert.equal(editedPriceLog.data.customerPriceAtPayment, 120);
 
   const combinedAttachedBar = await request(server.url, "/api/payment", {

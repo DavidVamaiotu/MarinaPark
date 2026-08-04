@@ -3606,6 +3606,12 @@ async function generateCommittedReceipt(stayKey, method) {
       stayKey: targetType === "stay" ? stay.key : undefined,
       linkedKeys: targetType === "stay" && draft.isLinkedTotal ? draft.linkedKeys : undefined,
       draftStay: targetType === "stay" && !draft.isLinkedTotal ? draft.stay : undefined,
+      initialEditPrice:
+        targetType === "stay" &&
+        !draft.isLinkedTotal &&
+        bookingEditSession?.key === stay.key
+          ? bookingEditSession.initialPrice
+          : undefined,
       stationingKey: targetType === "stationing" ? stationingRecord.key : undefined,
       draftStationing: targetType === "stationing" ? draft.stationing : undefined
     });
@@ -7365,6 +7371,14 @@ function applySourceBooking(booking) {
   bookingForm.elements.car.value = booking.car || "";
   updatePartyTotal();
   if (detailsOnly) {
+    if (currentBookingIsRv()) {
+      autoLinkStationingForFutureBooking({
+        ...booking,
+        group: currentBookingGroup(),
+        start: bookingForm.elements.arrival.value,
+        end: bookingForm.elements.departure.value
+      });
+    }
     clearImportedPricing();
     bookingFacilityDraft = [];
     renderBookingFacilities();

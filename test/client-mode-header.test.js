@@ -58,6 +58,23 @@ test("local-history selection applies every retained client field", () => {
   assert.match(applySource, /bookingForm\.elements\.car\.value = booking\.car \|\| "";/);
 });
 
+test("local-history Rulote selection uses the same exact-name Stationare auto-link as SQL", () => {
+  const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  const applySource = app.match(/function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
+  const autoLink = app.match(/function autoLinkStationingForFutureBooking\(booking = \{\}\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
+
+  assert.ok(applySource, "applySourceBooking should exist");
+  assert.ok(autoLink, "autoLinkStationingForFutureBooking should exist");
+  assert.match(
+    applySource,
+    /if \(detailsOnly\) \{\s*if \(currentBookingIsRv\(\)\) \{\s*autoLinkStationingForFutureBooking\(\{\s*\.\.\.booking,\s*group: currentBookingGroup\(\),\s*start: bookingForm\.elements\.arrival\.value,\s*end: bookingForm\.elements\.departure\.value/
+  );
+  assert.equal(applySource.match(/autoLinkStationingForFutureBooking/g)?.length, 2);
+  assert.match(autoLink, /const matches = exactAvailableStationingMatches\(booking\.guest \|\| bookingForm\.elements\.guest\.value\);/);
+  assert.match(autoLink, /if \(matches\.length !== 1\) return false;/);
+  assert.match(autoLink, /autoLinked: true,\s*subtractDays: false/);
+});
+
 test("expired SQL source reservations start today while preserving their duration", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
   const applySource = app.match(/function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];

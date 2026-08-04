@@ -2161,7 +2161,13 @@ function prepareStayPayment(payload, context) {
     return next;
   });
   const first = updatedStays[0];
-  const originalCustomerPrice = Math.round(currentStays.reduce((sum, stay) => sum + receiptNumber(stay.price), 0) * 100) / 100;
+  const storedCustomerPrice = Math.round(currentStays.reduce((sum, stay) => sum + receiptNumber(stay.price), 0) * 100) / 100;
+  const suppliedInitialEditPrice = Number(payload.initialEditPrice);
+  const initialEditPrice =
+    !isLinked && payload.initialEditPrice != null && Number.isFinite(suppliedInitialEditPrice) && suppliedInitialEditPrice >= 0
+      ? Math.round(suppliedInitialEditPrice * 100) / 100
+      : null;
+  const originalCustomerPrice = initialEditPrice ?? storedCustomerPrice;
   const customerPriceAtPayment = Math.round(paymentStays.reduce((sum, stay) => sum + receiptNumber(stay.price), 0) * 100) / 100;
   const receiptBarMode = !isLinked ? normalizedReceiptBarMode(payload.receiptBarMode) : "combined";
   const receiptAccommodationAmount = receiptBarMode === "separate" ? receiptNumber(payload.receiptAccommodationAmount) : null;
@@ -2186,6 +2192,7 @@ function prepareStayPayment(payload, context) {
       method: context.method,
       amount,
       originalCustomerPrice,
+      initialEditPrice,
       customerPriceAtPayment,
       actualPaidAmount: amount,
       previousPrice: originalCustomerPrice,
