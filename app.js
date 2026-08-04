@@ -6499,6 +6499,14 @@ function currentBookingIsRv() {
   return currentBookingMode() === "rv";
 }
 
+function syncRvElectricityDaysToStay() {
+  if (!currentBookingIsRv()) return;
+  const nights = stayNightCount(bookingForm.elements.arrival.value, bookingForm.elements.departure.value);
+  bookingFacilityDraft = bookingFacilityDraft.map((facility) =>
+    facility.key === "electricitate" ? { ...facility, nights, customNights: false } : facility
+  );
+}
+
 function stationingRecordLabel(record) {
   if (!record) return "";
   return `${record.owner || "Client"} - ${record.caravan || "rulota"}`;
@@ -7083,6 +7091,7 @@ function setBookingRangeFromCalendar(startText, endText = startText) {
   bookingForm.elements.arrival.value = bounds.startText;
   bookingForm.elements.departure.value = bounds.startText === bounds.endText ? toISODate(addDays(bounds.end, 1)) : bounds.endText;
   syncNightsFromDates();
+  syncRvElectricityDaysToStay();
   syncBookingCalendarMonthToArrival();
   recalculateBookingPriceAfterUserChange();
   renderBookingStationingLink();
@@ -8389,18 +8398,21 @@ bookingForm.elements.unitId.addEventListener("change", () => {
 });
 const syncDepartureAndPricing = () => {
   syncDepartureFromNights();
+  syncRvElectricityDaysToStay();
   syncBookingCalendarMonthToArrival();
   recalculateBookingPriceAfterUserChange();
 };
 
 const syncExpiredSourceDepartureAndPricing = () => {
   syncDepartureFromNights({ startTodayForExpiredSource: true });
+  syncRvElectricityDaysToStay();
   syncBookingCalendarMonthToArrival();
   recalculateBookingPriceAfterUserChange();
 };
 
 const syncNightsAndPricing = () => {
   syncNightsFromDates();
+  syncRvElectricityDaysToStay();
   syncBookingCalendarMonthToArrival();
   recalculateBookingPriceAfterUserChange();
 };
