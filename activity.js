@@ -7,8 +7,9 @@ const eventFilterButtons = [...document.querySelectorAll("[data-event-filter]")]
 const refreshButton = document.querySelector("#refreshLog");
 const exportDatabaseButton = document.querySelector("#exportDatabase");
 const clearActivityLogButton = document.querySelector("#clearActivityLog");
-const clearReservationLogsButton = document.querySelector("#clearReservationLogs");
-const clearBarLogsButton = document.querySelector("#clearBarLogs");
+const clearActivityLogRangeButton = document.querySelector("#clearActivityLogRange");
+const clearLogFromDateInput = document.querySelector("#clearLogFromDate");
+const clearLogToDateInput = document.querySelector("#clearLogToDate");
 const loadMoreLogButton = document.querySelector("#loadMoreLog");
 const localActivityAccess = ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
 const logPageSize = 250;
@@ -793,7 +794,12 @@ async function loadLogPage({ append = false } = {}) {
     const response = await fetch(`/api/log?limit=${logPageSize}&offset=${offset}`, { cache: "no-store" });
     const result = await response.json();
     const serverEntries = response.ok && result.ok && Array.isArray(result.entries) ? result.entries : [];
-    const localEntries = JSON.parse(localStorage.getItem(activityLogStorageKey) || "[]");
+    const storedLocalEntries = JSON.parse(localStorage.getItem(activityLogStorageKey) || "[]");
+    const purgeRanges = Array.isArray(result.purges) ? result.purges : [];
+    const localEntries = storedLocalEntries.filter(
+      (entry) => !purgeRanges.some((range) => matchesServerLogPurge(entry, range))
+    );
+    if (localEntries.length !== storedLocalEntries.length) persistLocalActivityEntries(localEntries);
     entries = mergedLogEntries(serverEntries, localEntries, append);
     logOffset = response.ok && result.ok ? Number(result.nextOffset || offset + serverEntries.length) : offset;
     logHasMore = Boolean(response.ok && result.ok && result.hasMore);
@@ -826,12 +832,47 @@ function exportDatabase() {
   link.remove();
 }
 
-function matchesLogClearScope(entry, scope) {
-  if (scope === "reservations") return entry?.entityType === "client";
-  if (scope === "bar") {
-    return ["bar", "bar_article"].includes(entry?.entityType) || entry?.method === "bar-reservation";
+function isPurgeableActivityLogEntry(entry) {
+  return entry?.entityType === "client"
+    || (entry?.entityType === "bar" && entry?.eventType === "payment" && String(entry?.method || "").toLowerCase() === "voucher");
+}
+
+function persistLocalActivityEntries(localEntries) {
+  if (localEntries.length) {
+    localStorage.setItem(activityLogStorageKey, JSON.stringify(localEntries));
+  } else {
+    localStorage.removeItem(activityLogStorageKey);
   }
-  return true;
+}
+
+function localDateBoundary(dateValue, dayOffset = 0) {
+  const match = String(dateValue || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const [, year, month, day] = match.map(Number);
+  const date = new Date(year, month - 1, day + dayOffset);
+  if (
+    !Number.isFinite(date.getTime())
+    || (dayOffset === 0 && (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day))
+  ) {
+    return null;
+  }
+  return date;
+}
+
+function matchesLogClearRange(entry, startInclusive, endExclusive) {
+  const timestamp = new Date(entry?.timestamp).getTime();
+  return isPurgeableActivityLogEntry(entry)
+    && Number.isFinite(timestamp)
+    && timestamp >= startInclusive.getTime()
+    && timestamp < endExclusive.getTime();
+}
+
+function matchesServerLogPurge(entry, range) {
+  if (!isPurgeableActivityLogEntry(entry)) return false;
+  const timestamp = new Date(entry?.timestamp).getTime();
+  const start = range?.startInclusive ? new Date(range.startInclusive).getTime() : Number.NEGATIVE_INFINITY;
+  const end = new Date(range?.endExclusive || "").getTime();
+  return Number.isFinite(timestamp) && Number.isFinite(end) && timestamp >= start && timestamp < end;
 }
 
 async function clearActivityLogScope(options) {
@@ -859,12 +900,8 @@ async function clearActivityLogScope(options) {
       throw new Error(result.error || "Nu am putut șterge jurnalul de activitate");
     }
     const localEntries = JSON.parse(localStorage.getItem(activityLogStorageKey) || "[]");
-    const remainingLocalEntries = localEntries.filter((entry) => !matchesLogClearScope(entry, scope));
-    if (remainingLocalEntries.length) {
-      localStorage.setItem(activityLogStorageKey, JSON.stringify(remainingLocalEntries));
-    } else {
-      localStorage.removeItem(activityLogStorageKey);
-    }
+    const remainingLocalEntries = localEntries.filter((entry) => !isPurgeableActivityLogEntry(entry));
+    persistLocalActivityEntries(remainingLocalEntries);
     await loadLog();
     await window.appDialog.alert(successMessage);
   } catch (error) {
@@ -882,32 +919,72 @@ function clearActivityLog() {
     scope: "all",
     confirmationText: "STERGE LOG",
     title: "Ștergere jurnal",
-    message: "Această acțiune șterge doar jurnalul de activitate. Clienții, articolele de bar și exporturile contabile rămân în baza de date. Scrie exact STERGE LOG pentru confirmare.",
-    successMessage: "Jurnalul de activitate a fost șters. Datele aplicației și exporturile contabile au rămas neschimbate.",
+    message: "Se șterg definitiv din jurnal și din backupurile aplicației toate intrările despre rezervări/clienți și vânzările de bar plătite cu voucher. Vânzările de bar cu numerar sau card rămân. Scrie exact STERGE LOG pentru confirmare.",
+    successMessage: "Jurnalul rezervărilor și vânzările cu voucher au fost șterse din aplicație și din backupurile administrate. Vânzările de bar cu numerar sau card au rămas.",
     button: clearActivityLogButton
   });
 }
 
-function clearReservationLogs() {
-  return clearActivityLogScope({
-    scope: "reservations",
-    confirmationText: "STERGE REZERVARI",
-    title: "Ștergere jurnal rezervări",
-    message: "Se șterg doar intrările de jurnal legate de rezervări și clienți. Rezervările și plățile rămân neschimbate. Scrie exact STERGE REZERVARI pentru confirmare.",
-    successMessage: "Intrările de jurnal pentru rezervări au fost șterse.",
-    button: clearReservationLogsButton
-  });
-}
+async function clearActivityLogRange() {
+  const fromDate = clearLogFromDateInput.value;
+  const toDate = clearLogToDateInput.value;
+  const startInclusive = localDateBoundary(fromDate);
+  const endInclusive = localDateBoundary(toDate);
+  const endExclusive = localDateBoundary(toDate, 1);
 
-function clearBarLogs() {
-  return clearActivityLogScope({
-    scope: "bar",
-    confirmationText: "STERGE BAR",
-    title: "Ștergere jurnal bar",
-    message: "Se șterg doar intrările de jurnal legate de bar. Articolele, plățile și exporturile SAGA rămân neschimbate. Scrie exact STERGE BAR pentru confirmare.",
-    successMessage: "Intrările de jurnal pentru bar au fost șterse.",
-    button: clearBarLogsButton
-  });
+  if (!startInclusive || !endInclusive || !endExclusive) {
+    await window.appDialog.alert("Alege data de început și data de sfârșit.", { title: "Interval incomplet" });
+    return;
+  }
+  if (startInclusive.getTime() > endInclusive.getTime()) {
+    await window.appDialog.alert("Data de început trebuie să fie înaintea datei de sfârșit.", { title: "Interval invalid" });
+    return;
+  }
+
+  const confirmed = await window.appDialog.confirm(
+    `Se vor șterge definitiv, inclusiv din backupurile aplicației, intrările despre rezervări/clienți și vânzările de bar cu voucher dintre ${dateLabel(fromDate)} și ${dateLabel(toDate)}, inclusiv. Vânzările de bar cu numerar sau card rămân.`,
+    {
+      title: "Ștergere interval jurnal",
+      confirmLabel: "Șterge intervalul",
+      danger: true
+    }
+  );
+  if (!confirmed) return;
+
+  clearActivityLogRangeButton.disabled = true;
+  try {
+    const response = await fetch("/api/clear-activity-log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        confirm: "STERGE INTERVAL",
+        scope: "range",
+        startInclusive: startInclusive.toISOString(),
+        endExclusive: endExclusive.toISOString()
+      })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "Nu am putut șterge intervalul din jurnal");
+    }
+
+    const localEntries = JSON.parse(localStorage.getItem(activityLogStorageKey) || "[]");
+    const remainingLocalEntries = localEntries.filter(
+      (entry) => !matchesLogClearRange(entry, startInclusive, endExclusive)
+    );
+    persistLocalActivityEntries(remainingLocalEntries);
+    await loadLog();
+    await window.appDialog.alert(
+      `${result.deleted || 0} intrări despre rezervări sau plăți de bar cu voucher au fost șterse din interval și din backupurile aplicației. Vânzările cu numerar sau card au rămas.`
+    );
+  } catch (error) {
+    await window.appDialog.alert(error.message || "Nu am putut șterge intervalul din jurnal", {
+      title: "Eroare",
+      danger: true
+    });
+  } finally {
+    clearActivityLogRangeButton.disabled = false;
+  }
 }
 
 searchInput.addEventListener("input", renderLog);
@@ -931,8 +1008,7 @@ refreshButton.addEventListener("click", loadLog);
 loadMoreLogButton.addEventListener("click", loadMoreLog);
 exportDatabaseButton.addEventListener("click", exportDatabase);
 clearActivityLogButton.addEventListener("click", clearActivityLog);
-clearReservationLogsButton.addEventListener("click", clearReservationLogs);
-clearBarLogsButton.addEventListener("click", clearBarLogs);
+clearActivityLogRangeButton.addEventListener("click", clearActivityLogRange);
 logFeed.addEventListener("click", (event) => {
   const button = event.target.closest(".client-details-toggle");
   if (!button) return;

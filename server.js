@@ -150,6 +150,13 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_activity_log_timestamp ON activity_log(timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_activity_log_event_type ON activity_log(event_type);
+  CREATE TABLE IF NOT EXISTS activity_log_purges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_inclusive TEXT,
+    end_exclusive TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_activity_log_purges_range ON activity_log_purges(start_inclusive, end_exclusive);
   CREATE TABLE IF NOT EXISTS payment_transactions (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL,
@@ -345,8 +352,36 @@ function normalizeActivityLogEntry(entry = {}) {
   };
 }
 
+function isPurgeableActivityLogEntry(entry) {
+  return entry?.entityType === "client"
+    || (entry?.entityType === "bar" && entry?.eventType === "payment" && String(entry?.method || "").toLowerCase() === "voucher");
+}
+
+function activityLogPurgeRanges(targetDb = db) {
+  return targetDb
+    .prepare("SELECT start_inclusive AS startInclusive, end_exclusive AS endExclusive FROM activity_log_purges ORDER BY id ASC")
+    .all();
+}
+
+function wasActivityLogEntryPurged(entry) {
+  if (!isPurgeableActivityLogEntry(entry)) return false;
+  const timestamp = new Date(entry?.timestamp || "");
+  if (!Number.isFinite(timestamp.getTime())) return false;
+  const normalizedTimestamp = timestamp.toISOString();
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM activity_log_purges
+    WHERE (start_inclusive IS NULL OR ? >= start_inclusive)
+      AND ? < end_exclusive
+    LIMIT 1
+  `).get(normalizedTimestamp, normalizedTimestamp));
+}
+
 function addActivityLogEntry(entry) {
   const normalized = normalizeActivityLogEntry(entry);
+  if (wasActivityLogEntryPurged(normalized)) {
+    return { entry: normalized, inserted: false, purged: true };
+  }
   const result = db.prepare(`
     INSERT OR IGNORE INTO activity_log (id, timestamp, event_type, entity_type, entity_key, entity_label, message, amount, method, data)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -783,24 +818,135 @@ async function exportedDatabaseFile() {
   };
 }
 
-async function clearActivityLogData(scope = "all") {
-  const normalizedScope = ["all", "reservations", "bar"].includes(scope) ? scope : "all";
-  const deleteSql = normalizedScope === "reservations"
-    ? "DELETE FROM activity_log WHERE entity_type = 'client'"
-    : normalizedScope === "bar"
-      ? "DELETE FROM activity_log WHERE entity_type IN ('bar', 'bar_article') OR method = 'bar-reservation'"
-      : "DELETE FROM activity_log";
+const purgeableActivityLogSql = `(
+  entity_type = 'client'
+  OR (entity_type = 'bar' AND event_type = 'payment' AND LOWER(COALESCE(method, '')) = 'voucher')
+)`;
+
+function ensureActivityLogPurgeSchema(targetDb) {
+  targetDb.exec(`
+    CREATE TABLE IF NOT EXISTS activity_log_purges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      start_inclusive TEXT,
+      end_exclusive TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_activity_log_purges_range ON activity_log_purges(start_inclusive, end_exclusive);
+  `);
+}
+
+function securelyPurgeActivityLogDatabase(targetDb, options) {
+  const { startInclusive, endExclusive, clearedAt } = options;
+  ensureActivityLogPurgeSchema(targetDb);
+  targetDb.exec("PRAGMA secure_delete = ON");
+  const rangeSql = startInclusive
+    ? " AND julianday(timestamp) >= julianday(?) AND julianday(timestamp) < julianday(?)"
+    : "";
+  targetDb.exec("BEGIN IMMEDIATE");
   let deleted = 0;
-  db.exec("BEGIN IMMEDIATE");
   try {
-    deleted = Number(db.prepare(deleteSql).run().changes || 0);
-    db.exec("COMMIT");
+    targetDb.prepare(`
+      INSERT INTO activity_log_purges (start_inclusive, end_exclusive, created_at)
+      VALUES (?, ?, ?)
+    `).run(startInclusive || null, endExclusive, clearedAt);
+    const statement = targetDb.prepare(`DELETE FROM activity_log WHERE ${purgeableActivityLogSql}${rangeSql}`);
+    const result = startInclusive
+      ? statement.run(startInclusive, endExclusive)
+      : statement.run();
+    deleted = Number(result.changes || 0);
+    targetDb.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    targetDb.exec("ROLLBACK");
     throw error;
   }
+  targetDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  targetDb.exec("VACUUM");
+  targetDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  return deleted;
+}
+
+async function overwriteFileContents(filePath) {
+  const stats = await fs.stat(filePath).catch(() => null);
+  if (!stats?.size) return;
+  const handle = await fs.open(filePath, "r+");
+  try {
+    const zeros = Buffer.alloc(Math.min(stats.size, 64 * 1024));
+    for (let offset = 0; offset < stats.size; offset += zeros.length) {
+      await handle.write(zeros, 0, Math.min(zeros.length, stats.size - offset), offset);
+    }
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function securelyRewriteActivityLogLocalFiles() {
+  await Promise.all([
+    overwriteFileContents(activityLogJsonPath),
+    overwriteFileContents(activityLogJsonlPath)
+  ]);
   await rewriteActivityLogLocalFiles();
-  return { ok: true, scope: normalizedScope, deleted, clearedAt: new Date().toISOString() };
+}
+
+async function securelyPurgeManagedBackups(options) {
+  backupsPausedAfterClear = true;
+  const purgeJob = backupQueue
+    .catch(() => {})
+    .then(async () => {
+      let purgedBackups = 0;
+      for (const backupPath of [dailyBackupPath, weeklyBackupPath]) {
+        if (!(await fileExists(backupPath))) continue;
+        const backupDb = new DatabaseSync(backupPath);
+        try {
+          securelyPurgeActivityLogDatabase(backupDb, options);
+          purgedBackups += 1;
+        } finally {
+          backupDb.close();
+        }
+      }
+      return purgedBackups;
+    });
+  backupQueue = purgeJob.catch((error) => {
+    console.error("Activity-log backup purge failed:", error.message);
+    throw error;
+  });
+  return backupQueue;
+}
+
+async function clearActivityLogData(scope = "all", options = {}) {
+  const normalizedScope = scope === "range" ? "range" : "all";
+  const startInclusive = new Date(options.startInclusive || "");
+  const endExclusive = new Date(options.endExclusive || "");
+  if (
+    normalizedScope === "range"
+    && (!Number.isFinite(startInclusive.getTime())
+      || !Number.isFinite(endExclusive.getTime())
+      || startInclusive.getTime() >= endExclusive.getTime())
+  ) {
+    throw requestError(400, "Intervalul pentru ștergerea jurnalului este invalid");
+  }
+  const clearedAt = new Date().toISOString();
+  const purgeOptions = {
+    startInclusive: normalizedScope === "range" ? startInclusive.toISOString() : null,
+    endExclusive: normalizedScope === "range"
+      ? endExclusive.toISOString()
+      : new Date(Date.now() + 1).toISOString(),
+    clearedAt
+  };
+  const deleted = securelyPurgeActivityLogDatabase(db, purgeOptions);
+  const purgedBackups = await securelyPurgeManagedBackups(purgeOptions);
+  await securelyRewriteActivityLogLocalFiles();
+  return {
+    ok: true,
+    scope: normalizedScope,
+    deleted,
+    purgedBackups,
+    ...(normalizedScope === "range" ? {
+      startInclusive: startInclusive.toISOString(),
+      endExclusive: endExclusive.toISOString()
+    } : {}),
+    clearedAt
+  };
 }
 
 function receiptAmount(value) {
@@ -3056,17 +3202,13 @@ const server = http.createServer(async (request, response) => {
       request.method === "POST"
     ) {
       const payload = JSON.parse(await requestBody(request) || "{}");
-      const scope = ["all", "reservations", "bar"].includes(payload.scope) ? payload.scope : "all";
-      const requiredConfirmation = scope === "reservations"
-        ? "STERGE REZERVARI"
-        : scope === "bar"
-          ? "STERGE BAR"
-          : "STERGE LOG";
+      const scope = payload.scope === "range" ? "range" : "all";
+      const requiredConfirmation = scope === "range" ? "STERGE INTERVAL" : "STERGE LOG";
       if (payload.confirm !== requiredConfirmation) {
         send(response, 400, JSON.stringify({ ok: false, error: "Confirmarea pentru ștergerea jurnalului este invalidă" }));
         return;
       }
-      send(response, 200, JSON.stringify(await clearActivityLogData(scope)));
+      send(response, 200, JSON.stringify(await clearActivityLogData(scope, payload)));
       return;
     }
 
@@ -3081,6 +3223,7 @@ const server = http.createServer(async (request, response) => {
       send(response, 200, JSON.stringify({
         ok: true,
         entries,
+        purges: activityLogPurgeRanges(),
         hasMore: rows.length > limit,
         nextOffset: offset + entries.length
       }));

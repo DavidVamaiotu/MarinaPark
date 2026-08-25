@@ -697,6 +697,31 @@ button,
   border-radius: var(--radius);
 }
 
+.log-range-clear {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.log-range-clear label {
+  display: grid;
+  gap: 4px;
+  color: #596575;
+  font-size: 12px;
+}
+
+.log-range-clear input {
+  min-height: 38px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--ink);
+}
+
 button {
   min-height: 38px;
   padding: 0 12px;
@@ -1067,6 +1092,22 @@ button {
   }
 
   .log-maintenance > div .danger-button {
+    grid-column: 1 / -1;
+  }
+
+  .log-range-clear {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-column: 1 / -1;
+    align-items: end;
+  }
+
+  .log-range-clear input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .log-range-clear .danger-button {
     grid-column: 1 / -1;
   }
 

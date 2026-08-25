@@ -59,15 +59,76 @@ async function startTestServer() {
   };
 }
 
-test("log options expose the clear-all action on local and LAN pages", () => {
+test("log options expose only the full and date-range reservation-log purge actions", () => {
   const html = fs.readFileSync(path.join(projectRoot, "activity.html"), "utf8");
   const source = fs.readFileSync(path.join(projectRoot, "activity.js"), "utf8");
 
-  assert.match(html, /<details class="log-maintenance">[\s\S]*id="clearActivityLog">Șterge tot jurnalul<\/button>/);
-  assert.match(html, /id="clearReservationLogs">Șterge jurnal rezervări<\/button>/);
-  assert.match(html, /id="clearBarLogs">Șterge jurnal bar<\/button>/);
+  assert.match(html, /<details class="log-maintenance">[\s\S]*id="clearActivityLog">Șterge jurnalele rezervărilor<\/button>/);
+  assert.doesNotMatch(html, /id="clearReservationLogs"|id="clearBarLogs"/);
+  assert.match(html, /id="clearLogFromDate" type="date"/);
+  assert.match(html, /id="clearLogToDate" type="date"/);
+  assert.match(html, /id="clearActivityLogRange">Șterge intervalul<\/button>/);
   assert.match(html, /id="loadMoreLog" hidden>Încarcă mai multe<\/button>/);
   assert.doesNotMatch(source, /clearActivityLogButton\.hidden\s*=\s*true/);
+});
+
+test("date-range purge deletes only reservation and voucher-bar logs inside the requested interval", async (context) => {
+  const server = await startTestServer();
+  context.after(server.stop);
+  const entries = [
+    { id: "before-range", timestamp: "2026-07-09T23:59:59.999Z", eventType: "update", entityType: "client", message: "Before" },
+    { id: "range-client", timestamp: "2026-07-10T00:00:00.000Z", eventType: "update", entityType: "client", message: "Reservation" },
+    { id: "range-voucher", timestamp: "2026-07-11T12:00:00.000Z", eventType: "payment", entityType: "bar", method: "voucher", message: "Voucher bar" },
+    { id: "range-cash", timestamp: "2026-07-11T13:00:00.000Z", eventType: "payment", entityType: "bar", method: "numerar", message: "Cash bar" },
+    { id: "range-card", timestamp: "2026-07-11T14:00:00.000Z", eventType: "payment", entityType: "bar", method: "card", message: "Card bar" },
+    { id: "range-bar-article", timestamp: "2026-07-12T10:00:00.000Z", eventType: "update", entityType: "bar_article", message: "Article edit" },
+    { id: "range-stationing", timestamp: "2026-07-12T11:00:00.000Z", eventType: "update", entityType: "stationing", message: "Stationing" },
+    { id: "after-range", timestamp: "2026-07-13T00:00:00.000Z", eventType: "update", entityType: "client", message: "After" }
+  ];
+  assert.equal((await request(server.url, "/api/log", {
+    method: "POST",
+    body: JSON.stringify({ entries })
+  })).status, 200);
+
+  const rejected = await request(server.url, "/api/clear-activity-log", {
+    method: "POST",
+    body: JSON.stringify({
+      confirm: "STERGE INTERVAL",
+      scope: "range",
+      startInclusive: "2026-07-13T00:00:00.000Z",
+      endExclusive: "2026-07-10T00:00:00.000Z"
+    })
+  });
+  assert.equal(rejected.status, 400);
+
+  const cleared = await request(server.url, "/api/clear-activity-log", {
+    method: "POST",
+    body: JSON.stringify({
+      confirm: "STERGE INTERVAL",
+      scope: "range",
+      startInclusive: "2026-07-10T00:00:00.000Z",
+      endExclusive: "2026-07-13T00:00:00.000Z"
+    })
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.deleted, 2);
+
+  const log = await request(server.url, "/api/log?limit=20");
+  assert.deepEqual(log.body.entries.map((entry) => entry.id).sort(), [
+    "after-range",
+    "before-range",
+    "range-bar-article",
+    "range-card",
+    "range-cash",
+    "range-stationing"
+  ]);
+
+  assert.equal((await request(server.url, "/api/log", {
+    method: "POST",
+    body: JSON.stringify({ entries: [entries[1], entries[2]] })
+  })).status, 200);
+  const afterStaleRetry = await request(server.url, "/api/log?limit=20");
+  assert.doesNotMatch(afterStaleRetry.body.entries.map((entry) => entry.id).join(" "), /range-client|range-voucher/);
 });
 
 test("activity log pages return stable offsets and report when older entries remain", async (context) => {
@@ -96,37 +157,79 @@ test("activity log pages return stable offsets and report when older entries rem
   assert.equal(last.body.nextOffset, 5);
 });
 
-test("reservation and bar log clear actions delete only their own display-log rows", async (context) => {
+test("full purge removes reservation and voucher-bar logs from live storage and every managed backup", async (context) => {
   const server = await startTestServer();
   context.after(server.stop);
   const entries = [
-    { id: "client-log", eventType: "update", entityType: "client", message: "Reservation" },
-    { id: "bar-log", eventType: "payment", entityType: "bar", message: "Bar" },
-    { id: "bar-article-log", eventType: "update", entityType: "bar_article", message: "Bar article" },
-    { id: "stationing-log", eventType: "update", entityType: "stationing", message: "Stationing" }
+    { id: "client-log", timestamp: "2026-07-20T10:00:00.000Z", eventType: "update", entityType: "client", message: "Reservation" },
+    { id: "bar-voucher-log", timestamp: "2026-07-20T10:01:00.000Z", eventType: "payment", entityType: "bar", method: "voucher", message: "Voucher bar" },
+    { id: "bar-cash-log", timestamp: "2026-07-20T10:02:00.000Z", eventType: "payment", entityType: "bar", method: "numerar", message: "Cash bar" },
+    { id: "bar-card-log", timestamp: "2026-07-20T10:03:00.000Z", eventType: "payment", entityType: "bar", method: "card", message: "Card bar" },
+    { id: "bar-article-log", timestamp: "2026-07-20T10:04:00.000Z", eventType: "update", entityType: "bar_article", message: "Bar article" },
+    { id: "stationing-log", timestamp: "2026-07-20T10:05:00.000Z", eventType: "update", entityType: "stationing", message: "Stationing" }
   ];
   assert.equal((await request(server.url, "/api/log", {
     method: "POST",
     body: JSON.stringify({ entries })
   })).status, 200);
 
-  const reservations = await request(server.url, "/api/clear-activity-log", {
+  const cleared = await request(server.url, "/api/clear-activity-log", {
     method: "POST",
-    body: JSON.stringify({ confirm: "STERGE REZERVARI", scope: "reservations" })
+    body: JSON.stringify({ confirm: "STERGE LOG", scope: "all" })
   });
-  assert.equal(reservations.status, 200);
-  assert.equal(reservations.body.deleted, 1);
-  let log = await request(server.url, "/api/log?limit=20");
-  assert.deepEqual(log.body.entries.map((entry) => entry.id).sort(), ["bar-article-log", "bar-log", "stationing-log"]);
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.deleted, 2);
+  assert.equal(cleared.body.purgedBackups, 2);
 
-  const bar = await request(server.url, "/api/clear-activity-log", {
+  const retainedIds = ["bar-article-log", "bar-card-log", "bar-cash-log", "stationing-log"];
+  const log = await request(server.url, "/api/log?limit=20");
+  assert.deepEqual(log.body.entries.map((entry) => entry.id).sort(), retainedIds);
+
+  for (const filename of ["marina-park-daily.sqlite", "marina-park-weekly.sqlite"]) {
+    const backupPath = path.join(server.dataDir, "backups", filename);
+    const backupDb = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      assert.deepEqual(
+        backupDb.prepare("SELECT id FROM activity_log ORDER BY id ASC").all().map((row) => row.id),
+        retainedIds
+      );
+      assert.equal(backupDb.prepare("SELECT COUNT(*) AS count FROM activity_log_purges").get().count, 1);
+    } finally {
+      backupDb.close();
+    }
+    assert.equal((await fsp.readFile(backupPath)).includes(Buffer.from("client-log")), false);
+    assert.equal((await fsp.readFile(backupPath)).includes(Buffer.from("bar-voucher-log")), false);
+  }
+
+  const liveDatabase = await fsp.readFile(path.join(server.dataDir, "marina-park.sqlite"));
+  assert.equal(liveDatabase.includes(Buffer.from("client-log")), false);
+  assert.equal(liveDatabase.includes(Buffer.from("bar-voucher-log")), false);
+
+  const snapshot = await fsp.readFile(path.join(server.dataDir, "activity-log.json"), "utf8");
+  const journal = await fsp.readFile(path.join(server.dataDir, "activity-log.jsonl"), "utf8");
+  assert.doesNotMatch(`${snapshot}\n${journal}`, /client-log|bar-voucher-log/);
+  assert.match(`${snapshot}\n${journal}`, /bar-cash-log/);
+
+  assert.equal((await request(server.url, "/api/log", {
     method: "POST",
-    body: JSON.stringify({ confirm: "STERGE BAR", scope: "bar" })
-  });
-  assert.equal(bar.status, 200);
-  assert.equal(bar.body.deleted, 2);
-  log = await request(server.url, "/api/log?limit=20");
-  assert.deepEqual(log.body.entries.map((entry) => entry.id), ["stationing-log"]);
+    body: JSON.stringify({ entries: [entries[0], entries[1]] })
+  })).status, 200);
+  const afterStaleRetry = await request(server.url, "/api/log?limit=20");
+  assert.deepEqual(afterStaleRetry.body.entries.map((entry) => entry.id).sort(), retainedIds);
+
+  const freshClientLog = {
+    id: "fresh-client-log",
+    timestamp: new Date(Date.parse(cleared.body.clearedAt) + 1000).toISOString(),
+    eventType: "update",
+    entityType: "client",
+    message: "Fresh reservation activity"
+  };
+  assert.equal((await request(server.url, "/api/log", {
+    method: "POST",
+    body: JSON.stringify(freshClientLog)
+  })).status, 200);
+  const afterFreshEntry = await request(server.url, "/api/log?limit=20");
+  assert.match(afterFreshEntry.body.entries.map((entry) => entry.id).join(" "), /fresh-client-log/);
 });
 
 test("clearing the log deletes only activity rows and preserves the SQLite file and schema", async (context) => {
@@ -151,6 +254,7 @@ test("clearing the log deletes only activity rows and preserves the SQLite file 
       id: "log-clear-entry",
       timestamp: "2026-07-23T08:00:00.000Z",
       eventType: "update",
+      entityType: "client",
       message: "Intrare de test"
     })
   });

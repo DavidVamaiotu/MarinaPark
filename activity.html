@@ -38,9 +38,18 @@
             <div>
               <button type="button" id="refreshLog">Reîncarcă</button>
               <button type="button" id="exportDatabase">Exportă baza de date</button>
-              <button class="danger-button" type="button" id="clearReservationLogs">Șterge jurnal rezervări</button>
-              <button class="danger-button" type="button" id="clearBarLogs">Șterge jurnal bar</button>
-              <button class="danger-button" type="button" id="clearActivityLog">Șterge tot jurnalul</button>
+              <div class="log-range-clear" aria-label="Șterge jurnalul pentru un interval">
+                <label>
+                  <span>De la</span>
+                  <input id="clearLogFromDate" type="date" />
+                </label>
+                <label>
+                  <span>Până la</span>
+                  <input id="clearLogToDate" type="date" />
+                </label>
+                <button class="danger-button" type="button" id="clearActivityLogRange">Șterge intervalul</button>
+              </div>
+              <button class="danger-button" type="button" id="clearActivityLog">Șterge jurnalele rezervărilor</button>
             </div>
           </details>
         </div>
