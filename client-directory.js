@@ -225,14 +225,14 @@ class ClientHistoryStore {
   }
 }
 
-function sqlDirectoryEntry(booking = {}) {
+function marinaDirectoryEntry(booking = {}) {
   const normalizedName = normalizeClientName(booking.guest);
   return {
     ...booking,
-    key: directoryKey("sql", [booking.source, booking.guest, booking.phone, booking.start, booking.end, booking.unitHint]),
+    key: directoryKey("marina", [booking.source, booking.providerBookingId, booking.guest, booking.phone, booking.start, booking.end, booking.unitHint]),
     id: booking.unitHint || "-",
     kind: booking.kind || (booking.group === "camping" ? "Camping" : "Camere"),
-    directorySource: "sql",
+    directorySource: "marina",
     directoryReadOnly: true,
     normalizedName
   };
@@ -250,19 +250,19 @@ function localDirectoryEntry(client = {}) {
   };
 }
 
-function mergeClientDirectory(sqlBookings = [], localClients = []) {
-  const validSqlBookings = sqlBookings.filter((booking) => normalizeClientName(booking?.guest));
-  const sqlNames = new Set(validSqlBookings.map((booking) => normalizeClientName(booking.guest)));
-  const sqlEntries = validSqlBookings.map(sqlDirectoryEntry);
+function mergeClientDirectory(marinaBookings = [], localClients = []) {
+  const validMarinaBookings = marinaBookings.filter((booking) => normalizeClientName(booking?.guest));
+  const marinaNames = new Set(validMarinaBookings.map((booking) => normalizeClientName(booking.guest)));
+  const marinaEntries = validMarinaBookings.map(marinaDirectoryEntry);
   const localByName = new Map();
   localClients.forEach((client) => {
     const normalizedName = client.normalizedName || normalizeClientName(client.guest);
-    if (!normalizedName || sqlNames.has(normalizedName)) return;
+    if (!normalizedName || marinaNames.has(normalizedName)) return;
     localByName.set(normalizedName, newestClient(localByName.get(normalizedName), { ...client, normalizedName }));
   });
   const localEntries = [...localByName.values()]
     .map(localDirectoryEntry);
-  return [...sqlEntries, ...localEntries];
+  return [...marinaEntries, ...localEntries];
 }
 
 module.exports = {

@@ -338,6 +338,13 @@ const sidebarOccupancyRvs = document.querySelector("#sidebarOccupancyRvs");
 const timelineContextMenu = document.querySelector("#timelineContextMenu");
 const toast = document.querySelector("#toast");
 const settingsForm = document.querySelector("#settingsForm");
+const marinaApiBaseUrlInput = document.querySelector("#marinaApiBaseUrl");
+const marinaApiTokenInput = document.querySelector("#marinaApiToken");
+const marinaRoomsWorkspaceIdInput = document.querySelector("#marinaRoomsWorkspaceId");
+const marinaCampingWorkspaceIdInput = document.querySelector("#marinaCampingWorkspaceId");
+const marinaClearTokenInput = document.querySelector("#marinaClearToken");
+const testMarinaConnectionButton = document.querySelector("#testMarinaConnection");
+const marinaConnectionStatus = document.querySelector("#marinaConnectionStatus");
 const receiptDirectoryInput = document.querySelector("#receiptDirectory");
 const pickReceiptDirectoryButton = document.querySelector("#pickReceiptDirectory");
 const receiptVatInput = document.querySelector("#receiptVat");
@@ -503,6 +510,7 @@ units = buildUnitCatalogFromStays();
 applySidebarState();
 applyReceiptSettings();
 applySagaExportSettings();
+loadMarinaSettings();
 scheduleStationingMidnightRefresh();
 setInterval(refreshTodayIfNeeded, 60000);
 
@@ -2368,6 +2376,81 @@ async function saveStaysToFiles(options = {}) {
 function queueFileSave() {
   window.clearTimeout(saveToFilesTimer);
   saveToFilesTimer = window.setTimeout(saveStaysToFiles, 250);
+}
+
+function marinaWorkspaceInputValue(value) {
+  return Number.isSafeInteger(Number(value)) && Number(value) > 0 ? String(value) : "";
+}
+
+function applyMarinaSettings(settings = {}) {
+  if (!marinaApiBaseUrlInput) return;
+  marinaApiBaseUrlInput.value = settings.apiBaseUrl || "https://booking.husi.ro";
+  marinaRoomsWorkspaceIdInput.value = marinaWorkspaceInputValue(settings.roomsWorkspaceId);
+  marinaCampingWorkspaceIdInput.value = marinaWorkspaceInputValue(settings.campingWorkspaceId);
+  marinaApiTokenInput.value = "";
+  marinaClearTokenInput.checked = false;
+  marinaApiTokenInput.disabled = settings.tokenManagedByEnvironment === true;
+  marinaClearTokenInput.disabled = settings.tokenManagedByEnvironment === true;
+  marinaApiBaseUrlInput.disabled = settings.apiUrlManagedByEnvironment === true;
+  marinaRoomsWorkspaceIdInput.disabled = settings.workspacesManagedByEnvironment === true;
+  marinaCampingWorkspaceIdInput.disabled = settings.workspacesManagedByEnvironment === true;
+  marinaConnectionStatus.textContent = settings.tokenConfigured
+    ? settings.tokenManagedByEnvironment
+      ? "Token configurat prin mediul aplicației."
+      : "Token configurat și păstrat local."
+    : "Tokenul API nu este configurat.";
+}
+
+async function loadMarinaSettings() {
+  if (!marinaApiBaseUrlInput) return null;
+  try {
+    const response = await fetch("/api/marina-settings", { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || "Setările Marina nu au putut fi citite");
+    applyMarinaSettings(result);
+    return result;
+  } catch (error) {
+    marinaConnectionStatus.textContent = error.message || "Setările Marina nu au putut fi citite.";
+    return null;
+  }
+}
+
+async function saveMarinaSettings() {
+  if (!marinaApiBaseUrlInput) return null;
+  const response = await fetch("/api/marina-settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      apiBaseUrl: marinaApiBaseUrlInput.value.trim(),
+      apiToken: marinaApiTokenInput.value.trim(),
+      roomsWorkspaceId: marinaRoomsWorkspaceIdInput.value,
+      campingWorkspaceId: marinaCampingWorkspaceIdInput.value,
+      clearToken: marinaClearTokenInput.checked
+    })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) throw new Error(result.error || "Setările Marina nu au putut fi salvate");
+  applyMarinaSettings(result);
+  return result;
+}
+
+async function testMarinaConnection() {
+  if (!testMarinaConnectionButton) return;
+  try {
+    testMarinaConnectionButton.disabled = true;
+    marinaConnectionStatus.textContent = "Se verifică accesul la Marina...";
+    await saveMarinaSettings();
+    const response = await fetch("/api/marina-settings/test", { method: "POST" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || "Conexiunea Marina nu a putut fi verificată");
+    const resourceCount = (result.workspaces || []).reduce((sum, workspace) => sum + Number(workspace.resources || 0), 0);
+    marinaConnectionStatus.textContent = `Conexiune reușită · ${resourceCount} resurse accesibile.`;
+  } catch (error) {
+    marinaConnectionStatus.textContent = error.message || "Conexiunea Marina nu a putut fi verificată.";
+  } finally {
+    testMarinaConnectionButton.disabled = false;
+    refreshIcons();
+  }
 }
 
 function applyReceiptSettings() {
@@ -6429,7 +6512,7 @@ function openBookingModal(defaults = {}) {
   });
   syncSourceModeFromKind();
   renderSourceBookings();
-  sourceRecordStatus.textContent = "Se încarcă ultimele 300 rezervări.";
+  sourceRecordStatus.textContent = "Se încarcă ultimele 300 rezervări Marina.";
   syncBookingPaymentFields();
   if (!editingStayKey && !defaults.price) {
     applySelectedUnitPricing();
@@ -6962,7 +7045,7 @@ function renderBookingFacilities() {
             <input type="checkbox" data-facility-key="${escapeHtml(facility.key)}" ${checked ? "checked" : ""} />
           <span>
             <strong>${escapeHtml(selected?.name || facility.name)}</strong>
-            <span>${formatCurrency(pricePerNight)} / noapte${included ? " · inclus din MySQL" : ""}${inactiveText}</span>
+            <span>${formatCurrency(pricePerNight)} / noapte${included ? " · inclus din sursa importată" : ""}${inactiveText}</span>
           </span>
           </label>
           ${daysControl}
@@ -7221,8 +7304,8 @@ function renderSourceBookings() {
 
   const todayText = toISODate(new Date());
   const orderedBookings = orderedSourceBookings(todayText);
-  const todayBookings = orderedBookings.filter((booking) => isSqlSourceArrivalToday(booking, todayText));
-  const otherBookings = orderedBookings.filter((booking) => !isSqlSourceArrivalToday(booking, todayText));
+  const todayBookings = orderedBookings.filter((booking) => isMarinaSourceArrivalToday(booking, todayText));
+  const otherBookings = orderedBookings.filter((booking) => !isMarinaSourceArrivalToday(booking, todayText));
   const rowForBooking = (booking, index) => {
     const dateLabel = formatDateRangeLabel(booking.start, booking.end);
     const sourceLabel = booking.directorySource === "local-history" ? "Istoric local" : "";
@@ -7286,8 +7369,8 @@ function sourceRecordModifiedValue(value) {
   return Number.isFinite(time) ? time : 0;
 }
 
-function isSqlSourceArrivalToday(booking, todayText = toISODate(new Date())) {
-  return booking?.directorySource === "sql" && booking.start === todayText;
+function isMarinaSourceArrivalToday(booking, todayText = toISODate(new Date())) {
+  return booking?.directorySource === "marina" && booking.start === todayText;
 }
 
 function rememberSourceBookingCandidates(bookings, replace = false) {
@@ -7317,8 +7400,8 @@ function orderedSourceBookings(todayText = toISODate(new Date())) {
 
     const firstStart = sourceRecordDateValue(first.start);
     const secondStart = sourceRecordDateValue(second.start);
-    const firstGroup = isSqlSourceArrivalToday(first, todayText) ? 0 : firstStart > todayValue ? 1 : 2;
-    const secondGroup = isSqlSourceArrivalToday(second, todayText) ? 0 : secondStart > todayValue ? 1 : 2;
+    const firstGroup = isMarinaSourceArrivalToday(first, todayText) ? 0 : firstStart > todayValue ? 1 : 2;
+    const secondGroup = isMarinaSourceArrivalToday(second, todayText) ? 0 : secondStart > todayValue ? 1 : 2;
 
     if (firstGroup !== secondGroup) return firstGroup - secondGroup;
 
@@ -7331,7 +7414,7 @@ function orderedSourceBookings(todayText = toISODate(new Date())) {
 
 function sourceTodayArrivalCount() {
   const todayText = toISODate(new Date());
-  return sourceBookings.filter((booking) => isSqlSourceArrivalToday(booking, todayText)).length;
+  return sourceBookings.filter((booking) => isMarinaSourceArrivalToday(booking, todayText)).length;
 }
 
 function setSourceRecordsMode(mode) {
@@ -7440,15 +7523,15 @@ async function loadSourceBookings(query = bookingForm.elements.guest.value.trim(
   sourceBookingSearchPending = true;
   loadSourceBookingsButton.disabled = true;
   sourceRecordStatus.textContent = normalizedQuery
-    ? `Se caută în baza de date nume asemănătoare cu „${normalizedQuery}”...`
-    : `Se încarcă ultimele 300 rezervări pentru ${timelineModeLabel(sourceRecordsMode)}...`;
+    ? `Se caută în Marina nume asemănătoare cu „${normalizedQuery}”...`
+    : `Se încarcă ultimele 300 rezervări Marina pentru ${timelineModeLabel(sourceRecordsMode)}...`;
 
   try {
     const params = new URLSearchParams({ mode });
     if (normalizedQuery) params.set("query", normalizedQuery);
     const response = await fetch(`/api/source-bookings?${params}`, { cache: "no-store" });
     const result = await response.json();
-    if (!response.ok || !result.ok) throw new Error(result.error || "Nu am putut citi baza de date");
+    if (!response.ok || !result.ok) throw new Error(result.error || "Nu am putut citi rezervările Marina");
     if (requestId !== sourceBookingRequestId) return;
 
     sourceBookings = Array.isArray(result.bookings) ? result.bookings : [];
@@ -7470,7 +7553,7 @@ async function loadSourceBookings(query = bookingForm.elements.guest.value.trim(
     sourceBookings = [];
     sourceBookingSearchPending = false;
     renderSourceBookings();
-    sourceRecordStatus.textContent = error.message || "Nu s-a putut face conexiunea la baza de date.";
+    sourceRecordStatus.textContent = error.message || "Nu s-a putut face conexiunea la Marina.";
   } finally {
     if (requestId === sourceBookingRequestId) {
       loadSourceBookingsButton.disabled = false;
@@ -7496,8 +7579,8 @@ function searchSourceBookingsFromName() {
     : [];
   renderSourceBookings();
   sourceRecordStatus.textContent = sourceBookingQuery
-    ? `Se caută în baza de date nume asemănătoare cu „${sourceBookingQuery}”...`
-    : `Se încarcă ultimele 300 rezervări pentru ${timelineModeLabel(sourceRecordsMode)}...`;
+    ? `Se caută în Marina nume asemănătoare cu „${sourceBookingQuery}”...`
+    : `Se încarcă ultimele 300 rezervări Marina pentru ${timelineModeLabel(sourceRecordsMode)}...`;
   loadSourceBookingsButton.disabled = true;
   sourceBookingSearchTimer = window.setTimeout(() => {
     loadSourceBookings(sourceBookingQuery);
@@ -8201,20 +8284,27 @@ timelineShell.addEventListener("scroll", handleTimelineScroll, { passive: true }
 timelineShell.addEventListener("wheel", handleTimelineWheel, { passive: false });
 sidebarToggle.addEventListener("click", toggleSidebar);
 
-settingsForm.addEventListener("submit", (event) => {
+settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  readReceiptSettings();
-  saveStaysToFiles({ showMessage: true });
-  logActivity({
-    eventType: "settings",
-    entityType: "settings",
-    entityKey: "receipt",
-    entityLabel: "Setări bonuri",
-    message: "Setările pentru bonuri au fost salvate.",
-    data: { receiptConfig }
-  });
-  showToast("Setările pentru bonuri au fost salvate");
+  try {
+    const marinaSettings = await saveMarinaSettings();
+    readReceiptSettings();
+    await saveStaysToFiles({ showMessage: true });
+    logActivity({
+      eventType: "settings",
+      entityType: "settings",
+      entityKey: "receipt",
+      entityLabel: "Setări aplicație",
+      message: "Setările aplicației au fost salvate.",
+      data: { receiptConfig, marinaApi: { configured: marinaSettings?.configured === true } }
+    });
+    showToast("Setările au fost salvate");
+  } catch (error) {
+    showToast(error.message || "Setările nu au putut fi salvate");
+  }
 });
+
+testMarinaConnectionButton?.addEventListener("click", testMarinaConnection);
 
 pickReceiptDirectoryButton.addEventListener("click", async () => {
   try {

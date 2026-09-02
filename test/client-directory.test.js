@@ -19,13 +19,13 @@ async function startFixtureServer() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "marina-client-directory-test-"));
   const dataDir = path.join(root, "data");
   const runtimeDir = path.join(root, "runtime");
-  const fixturePath = path.join(root, "sql-bookings.json");
+  const fixturePath = path.join(root, "marina-bookings.json");
   const historyPath = path.join(dataDir, "client-history.sqlite");
   await Promise.all([dataDir, runtimeDir].map((directory) => fs.mkdir(directory, { recursive: true })));
   await fs.writeFile(fixturePath, JSON.stringify({
     room: [
       { guest: "ÁLICE POPESCU", phone: "0700", group: "room", kind: "Camere", source: "camere", start: "2026-08-01", end: "2026-08-03", price: 500 },
-      { guest: "SQL Only", phone: "0711", group: "room", kind: "Camere", source: "camere", start: "2026-08-04", end: "2026-08-06", price: 600 }
+      { guest: "Marina Only", phone: "0711", group: "room", kind: "Camere", source: "marina", start: "2026-08-04", end: "2026-08-06", price: 600 }
     ],
     camping: [
       { guest: "Tent Guest", phone: "0722", group: "camping", mode: "tent", kind: "Camping", source: "camping", start: "2026-08-07", end: "2026-08-09", price: 200 },
@@ -75,7 +75,7 @@ async function startFixtureServer() {
   };
 }
 
-test("client directory fuses SQL bookings with persistent unmatched local clients", async (context) => {
+test("client directory fuses Marina bookings with persistent unmatched local clients", async (context) => {
   const server = await startFixtureServer();
   context.after(server.stop);
 
@@ -117,12 +117,12 @@ test("client directory fuses SQL bookings with persistent unmatched local client
 
   const fused = await request(server.url, "/api/client-directory");
   assert.equal(fused.status, 200);
-  assert.equal(fused.body.sqlAvailable, true);
-  assert.equal(fused.body.sources.sql, 4);
+  assert.equal(fused.body.marinaAvailable, true);
+  assert.equal(fused.body.sources.marina, 4);
   assert.equal(fused.body.sources.local, 2);
   assert.equal(fused.body.clients.length, 6);
   assert.equal(fused.body.clients.filter((client) => client.normalizedName === "alice popescu").length, 1);
-  assert.equal(fused.body.clients.find((client) => client.normalizedName === "alice popescu").directorySource, "sql");
+  assert.equal(fused.body.clients.find((client) => client.normalizedName === "alice popescu").directorySource, "marina");
   const localOnly = fused.body.clients.find((client) => client.normalizedName === "local only");
   assert.equal(localOnly.directorySource, "local-history");
   assert.equal(localOnly.phone, "0733");
@@ -183,24 +183,24 @@ test("client directory fuses SQL bookings with persistent unmatched local client
 
   const tentSources = await request(server.url, "/api/source-bookings?mode=tent");
   assert.equal(tentSources.status, 200);
-  assert.ok(tentSources.body.bookings.some((booking) => booking.guest === "Tent Guest" && booking.directorySource === "sql"));
-  assert.ok(!tentSources.body.bookings.some((booking) => booking.guest === "RV Guest" && booking.directorySource === "sql"));
+  assert.ok(tentSources.body.bookings.some((booking) => booking.guest === "Tent Guest" && booking.directorySource === "marina"));
+  assert.ok(!tentSources.body.bookings.some((booking) => booking.guest === "RV Guest" && booking.directorySource === "marina"));
   assert.ok(tentSources.body.bookings.some((booking) => booking.guest === "Local Only" && booking.directorySource === "local-history"));
   assert.ok(tentSources.body.bookings.some((booking) => booking.guest === "Camp Local" && booking.directorySource === "local-history"));
   assert.ok(tentSources.body.bookings.some((booking) => booking.guest === "Alice Popescu" && booking.directorySource === "local-history"));
 
   const rvSources = await request(server.url, "/api/source-bookings?mode=rv");
   assert.equal(rvSources.status, 200);
-  assert.ok(rvSources.body.bookings.some((booking) => booking.guest === "RV Guest" && booking.directorySource === "sql"));
-  assert.ok(!rvSources.body.bookings.some((booking) => booking.guest === "Tent Guest" && booking.directorySource === "sql"));
+  assert.ok(rvSources.body.bookings.some((booking) => booking.guest === "RV Guest" && booking.directorySource === "marina"));
+  assert.ok(!rvSources.body.bookings.some((booking) => booking.guest === "Tent Guest" && booking.directorySource === "marina"));
   assert.ok(rvSources.body.bookings.some((booking) => booking.guest === "Local Only" && booking.directorySource === "local-history"));
   assert.ok(rvSources.body.bookings.some((booking) => booking.guest === "Camp Local" && booking.directorySource === "local-history"));
   assert.ok(rvSources.body.bookings.some((booking) => booking.guest === "Alice Popescu" && booking.directorySource === "local-history"));
 
-  const sqlSourceSearch = await request(server.url, "/api/source-bookings?mode=room&query=Alice");
-  assert.equal(sqlSourceSearch.status, 200);
-  assert.ok(sqlSourceSearch.body.bookings.some((booking) => booking.normalizedName === "alice popescu" && booking.directorySource === "sql"));
-  assert.ok(!sqlSourceSearch.body.bookings.some((booking) => booking.normalizedName === "alice popescu" && booking.directorySource === "local-history"));
+  const marinaSourceSearch = await request(server.url, "/api/source-bookings?mode=room&query=Alice");
+  assert.equal(marinaSourceSearch.status, 200);
+  assert.ok(marinaSourceSearch.body.bookings.some((booking) => booking.normalizedName === "alice popescu" && booking.directorySource === "marina"));
+  assert.ok(!marinaSourceSearch.body.bookings.some((booking) => booking.normalizedName === "alice popescu" && booking.directorySource === "local-history"));
 
   const roomSources = await request(server.url, "/api/source-bookings?mode=room");
   assert.ok(roomSources.body.bookings.some((booking) => booking.guest === "Local Only" && booking.directorySource === "local-history"));

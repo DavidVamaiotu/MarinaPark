@@ -5,7 +5,6 @@ const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
 const { DatabaseSync } = require("node:sqlite");
-const mysql = require("mysql2/promise");
 const { ClientHistoryStore, mergeClientDirectory, normalizeClientName } = require("./client-directory");
 const stationingCalculator = require("./stationing-calculator");
 
@@ -30,9 +29,7 @@ const activityLogJsonlPath = path.join(dataDir, "activity-log.jsonl");
 const legacyReservationsIndexPath = path.join(dataDir, "reservations", "index.json");
 const legacyConfigPath = path.join(dataDir, "config.json");
 const port = Number(process.env.PORT || 4173);
-const mysqlHost = process.env.MARINA_MYSQL_HOST || "81.181.112.114";
-const mysqlUser = process.env.MARINA_MYSQL_USER || "david";
-const mysqlPassword = process.env.MARINA_MYSQL_PASSWORD || "DavidG2023";
+const defaultMarinaApiBaseUrl = "https://booking.husi.ro";
 let liveScreenCaptureProvider = null;
 let liveScreenFramePromise = null;
 let pdfRenderProvider = null;
@@ -60,6 +57,7 @@ const clientHistoryStore = new ClientHistoryStore(clientHistoryDatabasePath);
 const clientDirectoryCacheMs = 60 * 1000;
 let clientDirectoryCache = null;
 let roomAvailabilityCache = null;
+const marinaSourceCache = new Map();
 db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
@@ -92,6 +90,14 @@ db.exec(`
     key TEXT PRIMARY KEY,
     updated_at TEXT NOT NULL,
     data TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS marina_api_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    api_base_url TEXT NOT NULL,
+    api_token TEXT NOT NULL DEFAULT '',
+    rooms_workspace_id INTEGER,
+    camping_workspace_id INTEGER,
+    updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS stationing (
     key TEXT PRIMARY KEY,
@@ -2510,160 +2516,11 @@ function removeDiacritics(value) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-function parseBookingForm(formText) {
-  const fields = {};
-  String(formText || "")
-    .split("~")
-    .forEach((entry) => {
-      const parts = entry.split("^");
-      if (parts.length < 3) return;
-      const key = parts[1];
-      const value = parts.slice(2).join("^").trim();
-      if (key) fields[key] = value;
-    });
-
-  const firstName = Object.entries(fields).find(([key]) => key.startsWith("name"))?.[1] || "";
-  const lastName = Object.entries(fields).find(([key]) => key.startsWith("secondname"))?.[1] || "";
-  const fieldValue = (prefix) => Object.entries(fields).find(([key]) => key.startsWith(prefix))?.[1] || "";
-
-  return {
-    guest: removeDiacritics(`${firstName} ${lastName}`.trim()).trim(),
-    car: fieldValue("car"),
-    phone: fieldValue("phone"),
-    costHint: fieldValue("cost_hint"),
-    nights: fieldValue("nights_number"),
-    adults: fieldValue("visitors"),
-    children: fieldValue("children"),
-    datesText: fieldValue("selected_short"),
-    fields
-  };
-}
-
-function isTruthyBookingValue(value) {
-  const normalized = removeDiacritics(value).toLowerCase().trim();
-  if (!normalized) return false;
-  if (/^(0|nu|no|false|fara|none|off|n\/a|-)$/.test(normalized)) return false;
-  if (/\b(nu|no|fara|without)\b/.test(normalized)) return false;
-  return /^(1|da|yes|true|on)$/.test(normalized) || /[1-9]/.test(normalized) || normalized.length > 1;
-}
-
-function detectRequestedFacilities(form, mode) {
-  const textMatches = (key, value, pattern) => pattern.test(removeDiacritics(`${key} ${value}`).toLowerCase());
-  const facilities = [];
-  const entries = Object.entries(form.fields || {});
-
-  const hasElectricity =
-    mode === "camping" &&
-    entries.some(([key, value]) => textMatches(key, value, /electric|curent|energie|priza|220/) && isTruthyBookingValue(value));
-
-  const hasExtraBed =
-    mode === "room" &&
-    entries.some(([key, value]) => textMatches(key, value, /extra|pat|bed|suplimentar/) && isTruthyBookingValue(value));
-
-  if (hasElectricity) {
-    facilities.push({
-      key: "electricitate",
-      name: "Electricitate",
-      pricePerNight: 20,
-      includedInBasePrice: true,
-      source: "mysql"
-    });
-  }
-
-  if (hasExtraBed) {
-    facilities.push({
-      key: "pat-suplimentar",
-      name: "Pat suplimentar",
-      pricePerNight: 15,
-      includedInBasePrice: true,
-      source: "mysql"
-    });
-  }
-
-  return facilities;
-}
-
-function campingBookingMode(form = {}) {
-  const isCaravan = Object.entries(form.fields || {}).some(([key, value]) =>
-    String(key).startsWith("wpbc_custom_booking_form") &&
-    /rulot|caravan|camper|autorulot/.test(removeDiacritics(value).toLowerCase())
-  );
-  return isCaravan ? "rv" : "tent";
-}
-
-const roMonthNumbers = {
-  ian: 0,
-  ianuarie: 0,
-  feb: 1,
-  februarie: 1,
-  mar: 2,
-  martie: 2,
-  apr: 3,
-  aprilie: 3,
-  mai: 4,
-  iun: 5,
-  iunie: 5,
-  iul: 6,
-  iulie: 6,
-  aug: 7,
-  august: 7,
-  sep: 8,
-  septembrie: 8,
-  oct: 9,
-  octombrie: 9,
-  noi: 10,
-  noiembrie: 10,
-  dec: 11,
-  decembrie: 11
-};
-
-function toISODateOnly(date) {
-  return date.toISOString().slice(0, 10);
-}
-
 function localISODate(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-function parseRomanianDateRange(text) {
-  const normalized = removeDiacritics(text).toLowerCase();
-  const regex = /([0-9]{1,2})\s+(ian(?:uarie)?|feb(?:ruarie)?|mar(?:tie)?|apr(?:ilie)?|mai|iun(?:ie)?|iul(?:ie)?|aug(?:ust)?|sep(?:tembrie)?|oct(?:ombrie)?|noi(?:embrie)?|dec(?:embrie)?)\s+([0-9]{4})/g;
-  const matches = [...normalized.matchAll(regex)];
-  if (matches.length < 2) return null;
-
-  const parsed = matches.slice(0, 2).map((match) => {
-    const day = Number(match[1]);
-    const month = roMonthNumbers[match[2]];
-    const year = Number(match[3]);
-    if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) return null;
-    return new Date(Date.UTC(year, month, day));
-  });
-
-  if (!parsed[0] || !parsed[1]) return null;
-  return {
-    start: toISODateOnly(parsed[0]),
-    end: toISODateOnly(parsed[1])
-  };
-}
-
-function parseMoney(value) {
-  const normalized = String(value || "")
-    .replace(/\s+/g, "")
-    .replace(",", ".");
-  const match = normalized.match(/[0-9]+(?:\.[0-9]+)?/);
-  return match ? Number(match[0]).toFixed(2) : "0.00";
-}
-
-function parseRoomPrices(remark) {
-  const numbers = String(remark || "").match(/[0-9]+(?:[.,][0-9]+)?/g) || [];
-  return {
-    initialTotal: numbers[0] ? parseMoney(numbers[0]) : "0.00",
-    deposit: numbers[1] ? parseMoney(numbers[1]) : "0.00",
-    price: numbers[2] ? parseMoney(numbers[2]) : "0.00"
-  };
 }
 
 function dateValue(value) {
@@ -2794,34 +2651,317 @@ function fuzzyMatchScore(query, text) {
   return Math.min(averageScore, compactScore);
 }
 
-const bookingTypeMap = {
-  6: { kind: "Cameră cvadruplă", unitHint: "cvdr 1" },
-  7: { kind: "Cameră cvadruplă", unitHint: "cvdr 4" },
-  8: { kind: "Cameră dublă", unitHint: "dubla 2" },
-  9: { kind: "Cameră dublă", unitHint: "dubla 3" },
-  10: { kind: "Cameră dublă", unitHint: "dubla 5" },
-  11: { kind: "Cameră dublă", unitHint: "dubla 6" },
-  12: { kind: "Cameră dublă", unitHint: "dubla 7" },
-  13: { kind: "Cameră dublă", unitHint: "dubla 8" },
-  14: { kind: "Bungalou", unitHint: "bungalow 9" },
-  17: { kind: "Bungalou", unitHint: "bungalow 10" },
-  18: { kind: "Bungalou", unitHint: "bungalow 11" },
-  19: { kind: "Bungalou", unitHint: "bungalow 12" },
-  20: { kind: "Bungalou", unitHint: "bungalow 14" },
-  21: { kind: "Bungalou", unitHint: "bungalow 15" },
-  22: { kind: "Bungalou", unitHint: "bungalow 16" },
-  23: { kind: "Bungalou", unitHint: "bungalow 17" },
-  24: { kind: "Bungalou", unitHint: "bungalow 18" },
-  25: { kind: "Bungalou", unitHint: "bungalow 19" },
-  26: { kind: "Bungalou", unitHint: "bungalow 20" },
-  27: { kind: "Bungalou", unitHint: "bungalow 21" }
-};
-
 async function sourceBookingFixture(mode) {
   if (!sourceBookingsFixturePath) return null;
   const fixture = await readJson(sourceBookingsFixturePath, {});
   const bookings = fixture?.[mode];
-  if (!Array.isArray(bookings)) throw new Error(`Fixture SQL invalid pentru '${mode}'`);
+  if (!Array.isArray(bookings)) throw new Error(`Fixture Marina invalid pentru '${mode}'`);
+  return bookings;
+}
+
+function normalizeMarinaApiBaseUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value || defaultMarinaApiBaseUrl).trim());
+  } catch {
+    throw requestError(400, "Adresa API Marina nu este validă");
+  }
+  const localHost = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if ((url.protocol !== "https:" && !(localHost && url.protocol === "http:")) || url.username || url.password || url.search || url.hash) {
+    throw requestError(400, "Adresa API Marina trebuie să folosească HTTPS (HTTP este permis numai local)");
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+function normalizeMarinaWorkspaceId(value, label) {
+  if (value === undefined || value === null || String(value).trim() === "" || Number(value) === 0) return null;
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id < 1) throw requestError(400, `${label} trebuie să fie un număr întreg pozitiv`);
+  return id;
+}
+
+function storedMarinaApiSettings() {
+  return db.prepare(`
+    SELECT api_base_url, api_token, rooms_workspace_id, camping_workspace_id, updated_at
+    FROM marina_api_settings WHERE id = 1
+  `).get() || {
+    api_base_url: defaultMarinaApiBaseUrl,
+    api_token: "",
+    rooms_workspace_id: null,
+    camping_workspace_id: null,
+    updated_at: ""
+  };
+}
+
+function environmentMarinaToken() {
+  return String(process.env.MARINA_API_TOKEN || process.env.MARINA_BOOKING_CALENDAR_API_TOKEN || "").trim();
+}
+
+function effectiveMarinaApiSettings() {
+  const stored = storedMarinaApiSettings();
+  const environmentWorkspace = process.env.MARINA_WORKSPACE_ID;
+  const apiBaseUrlValue = process.env.MARINA_API_URL || process.env.MARINA_API_BASE_URL || stored.api_base_url || defaultMarinaApiBaseUrl;
+  return {
+    apiBaseUrl: normalizeMarinaApiBaseUrl(apiBaseUrlValue),
+    apiToken: environmentMarinaToken() || String(stored.api_token || "").trim(),
+    roomsWorkspaceId: normalizeMarinaWorkspaceId(
+      process.env.MARINA_ROOMS_WORKSPACE_ID || environmentWorkspace || stored.rooms_workspace_id,
+      "Workspace-ul pentru Camere"
+    ),
+    campingWorkspaceId: normalizeMarinaWorkspaceId(
+      process.env.MARINA_CAMPING_WORKSPACE_ID || environmentWorkspace || stored.camping_workspace_id,
+      "Workspace-ul pentru Camping"
+    ),
+    tokenManagedByEnvironment: Boolean(environmentMarinaToken()),
+    apiUrlManagedByEnvironment: Boolean(process.env.MARINA_API_URL || process.env.MARINA_API_BASE_URL),
+    workspacesManagedByEnvironment: Boolean(
+      process.env.MARINA_ROOMS_WORKSPACE_ID || process.env.MARINA_CAMPING_WORKSPACE_ID || process.env.MARINA_WORKSPACE_ID
+    ),
+    updatedAt: stored.updated_at || ""
+  };
+}
+
+function publicMarinaApiSettings() {
+  const settings = effectiveMarinaApiSettings();
+  return {
+    ok: true,
+    configured: Boolean(settings.apiToken),
+    tokenConfigured: Boolean(settings.apiToken),
+    apiBaseUrl: settings.apiBaseUrl,
+    roomsWorkspaceId: settings.roomsWorkspaceId,
+    campingWorkspaceId: settings.campingWorkspaceId,
+    tokenManagedByEnvironment: settings.tokenManagedByEnvironment,
+    apiUrlManagedByEnvironment: settings.apiUrlManagedByEnvironment,
+    workspacesManagedByEnvironment: settings.workspacesManagedByEnvironment,
+    updatedAt: settings.updatedAt
+  };
+}
+
+function saveMarinaApiSettings(payload = {}) {
+  const current = storedMarinaApiSettings();
+  const apiBaseUrl = normalizeMarinaApiBaseUrl(payload.apiBaseUrl ?? current.api_base_url);
+  const roomsWorkspaceId = normalizeMarinaWorkspaceId(payload.roomsWorkspaceId, "Workspace-ul pentru Camere");
+  const campingWorkspaceId = normalizeMarinaWorkspaceId(payload.campingWorkspaceId, "Workspace-ul pentru Camping");
+  const submittedToken = String(payload.apiToken || "").trim();
+  const apiToken = payload.clearToken === true ? "" : submittedToken || String(current.api_token || "").trim();
+  const updatedAt = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO marina_api_settings
+      (id, api_base_url, api_token, rooms_workspace_id, camping_workspace_id, updated_at)
+    VALUES (1, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      api_base_url = excluded.api_base_url,
+      api_token = excluded.api_token,
+      rooms_workspace_id = excluded.rooms_workspace_id,
+      camping_workspace_id = excluded.camping_workspace_id,
+      updated_at = excluded.updated_at
+  `).run(apiBaseUrl, apiToken, roomsWorkspaceId, campingWorkspaceId, updatedAt);
+  marinaSourceCache.clear();
+  clientDirectoryCache = null;
+  roomAvailabilityCache = null;
+  return publicMarinaApiSettings();
+}
+
+function marinaCollection(payload, keys = []) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ["data", ...keys]) if (Array.isArray(payload?.[key])) return payload[key];
+  return [];
+}
+
+function marinaApiErrorMessage(status, payload) {
+  if (status === 401) return "Tokenul API Marina nu este valid";
+  if (status === 403) return "Tokenul API Marina nu are permisiunea bookings:read/resources:read";
+  if (status === 404) return "Workspace-ul Marina nu este disponibil pentru această conexiune";
+  if (status === 429) return "API-ul Marina a limitat temporar numărul de cereri";
+  return String(payload?.detail || payload?.message || payload?.error || `API Marina: HTTP ${status}`);
+}
+
+async function marinaApiRequest(pathname, { workspaceId = null } = {}) {
+  const settings = effectiveMarinaApiSettings();
+  if (!settings.apiToken) throw requestError(503, "Configurează tokenul API Marina în Setări");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const headers = {
+      Accept: "application/json",
+      Authorization: `Bearer ${settings.apiToken}`
+    };
+    if (workspaceId !== null) headers["X-Workspace-ID"] = String(workspaceId);
+    let response;
+    try {
+      response = await fetch(`${settings.apiBaseUrl}${pathname}`, {
+        method: "GET",
+        headers,
+        redirect: "error",
+        signal: controller.signal
+      });
+    } catch (error) {
+      throw requestError(502, error?.name === "AbortError" ? "Cererea către API-ul Marina a expirat" : "API-ul Marina nu poate fi accesat momentan");
+    }
+    const text = await response.text();
+    let payload = {};
+    try { payload = text ? JSON.parse(text) : {}; } catch { payload = {}; }
+    if (!response.ok) throw requestError(response.status, marinaApiErrorMessage(response.status, payload));
+    return payload;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function testMarinaApiConnection() {
+  const settings = effectiveMarinaApiSettings();
+  if (!settings.apiToken) throw requestError(400, "Introdu tokenul API Marina înainte de testare");
+  const workspaces = [...new Set([settings.roomsWorkspaceId, settings.campingWorkspaceId])];
+  const results = [];
+  for (const workspaceId of workspaces) {
+    const payload = await marinaApiRequest("/v1/resources", { workspaceId });
+    results.push({ workspaceId, resources: marinaCollection(payload, ["resources"]).length });
+  }
+  return { ok: true, connected: true, workspaces: results };
+}
+
+function marinaDatePart(value) {
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : "";
+}
+
+function addMarinaDays(value, days) {
+  const date = marinaDatePart(value);
+  if (!date) return "";
+  const parsed = new Date(`${date}T12:00:00Z`);
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function marinaBookingPeriods(booking = {}) {
+  for (const periods of [booking.periods, booking.booking_periods, booking.bookingPeriods, booking.allocations, booking.segments]) {
+    if (Array.isArray(periods)) return periods;
+  }
+  return [];
+}
+
+function marinaFieldValue(value) {
+  if (value && typeof value === "object" && "value" in value) return value.value;
+  return value;
+}
+
+function marinaCustomField(booking, names) {
+  const customer = booking.customer || booking.guest || {};
+  const containers = [booking.form_data, booking.formData, customer.custom_fields, booking.custom_fields];
+  for (const container of containers) {
+    if (!container || typeof container !== "object") continue;
+    for (const name of names) {
+      const value = marinaFieldValue(container[name]);
+      if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+    }
+  }
+  return "";
+}
+
+function marinaMinorAmount(booking, names) {
+  const sources = [booking.price, booking.pricing, booking.amounts, booking];
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    for (const name of names) {
+      const value = Number(source[name]);
+      if (Number.isFinite(value) && value >= 0) return value;
+    }
+  }
+  return null;
+}
+
+function marinaBookingIsTrashed(booking) {
+  const status = String(booking?.status || "pending").toLowerCase();
+  const trash = booking?.trash ?? booking?.trashed;
+  const explicitTrash = trash === true || trash === 1 || ["1", "true", "trash", "trashed"].includes(String(trash || "").toLowerCase());
+  return explicitTrash || ["trash", "cancelled", "canceled", "deleted"].includes(status);
+}
+
+function marinaSourceBooking(booking, resources, mode) {
+  if (!booking || marinaBookingIsTrashed(booking)) return null;
+  const periods = marinaBookingPeriods(booking);
+  const firstPeriod = periods[0] || {};
+  const resourceId = String(
+    booking.resource_id ?? booking.resourceId ?? booking.resource?.id ??
+    firstPeriod.resource_id ?? firstPeriod.resourceId ?? firstPeriod.resource?.id ?? ""
+  );
+  const resource = resources.find((item) => String(item.id ?? item.resource_id) === resourceId) || booking.resource || {};
+  const resourceTitle = String(resource.title || resource.name || resource.label || "").trim();
+  const customer = booking.customer || booking.guest || {};
+  const firstName = String(customer.first_name ?? customer.firstName ?? booking.first_name ?? booking.name ?? "").trim();
+  const lastName = String(customer.last_name ?? customer.lastName ?? booking.last_name ?? booking.secondname ?? "").trim();
+  const guest = `${firstName} ${lastName}`.trim() || (typeof booking.guest === "string" ? booking.guest.trim() : "");
+  const periodRanges = periods.map((period) => {
+    const periodStart = period.start_date ?? period.startDate ?? period.start_at ?? period.startAt ?? period.starts_at ?? period.startsAt;
+    const dateOnlyEnd = period.end_date ?? period.endDate;
+    const timedEnd = period.end_at ?? period.endAt ?? period.ends_at ?? period.endsAt;
+    return {
+      start: marinaDatePart(periodStart),
+      end: dateOnlyEnd ? addMarinaDays(dateOnlyEnd, 1) : marinaDatePart(timedEnd)
+    };
+  }).filter((period) => period.start && period.end);
+  const topLevelEndDate = booking.end_date ?? booking.endDate;
+  const start = periodRanges.map((period) => period.start).sort()[0]
+    || marinaDatePart(booking.start_date ?? booking.startDate ?? booking.start_at ?? booking.startAt);
+  const end = periodRanges.map((period) => period.end).sort().at(-1)
+    || (topLevelEndDate
+      ? addMarinaDays(topLevelEndDate, 1)
+      : marinaDatePart(booking.end_at ?? booking.endAt ?? booking.ends_at ?? booking.endsAt));
+  if (!guest || !start || !end) return null;
+  const adults = Math.max(0, Number(booking.guests?.adults ?? booking.adults ?? marinaCustomField(booking, ["visitors", "adults"])) || 0);
+  const children = Math.max(0, Number(booking.guests?.children ?? booking.children ?? marinaCustomField(booking, ["children"])) || 0);
+  const balanceMinor = marinaMinorAmount(booking, ["balance_minor", "balanceMinor"]);
+  const totalMinor = marinaMinorAmount(booking, ["total_minor", "totalMinor", "amount_minor", "amountMinor", "gross_total_minor", "grossTotalMinor"]);
+  const majorTotal = marinaMinorAmount(booking, ["total", "total_amount", "totalAmount", "gross_total", "grossTotal", "amount"]);
+  const price = balanceMinor !== null ? balanceMinor / 100 : totalMinor !== null ? totalMinor / 100 : majorTotal || 0;
+  const campingText = removeDiacritics(`${resourceTitle} ${marinaCustomField(booking, ["booking_type", "type"])}`).toLowerCase();
+  const bookingMode = mode === "camping" && /rulot|caravan|camper|autorulot/.test(campingText) ? "rv" : mode === "camping" ? "tent" : "room";
+  return {
+    id: booking.id ?? booking.booking_id ?? booking.uuid ?? `${resourceId}:${start}:${guest}`,
+    providerBookingId: booking.id ?? booking.booking_id ?? booking.uuid ?? "",
+    source: "marina",
+    guest,
+    phone: String(customer.phone ?? booking.phone ?? "").trim(),
+    car: marinaCustomField(booking, ["car_plates", "car", "vehicle_registration", "registration_number"]),
+    adults,
+    children,
+    party: Math.max(1, adults + children),
+    nights: Math.max(1, Math.round((Date.parse(`${end}T12:00:00Z`) - Date.parse(`${start}T12:00:00Z`)) / 86400000)),
+    start,
+    end,
+    basePrice: price,
+    facilities: [],
+    price,
+    deposit: "0.00",
+    balance: price,
+    group: mode === "camping" ? "camping" : "room",
+    mode: bookingMode,
+    kind: resourceTitle || (mode === "camping" ? "Camping" : "Camere"),
+    unitHint: resourceTitle,
+    note: String(booking.internal_note ?? booking.note ?? "").trim(),
+    modifiedAt: booking.updated_at ?? booking.updatedAt ?? booking.created_at ?? booking.createdAt ?? ""
+  };
+}
+
+async function fetchMarinaWorkspaceBookings(mode) {
+  const settings = effectiveMarinaApiSettings();
+  const workspaceId = mode === "camping" ? settings.campingWorkspaceId : settings.roomsWorkspaceId;
+  const cacheKey = `${mode}:${workspaceId ?? "default"}`;
+  const cached = marinaSourceCache.get(cacheKey);
+  if (cached?.expiresAt > Date.now()) return cached.bookings;
+  const resourcePayload = await marinaApiRequest("/v1/resources", { workspaceId });
+  const resources = marinaCollection(resourcePayload, ["resources"]);
+  const rows = [];
+  let after = "";
+  do {
+    const params = new URLSearchParams({ limit: "200" });
+    if (after) params.set("after", after);
+    const payload = await marinaApiRequest(`/v1/bookings?${params}`, { workspaceId });
+    rows.push(...marinaCollection(payload, ["bookings"]));
+    after = String(payload?.next_cursor ?? payload?.pagination?.next_cursor ?? payload?.meta?.next_cursor ?? "");
+  } while (after);
+  const bookings = rows.map((booking) => marinaSourceBooking(booking, resources, mode)).filter(Boolean);
+  marinaSourceCache.set(cacheKey, { expiresAt: Date.now() + clientDirectoryCacheMs, bookings });
   return bookings;
 }
 
@@ -2845,99 +2985,10 @@ function filteredSourceBookings(bookings, query, limit) {
 
 async function fetchSourceBookings(mode, query = "", options = {}) {
   const isCamping = mode === "camping";
-  const readAllRows = Boolean(normalizeSearchText(query)) || options.all === true;
   const limit = Math.max(1, Math.min(50000, Number(options.limit || 300)));
   const fixtureBookings = await sourceBookingFixture(isCamping ? "camping" : "room");
   if (fixtureBookings) return filteredSourceBookings(fixtureBookings, query, limit);
-  const connection = await mysql.createConnection({
-    host: mysqlHost,
-    user: mysqlUser,
-    password: mysqlPassword,
-    database: isCamping ? "marina_camping" : "marina",
-    connectTimeout: 10000
-  });
-
-  try {
-    const [rows] = await connection.execute(
-      isCamping
-        ? `SELECT b.form, b.modification_date,
-            DATE_FORMAT(MIN(d.booking_date), '%Y-%m-%d') AS database_start,
-            DATE_FORMAT(MAX(d.booking_date), '%Y-%m-%d') AS database_end
-          FROM wp_booking b
-          LEFT JOIN wp_bookingdates d ON d.booking_id = b.booking_id
-          WHERE COALESCE(b.trash, 0) = 0 AND b.is_trash IS NULL
-          GROUP BY b.booking_id
-          ORDER BY b.modification_date DESC${readAllRows ? "" : " LIMIT 5000"}`
-        : `SELECT b.remark, b.form, b.cost, b.booking_type, b.modification_date,
-            DATE_FORMAT(MIN(d.booking_date), '%Y-%m-%d') AS database_start,
-            DATE_FORMAT(MAX(d.booking_date), '%Y-%m-%d') AS database_end
-          FROM wp_booking b
-          LEFT JOIN wp_bookingdates d ON d.booking_id = b.booking_id
-          WHERE COALESCE(b.trash, 0) = 0 AND b.is_trash IS NULL
-          GROUP BY b.booking_id
-          ORDER BY b.modification_date DESC${readAllRows ? "" : " LIMIT 5000"}`
-    );
-
-    const bookings = rows
-      .map((row, index) => {
-        const form = parseBookingForm(row.form);
-        const range = parseRomanianDateRange(form.datesText) || (
-          row.database_start && row.database_end
-            ? { start: row.database_start, end: row.database_end }
-            : null
-        );
-        if (!range || !form.guest) return null;
-
-        const adults = Number(form.adults || 0);
-        const children = Number(form.children || 0);
-        const roomType = bookingTypeMap[row.booking_type] || {};
-        const bookingMode = isCamping ? campingBookingMode(form) : "room";
-        const roomPrices = isCamping ? null : parseRoomPrices(row.remark);
-        const initialTotal = isCamping ? parseMoney(form.costHint) : roomPrices.initialTotal;
-        const deposit = isCamping ? "0.00" : roomPrices.deposit;
-        const price = isCamping ? initialTotal : Math.max(0, Number(initialTotal) - Number(deposit)).toFixed(2);
-        const facilities = detectRequestedFacilities(form, isCamping ? "camping" : "room").map((facility) => ({
-          ...facility,
-          nights: Math.max(1, Number(form.nights || 0) || 1),
-          total: 0
-        }));
-
-        return {
-          id: index + 1,
-          source: isCamping ? "camping" : "camere",
-          guest: form.guest,
-          phone: form.phone,
-          car: form.car,
-          adults,
-          children,
-          party: Math.max(1, adults + children),
-          nights: Number(form.nights || 0),
-          start: range.start,
-          end: range.end,
-          datesText: form.datesText,
-          basePrice: price,
-          facilities,
-          price,
-          deposit: "0.00",
-          balance: price,
-          group: isCamping ? "camping" : "room",
-          mode: bookingMode,
-          kind: isCamping ? "Camping" : "Camere",
-          unitHint: roomType.unitHint || "",
-          note: isCamping
-            ? form.car
-              ? `Mașină: ${form.car}`
-              : ""
-            : `Total inițial: ${initialTotal} lei\nAvans: ${deposit} lei\nPreț de încasat: ${price} lei${roomType.unitHint ? `\nSugestie: ${roomType.unitHint}` : ""}`,
-          modifiedAt: row.modification_date || ""
-        };
-      })
-      .filter(Boolean);
-
-    return filteredSourceBookings(bookings, query, limit);
-  } finally {
-    await connection.end();
-  }
+  return filteredSourceBookings(await fetchMarinaWorkspaceBookings(isCamping ? "camping" : "room"), query, limit);
 }
 
 async function fetchClientDirectory(options = {}) {
@@ -2950,22 +3001,22 @@ async function fetchClientDirectory(options = {}) {
     fetchSourceBookings("room", "", { all: true, limit: 50000 }),
     fetchSourceBookings("camping", "", { all: true, limit: 50000 })
   ]);
-  const sqlBookings = sources.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  const marinaBookings = sources.flatMap((result) => result.status === "fulfilled" ? result.value : []);
   const warnings = sources
     .filter((result) => result.status === "rejected")
-    .map((result) => String(result.reason?.message || result.reason || "SQL indisponibil"));
+    .map((result) => String(result.reason?.message || result.reason || "Marina indisponibil"));
   const localReservations = reservationRows().filter((stay) => normalizeClientName(stay.guest));
   const historyChanges = clientHistoryStore.syncReservations(localReservations);
   if (historyChanges > 0) await enqueueDatabaseBackup({ afterMutation: true });
   const localClients = clientHistoryStore.clients();
-  const clients = mergeClientDirectory(sqlBookings, localClients);
+  const clients = mergeClientDirectory(marinaBookings, localClients);
   const result = {
     ok: true,
     clients,
-    sqlAvailable: warnings.length === 0,
+    marinaAvailable: warnings.length === 0,
     warnings,
     sources: {
-      sql: sqlBookings.length,
+      marina: marinaBookings.length,
       local: clients.filter((client) => client.directorySource === "local-history").length
     }
   };
@@ -3019,25 +3070,25 @@ function sourceBookingFromDirectoryClient(client = {}, fallbackMode = "room") {
 
 async function fetchFusedSourceBookings(mode, query = "") {
   const directory = await fetchClientDirectory();
-  const sqlBookings = directory.clients
-    .filter((client) => client.directorySource === "sql")
+  const marinaBookings = directory.clients
+    .filter((client) => client.directorySource === "marina")
     .map((client) => sourceBookingFromDirectoryClient(client, mode))
     .filter((booking) => booking.mode === mode);
-  const sqlNames = new Set(sqlBookings.map((booking) => normalizeClientName(booking.guest)));
+  const marinaNames = new Set(marinaBookings.map((booking) => normalizeClientName(booking.guest)));
   const localClients = clientHistoryStore.clients();
   const localBookings = localClients
     .map((client) => sourceBookingFromDirectoryClient({ ...client, directorySource: "local-history" }, mode))
-    .filter((booking) => !sqlNames.has(normalizeClientName(booking.guest)));
-  const filteredSqlBookings = filteredSourceBookings(sqlBookings, query, 300);
+    .filter((booking) => !marinaNames.has(normalizeClientName(booking.guest)));
+  const filteredMarinaBookings = filteredSourceBookings(marinaBookings, query, 300);
   const filteredLocalBookings = filteredSourceBookings(localBookings, query, Math.max(1, localBookings.length));
-  const filteredBookings = [...filteredSqlBookings, ...filteredLocalBookings];
+  const filteredBookings = [...filteredMarinaBookings, ...filteredLocalBookings];
   return {
     ok: true,
     bookings: filteredBookings,
-    sqlAvailable: directory.sqlAvailable,
+    marinaAvailable: directory.marinaAvailable,
     warnings: directory.warnings,
     sources: {
-      sql: filteredBookings.filter((booking) => booking.directorySource === "sql").length,
+      marina: filteredBookings.filter((booking) => booking.directorySource === "marina").length,
       local: filteredBookings.filter((booking) => booking.directorySource === "local-history").length
     }
   };
@@ -3071,13 +3122,13 @@ async function fetchRoomAvailability(dateValue) {
         .map((booking) => String(booking.unitHint || "").trim())
         .filter(Boolean)
     )].sort((first, second) => first.localeCompare(second, "ro-RO", { numeric: true }));
-    result = { ok: true, date, occupiedUnitIds, sqlAvailable: true, warnings: [] };
+    result = { ok: true, date, occupiedUnitIds, marinaAvailable: true, warnings: [] };
   } catch (error) {
     result = {
       ok: true,
       date,
       occupiedUnitIds: [],
-      sqlAvailable: false,
+      marinaAvailable: false,
       warnings: [String(error?.message || error || "Sursa rezervărilor nu este disponibilă")]
     };
   }
@@ -3294,6 +3345,21 @@ const server = http.createServer(async (request, response) => {
       const mode = requestedMode === "tent" || requestedMode === "rv" ? requestedMode : "room";
       const query = String(url.searchParams.get("query") || "").trim().slice(0, 120);
       send(response, 200, JSON.stringify(await fetchFusedSourceBookings(mode, query)));
+      return;
+    }
+
+    if (request.url === "/api/marina-settings" && request.method === "GET") {
+      send(response, 200, JSON.stringify(publicMarinaApiSettings()));
+      return;
+    }
+
+    if (request.url === "/api/marina-settings" && request.method === "POST") {
+      send(response, 200, JSON.stringify(saveMarinaApiSettings(JSON.parse(await requestBody(request) || "{}"))));
+      return;
+    }
+
+    if (request.url === "/api/marina-settings/test" && request.method === "POST") {
+      send(response, 200, JSON.stringify(await testMarinaApiConnection()));
       return;
     }
 

@@ -69,7 +69,7 @@ test("room availability includes arrivals and excludes same-day departures and f
   const result = await response.json();
 
   assert.equal(result.ok, true);
-  assert.equal(result.sqlAvailable, true);
+  assert.equal(result.marinaAvailable, true);
   assert.equal(result.date, "2026-07-10");
   assert.deepEqual(result.occupiedUnitIds, ["dubla 2"]);
 });

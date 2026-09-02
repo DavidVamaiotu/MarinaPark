@@ -126,6 +126,42 @@
             </div>
           </div>
           <form class="settings-form" id="settingsForm">
+            <section class="settings-subsection" aria-labelledby="marinaSettingsTitle">
+              <div>
+                <p class="eyebrow">Sursă rezervări</p>
+                <h3 id="marinaSettingsTitle">Conexiune Marina API</h3>
+              </div>
+              <label>
+                Adresă API
+                <input id="marinaApiBaseUrl" name="marinaApiBaseUrl" type="url" value="https://booking.husi.ro" autocomplete="off" />
+              </label>
+              <label>
+                Token API
+                <input id="marinaApiToken" name="marinaApiToken" type="password" placeholder="Lasă gol pentru a păstra tokenul salvat" autocomplete="new-password" />
+              </label>
+              <div class="field-grid">
+                <label>
+                  Workspace Camere
+                  <input id="marinaRoomsWorkspaceId" name="marinaRoomsWorkspaceId" type="number" min="1" step="1" placeholder="Implicit" />
+                </label>
+                <label>
+                  Workspace Camping
+                  <input id="marinaCampingWorkspaceId" name="marinaCampingWorkspaceId" type="number" min="1" step="1" placeholder="Implicit" />
+                </label>
+              </div>
+              <label class="settings-check-row">
+                <input id="marinaClearToken" name="marinaClearToken" type="checkbox" />
+                Șterge tokenul API salvat local
+              </label>
+              <div class="settings-inline-actions">
+                <button class="ghost-button compact-text" type="button" id="testMarinaConnection">
+                  <i data-lucide="plug-zap" aria-hidden="true"></i>
+                  <span>Testează conexiunea</span>
+                </button>
+                <p class="settings-note" id="marinaConnectionStatus">Conexiunea nu a fost verificată.</p>
+              </div>
+              <p class="settings-note">Tokenul rămâne în baza locală a aplicației și nu este afișat din nou. Lasă workspace-ul gol numai dacă tokenul are un workspace implicit.</p>
+            </section>
             <label>
               Director bonuri
               <span class="settings-path-row">
@@ -429,9 +465,9 @@
                       </button>
                     </div>
                   </div>
-                  <div class="source-record-status" id="sourceRecordStatus">Se încarcă ultimele 300 rezervări.</div>
+                  <div class="source-record-status" id="sourceRecordStatus">Se încarcă ultimele 300 rezervări Marina.</div>
                   <div class="source-record-table-wrap">
-                    <table class="source-record-table" aria-label="Clienți din baza de date">
+                    <table class="source-record-table" aria-label="Clienți din Marina API">
                       <thead>
                         <tr>
                           <th>Nume</th>

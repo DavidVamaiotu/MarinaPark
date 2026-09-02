@@ -58,7 +58,7 @@ test("local-history selection applies every retained client field", () => {
   assert.match(applySource, /bookingForm\.elements\.car\.value = booking\.car \|\| "";/);
 });
 
-test("local-history Rulote selection uses the same exact-name Stationare auto-link as SQL", () => {
+test("local-history Rulote selection uses the same exact-name Stationare auto-link as Marina", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
   const applySource = app.match(/function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
   const autoLink = app.match(/function autoLinkStationingForFutureBooking\(booking = \{\}\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
@@ -75,7 +75,7 @@ test("local-history Rulote selection uses the same exact-name Stationare auto-li
   assert.match(autoLink, /autoLinked: true,\s*subtractDays: false/);
 });
 
-test("expired SQL source reservations start today while preserving their duration", () => {
+test("expired Marina source reservations start today while preserving their duration", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
   const applySource = app.match(/function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
 
@@ -86,10 +86,10 @@ test("expired SQL source reservations start today while preserving their duratio
   assert.match(applySource, /showOldSourceBookingWarning\(booking\);/);
 });
 
-test("only SQL source records are grouped as arrivals today", () => {
+test("only Marina source records are grouped as arrivals today", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
 
-  assert.match(app, /function isSqlSourceArrivalToday[\s\S]*directorySource === "sql"/);
-  assert.match(app, /todayBookings = orderedBookings\.filter\(\(booking\) => isSqlSourceArrivalToday\(booking, todayText\)\)/);
-  assert.match(app, /sourceBookings\.filter\(\(booking\) => isSqlSourceArrivalToday\(booking, todayText\)\)/);
+  assert.match(app, /function isMarinaSourceArrivalToday[\s\S]*directorySource === "marina"/);
+  assert.match(app, /todayBookings = orderedBookings\.filter\(\(booking\) => isMarinaSourceArrivalToday\(booking, todayText\)\)/);
+  assert.match(app, /sourceBookings\.filter\(\(booking\) => isMarinaSourceArrivalToday\(booking, todayText\)\)/);
 });
