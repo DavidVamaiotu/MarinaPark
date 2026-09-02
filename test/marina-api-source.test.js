@@ -43,6 +43,25 @@ async function startFakeMarinaApi() {
       response.end(JSON.stringify({ data }));
       return;
     }
+    if (url.pathname === "/v1/bookings/508" && workspaceId === "11") {
+      response.end(JSON.stringify({ data: {
+        id: 508,
+        resource_id: 15,
+        status: "approved",
+        periods: [{ start_date: "2026-09-22", end_date: "2026-09-22" }],
+        customer: { first_name: "Notes", last_name: "Fetched" },
+        price: { total_minor: 0 },
+        internal_note: "Sosire după ora 18"
+      } }));
+      return;
+    }
+    if (url.pathname === "/v1/bookings/508/notes" && workspaceId === "11") {
+      response.end(JSON.stringify({ data: [
+        { body: "Cost total: 230 RON, Depozit: 30 RON, Rest: 200 RON" },
+        { body: "Atenție la acces" }
+      ] }));
+      return;
+    }
     if (url.pathname === "/v1/bookings" && workspaceId === "11") {
       if (!url.searchParams.get("after")) {
         response.end(JSON.stringify({
@@ -59,6 +78,55 @@ async function startFakeMarinaApi() {
             price: { total_minor: 40000, balance_minor: 25000 },
             internal_note: "Sosire după ora 18",
             updated_at: "2026-09-01T10:00:00Z"
+          }, {
+            id: 503,
+            resource_id: 15,
+            status: "approved",
+            periods: [{ start_date: "2026-09-16", end_date: "2026-09-16" }],
+            customer: { first_name: "Fallback", last_name: "Minor" },
+            price: { total_minor: 50000, deposit_minor: 15000 }
+          }, {
+            id: 504,
+            resource_id: 15,
+            status: "approved",
+            periods: [{ start_date: "2026-09-17", end_date: "2026-09-17" }],
+            customer: { first_name: "Fallback", last_name: "Major" },
+            price: { total: 100, deposit: 30 }
+          }, {
+            id: 505,
+            resource_id: 15,
+            status: "approved",
+            periods: [{ start_date: "2026-09-18", end_date: "2026-09-18" }],
+            customer: { first_name: "Fallback", last_name: "Pricing" },
+            pricing: { total_minor: 70000 },
+            cost: 180,
+            internal_note: "Cost total: 700 RON, Depozit: 180 RON, Rest: 520 RON"
+          }, {
+            id: 506,
+            resource_id: 15,
+            status: "approved",
+            periods: [{ start_date: "2026-09-19", end_date: "2026-09-19" }],
+            customer: { first_name: "Fallback", last_name: "Remark" },
+            cost: 20,
+            remark: "Avans: 20 lei, Cost: 100 lei, Rest: 80 lei"
+          }, {
+            id: 507,
+            resource_id: 15,
+            status: "approved",
+            periods: [{ start_date: "2026-09-21", end_date: "2026-09-21" }],
+            customer: { first_name: "Notes", last_name: "Only" },
+            notes: [
+              { body: "Sosire după ora 18" },
+              { body: "Cost total 150 RON, Depozit = 50 RON, Rest - 100 RON" }
+            ]
+          }, {
+            id: 508,
+            resource_id: 15,
+            status: "approved",
+            periods: [{ start_date: "2026-09-22", end_date: "2026-09-22" }],
+            customer: { first_name: "Notes", last_name: "Fetched" },
+            price: { total_minor: 0 },
+            internal_note: ""
           }],
           next_cursor: "rooms-page-2"
         }));
@@ -185,7 +253,20 @@ test("Marina settings stay server-side and drive paginated workspace booking imp
   assert.equal(ana.end, "2026-09-13");
   assert.equal(ana.price, 250);
   assert.equal(ana.car, "VS-01-API");
+  assert.equal(roomSources.body.bookings.find((booking) => booking.guest === "Fallback Minor")?.price, 350);
+  assert.equal(roomSources.body.bookings.find((booking) => booking.guest === "Fallback Major")?.price, 70);
+  assert.equal(roomSources.body.bookings.find((booking) => booking.guest === "Fallback Pricing")?.price, 520);
+  assert.equal(roomSources.body.bookings.find((booking) => booking.guest === "Fallback Remark")?.price, 80);
+  const notesOnly = roomSources.body.bookings.find((booking) => booking.guest === "Notes Only");
+  assert.equal(notesOnly?.price, 100);
+  assert.equal(notesOnly?.note, "Sosire după ora 18\n\nCost total 150 RON, Depozit = 50 RON, Rest - 100 RON");
   assert.equal(roomSources.body.bookings.some((booking) => booking.guest === "Rezervare Anulată"), false);
+
+  const fetchedDetails = await jsonRequest(app.url, "/api/source-booking-details?mode=room&id=508");
+  assert.equal(fetchedDetails.status, 200);
+  assert.equal(fetchedDetails.body.booking.price, 200);
+  assert.equal(fetchedDetails.body.booking.note, "Sosire după ora 18\n\nCost total: 230 RON, Depozit: 30 RON, Rest: 200 RON\n\nAtenție la acces");
+  assert.ok(marina.requests.some((request) => request.pathname === "/v1/bookings/508/notes"));
 
   const rvSources = await jsonRequest(app.url, "/api/source-bookings?mode=rv");
   assert.equal(rvSources.status, 200);

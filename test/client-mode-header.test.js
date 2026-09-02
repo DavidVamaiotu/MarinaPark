@@ -56,6 +56,7 @@ test("local-history selection applies every retained client field", () => {
   assert.match(applySource, /bookingForm\.elements\.adults\.value = Math\.max\(0, Number\(booking\.adults \|\| 0\)\);/);
   assert.match(applySource, /bookingForm\.elements\.children\.value = Math\.max\(0, Number\(booking\.children \|\| 0\)\);/);
   assert.match(applySource, /bookingForm\.elements\.car\.value = booking\.car \|\| "";/);
+  assert.match(applySource, /bookingForm\.elements\.note\.value = booking\.note \|\| "";/);
 });
 
 test("local-history Rulote selection uses the same exact-name Stationare auto-link as Marina", () => {
@@ -84,6 +85,18 @@ test("expired Marina source reservations start today while preserving their dura
   assert.match(applySource, /sourceCheckoutDate && sourceCheckoutDate < today/);
   assert.match(applySource, /bookingForm\.elements\.arrival\.value = toISODate\(today\);\s*syncDepartureFromNights\(\);/);
   assert.match(applySource, /showOldSourceBookingWarning\(booking\);/);
+});
+
+test("Marina source rows hydrate missing notes and prices before selection", () => {
+  const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  const selection = app.match(/function sourceBookingNeedsDetails\(booking\) \{[\s\S]*?\n\}\n\nasync function selectSourceBooking/)?.[0];
+
+  assert.ok(selection, "source row hydration should exist");
+  assert.match(selection, /booking\?\.directorySource === "marina"/);
+  assert.match(selection, /providerBookingId/);
+  assert.match(app, /\/api\/source-booking-details\?" \+ params\.toString\(\)/);
+  assert.match(app, /const enriched = \{ \.\.\.booking, \.\.\.result\.booking \};/);
+  assert.match(app, /applySourceBooking\(enriched\);/);
 });
 
 test("only Marina source records are grouped as arrivals today", () => {

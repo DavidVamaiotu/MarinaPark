@@ -448,6 +448,7 @@ let sourceBookingCandidates = [];
 let sourceBookingSearchPending = false;
 let sourceBookingSearchTimer = null;
 let sourceBookingRequestId = 0;
+let sourceBookingSelectionId = 0;
 let units = [];
 let facilityCatalog = defaultFacilityCatalog.map((facility) => ({ ...facility }));
 let bookingFacilityDraft = [];
@@ -6628,6 +6629,7 @@ function closeBookingModal() {
   bookingEditSession = null;
   window.clearTimeout(sourceBookingSearchTimer);
   sourceBookingRequestId += 1;
+  sourceBookingSelectionId += 1;
 }
 
 function setMoneyField(name, value) {
@@ -7585,9 +7587,44 @@ function applySourceBooking(booking) {
   showToast(`Date preluate pentru ${booking.guest}`);
 }
 
+function sourceBookingNeedsDetails(booking) {
+  const providerBookingId = String(booking?.providerBookingId || "").trim();
+  const price = Number(booking?.price);
+  return booking?.directorySource === "marina" && providerBookingId && (!String(booking.note || "").trim() || !Number.isFinite(price) || price <= 0);
+}
+
+async function selectSourceBooking(row, index) {
+  const booking = sourceBookings[index];
+  if (!booking) return;
+  const selectionId = ++sourceBookingSelectionId;
+  sourceRecordRows.querySelectorAll("tr").forEach((item) => item.classList.toggle("is-selected", item === row));
+  if (!sourceBookingNeedsDetails(booking)) {
+    applySourceBooking(booking);
+    return;
+  }
+
+  row.setAttribute("aria-busy", "true");
+  try {
+    const params = new URLSearchParams({ mode: sourceRecordsMode, id: String(booking.providerBookingId) });
+    const response = await fetch("/api/source-booking-details?" + params.toString(), { cache: "no-store" });
+    const result = await response.json();
+    if (selectionId !== sourceBookingSelectionId) return;
+    if (!response.ok || !result.ok || !result.booking) throw new Error(result.error || "Detaliile rezervării Marina nu sunt disponibile");
+    const enriched = { ...booking, ...result.booking };
+    sourceBookings[index] = enriched;
+    rememberSourceBookingCandidates([enriched]);
+    applySourceBooking(enriched);
+  } catch {
+    if (selectionId === sourceBookingSelectionId) applySourceBooking(booking);
+  } finally {
+    row.removeAttribute("aria-busy");
+  }
+}
+
 async function loadSourceBookings(query = bookingForm.elements.guest.value.trim()) {
   const mode = normalizeTimelineMode(sourceRecordsMode);
   const normalizedQuery = String(query || "").trim();
+  sourceBookingSelectionId += 1;
   const requestId = ++sourceBookingRequestId;
   sourceBookingQuery = normalizedQuery;
   sourceBookingSearchPending = true;
@@ -7636,6 +7673,7 @@ function searchSourceBookingsFromName() {
   renderBookingStationingLink();
   showOldSourceBookingWarning();
   window.clearTimeout(sourceBookingSearchTimer);
+  sourceBookingSelectionId += 1;
   sourceBookingRequestId += 1;
   sourceBookingQuery = bookingForm.elements.guest.value.trim();
   sourceBookingSearchPending = true;
@@ -8620,6 +8658,7 @@ sourceModeSwitch.addEventListener("click", (event) => {
   const button = event.target.closest("[data-source-mode-option]");
   if (!button) return;
   setSourceRecordsMode(button.dataset.sourceModeOption);
+  sourceBookingSelectionId += 1;
   sourceBookings = [];
   sourceBookingCandidates = [];
   sourceBookingSearchPending = false;
@@ -8629,8 +8668,7 @@ sourceModeSwitch.addEventListener("click", (event) => {
 sourceRecordRows.addEventListener("click", (event) => {
   const row = event.target.closest("[data-source-index]");
   if (!row) return;
-  sourceRecordRows.querySelectorAll("tr").forEach((item) => item.classList.toggle("is-selected", item === row));
-  applySourceBooking(sourceBookings[Number(row.dataset.sourceIndex)]);
+  void selectSourceBooking(row, Number(row.dataset.sourceIndex));
 });
 
 document.addEventListener("pointerdown", clearStaleInteractionState, true);

@@ -2858,6 +2858,28 @@ function marinaCollection(payload, keys = []) {
   return [];
 }
 
+function marinaEntity(payload, keys = []) {
+  const candidates = [
+    payload?.data?.booking,
+    payload?.data,
+    ...keys.map((key) => payload?.[key]),
+    payload?.booking,
+    payload
+  ];
+  return candidates.find((value) => value && typeof value === "object" && !Array.isArray(value)) || {};
+}
+
+function marinaNoteRecords(payload) {
+  const candidates = [payload?.data, payload, payload?.booking].filter(Boolean);
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+    for (const key of ["notes", "internal_notes"]) {
+      if (Array.isArray(candidate?.[key])) return candidate[key];
+    }
+  }
+  return [];
+}
+
 function marinaApiErrorMessage(status, payload) {
   if (status === 401) return "Conectarea OAuth Marina nu mai este validă. Reconectează contul.";
   if (status === 403) return "Contul OAuth Marina nu are permisiunea bookings:read/resources:read";
@@ -3131,6 +3153,18 @@ function marinaFieldValue(value) {
   return value;
 }
 
+function marinaNumericAmount(value) {
+  const unwrapped = marinaFieldValue(value);
+  if (unwrapped === undefined || unwrapped === null || unwrapped === "" || typeof unwrapped === "boolean" || typeof unwrapped === "object") return null;
+  const text = typeof unwrapped === "string" ? unwrapped.trim()
+    .replace(/\s+/g, "")
+    .replace(/\.(?=\d{3}(?:,|$))/g, "")
+    .replace(",", ".") : unwrapped;
+  const numericText = typeof text === "string" ? text.match(/^\d+(?:\.\d+)?/)?.[0] || text : text;
+  const amount = Number(numericText);
+  return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
 function marinaCustomField(booking, names) {
   const customer = booking.customer || booking.guest || {};
   const containers = [booking.form_data, booking.formData, customer.custom_fields, booking.custom_fields];
@@ -3145,15 +3179,130 @@ function marinaCustomField(booking, names) {
 }
 
 function marinaMinorAmount(booking, names) {
-  const sources = [booking.price, booking.pricing, booking.amounts, booking];
+  const sources = [
+    booking?.price, booking?.price?.formatted,
+    booking?.pricing, booking?.pricing?.formatted,
+    booking?.amounts, booking?.amounts?.formatted,
+    booking?.payment, booking?.payment?.formatted,
+    booking?.formatted, booking
+  ];
   for (const source of sources) {
     if (!source || typeof source !== "object") continue;
     for (const name of names) {
-      const value = Number(source[name]);
-      if (Number.isFinite(value) && value >= 0) return value;
+      const value = marinaNumericAmount(source[name]);
+      if (value !== null) return value;
     }
   }
   return null;
+}
+
+function marinaMajorAmount(booking, names) {
+  return marinaMinorAmount(booking, names);
+}
+
+function marinaNoteValues(value) {
+  if (Array.isArray(value)) return value.flatMap((item) => marinaNoteValues(item));
+  if (value && typeof value === "object") {
+    const direct = ["body", "note", "text", "content", "value"].find((key) => Object.prototype.hasOwnProperty.call(value, key));
+    if (direct) return marinaNoteValues(value[direct]);
+    return ["data", "items", "notes", "internal_notes"].flatMap((key) => marinaNoteValues(value[key]));
+  }
+  const text = String(marinaFieldValue(value) ?? "").trim();
+  return text ? [text] : [];
+}
+
+function marinaBookingNotes(booking = {}) {
+  const values = [];
+  const add = (value) => {
+    marinaNoteValues(value).forEach((note) => {
+      if (!values.includes(note)) values.push(note);
+    });
+  };
+  const containers = [booking, booking?.data, booking?.booking].filter((value) => value && typeof value === "object");
+  containers.forEach((container) => {
+    [
+      container.internal_note,
+      container.internalNote,
+      container.note,
+      container.remark,
+      container.notes,
+      container.internal_notes,
+      container.internalNotes
+    ].forEach(add);
+  });
+  return values;
+}
+
+function marinaNoteAmount(note, names) {
+  const labelPattern = names
+    .map((name) => String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const match = String(note || "").match(new RegExp(`(?:^|\\b)(?:${labelPattern})(?:\\b)\\s*(?::|=|-)?\\s*([0-9][0-9.\\s]*(?:,[0-9]+)?)`, "iu"));
+  return match ? marinaNumericAmount(match[1]) : null;
+}
+
+function marinaBookingPrice(booking) {
+  const balanceMinor = marinaMinorAmount(booking, [
+    "balance_minor", "balanceMinor", "remaining_minor", "remainingMinor",
+    "amount_due_minor", "amountDueMinor", "due_minor", "dueMinor",
+    "rest_minor", "restMinor", "outstanding_minor", "outstandingMinor"
+  ]);
+  if (balanceMinor !== null) return balanceMinor / 100;
+
+  const totalMinor = marinaMinorAmount(booking, [
+    "total_minor", "totalMinor", "amount_minor", "amountMinor",
+    "gross_total_minor", "grossTotalMinor", "grand_total_minor", "grandTotalMinor",
+    "total_price_minor", "totalPriceMinor", "amount_total_minor", "amountTotalMinor"
+  ]);
+  const depositMinor = marinaMinorAmount(booking, [
+    "deposit_minor", "depositMinor", "advance_minor", "advanceMinor",
+    "avans_minor", "avansMinor", "paid_minor", "paidMinor",
+    "amount_paid_minor", "amountPaidMinor", "prepaid_minor", "prepaidMinor"
+  ]);
+  const balanceMajor = marinaMajorAmount(booking, [
+    "balance", "remaining", "remaining_amount", "remainingAmount",
+    "amount_due", "amountDue", "due", "rest", "outstanding"
+  ]);
+  if (balanceMajor !== null) return balanceMajor;
+
+  const totalMajor = marinaMajorAmount(booking, [
+    "total", "total_amount", "totalAmount", "total_price", "totalPrice",
+    "gross_total", "grossTotal", "grand_total", "grandTotal",
+    "price_total", "priceTotal", "amount_total", "amountTotal", "amount"
+  ]);
+  const depositMajor = marinaMajorAmount(booking, [
+    "deposit", "deposit_amount", "depositAmount", "advance", "advance_amount", "advanceAmount",
+    "avans", "avans_amount", "avansAmount", "paid", "paid_amount", "paidAmount",
+    "prepaid", "prepaid_amount", "prepaidAmount", "cost"
+  ]);
+  if (totalMinor !== null && totalMinor > 0 && depositMinor !== null) return Math.max(0, totalMinor - depositMinor) / 100;
+  if (totalMinor !== null && totalMinor > 0 && depositMajor !== null) return Math.max(0, totalMinor - Math.round(depositMajor * 100)) / 100;
+  if (totalMajor !== null && totalMajor > 0 && depositMajor !== null) return Math.max(0, totalMajor - depositMajor);
+  if (totalMajor !== null && totalMajor > 0 && depositMinor !== null) return Math.max(0, totalMajor - depositMinor / 100);
+
+  let noteBalance = null;
+  let noteTotal = null;
+  let noteDeposit = null;
+  for (const note of marinaBookingNotes(booking)) {
+    noteBalance ??= marinaNoteAmount(note, ["Rest", "Balance", "Sold", "Remaining", "Amount due"]);
+    noteTotal ??= marinaNoteAmount(note, ["Cost total", "Total initial", "Total", "Cost"]);
+    noteDeposit ??= marinaNoteAmount(note, ["Avans", "Depozit", "Advance", "Deposit", "Paid", "Achitat"]);
+  }
+
+  if (totalMinor !== null && totalMinor > 0 && noteDeposit !== null) return Math.max(0, totalMinor - Math.round(noteDeposit * 100)) / 100;
+  if (totalMajor !== null && totalMajor > 0 && noteDeposit !== null) return Math.max(0, totalMajor - noteDeposit);
+  if (noteBalance !== null) return noteBalance;
+  const paid = noteDeposit !== null ? noteDeposit : depositMajor;
+  if (noteTotal !== null && paid !== null) return Math.max(0, noteTotal - paid);
+
+  if (noteTotal !== null) return noteTotal;
+  if (totalMinor !== null && totalMinor > 0) return totalMinor / 100;
+  if (totalMajor !== null && totalMajor > 0) return totalMajor;
+  return 0;
+}
+
+function marinaBookingNote(booking) {
+  return marinaBookingNotes(booking).join("\n\n");
 }
 
 function marinaBookingIsTrashed(booking) {
@@ -3196,10 +3345,7 @@ function marinaSourceBooking(booking, resources, mode) {
   if (!guest || !start || !end) return null;
   const adults = Math.max(0, Number(booking.guests?.adults ?? booking.adults ?? marinaCustomField(booking, ["visitors", "adults"])) || 0);
   const children = Math.max(0, Number(booking.guests?.children ?? booking.children ?? marinaCustomField(booking, ["children"])) || 0);
-  const balanceMinor = marinaMinorAmount(booking, ["balance_minor", "balanceMinor"]);
-  const totalMinor = marinaMinorAmount(booking, ["total_minor", "totalMinor", "amount_minor", "amountMinor", "gross_total_minor", "grossTotalMinor"]);
-  const majorTotal = marinaMinorAmount(booking, ["total", "total_amount", "totalAmount", "gross_total", "grossTotal", "amount"]);
-  const price = balanceMinor !== null ? balanceMinor / 100 : totalMinor !== null ? totalMinor / 100 : majorTotal || 0;
+  const price = marinaBookingPrice(booking);
   const campingText = removeDiacritics(`${resourceTitle} ${marinaCustomField(booking, ["booking_type", "type"])}`).toLowerCase();
   const bookingMode = mode === "camping" && /rulot|caravan|camper|autorulot/.test(campingText) ? "rv" : mode === "camping" ? "tent" : "room";
   return {
@@ -3224,7 +3370,7 @@ function marinaSourceBooking(booking, resources, mode) {
     mode: bookingMode,
     kind: resourceTitle || (mode === "camping" ? "Camping" : "Camere"),
     unitHint: resourceTitle,
-    note: String(booking.internal_note ?? booking.note ?? "").trim(),
+    note: marinaBookingNote(booking),
     modifiedAt: booking.updated_at ?? booking.updatedAt ?? booking.created_at ?? booking.createdAt ?? ""
   };
 }
@@ -3235,8 +3381,7 @@ async function fetchMarinaWorkspaceBookings(mode) {
   const cacheKey = `${mode}:${workspaceId ?? "default"}`;
   const cached = marinaSourceCache.get(cacheKey);
   if (cached?.expiresAt > Date.now()) return cached.bookings;
-  const resourcePayload = await marinaApiRequest("/v1/resources", { workspaceId });
-  const resources = marinaCollection(resourcePayload, ["resources"]);
+  const resources = await fetchMarinaWorkspaceResources(mode);
   const rows = [];
   let after = "";
   do {
@@ -3247,8 +3392,48 @@ async function fetchMarinaWorkspaceBookings(mode) {
     after = String(payload?.next_cursor ?? payload?.pagination?.next_cursor ?? payload?.meta?.next_cursor ?? "");
   } while (after);
   const bookings = rows.map((booking) => marinaSourceBooking(booking, resources, mode)).filter(Boolean);
-  marinaSourceCache.set(cacheKey, { expiresAt: Date.now() + clientDirectoryCacheMs, bookings });
+  marinaSourceCache.set(cacheKey, { ...marinaSourceCache.get(cacheKey), expiresAt: Date.now() + clientDirectoryCacheMs, bookings, resources });
   return bookings;
+}
+
+async function fetchMarinaWorkspaceResources(mode) {
+  const settings = effectiveMarinaApiSettings();
+  const workspaceId = mode === "camping" ? settings.campingWorkspaceId : settings.roomsWorkspaceId;
+  const cacheKey = String(mode) + ":" + (workspaceId ?? "default");
+  const cached = marinaSourceCache.get(cacheKey);
+  if (Array.isArray(cached?.resources)) return cached.resources;
+  const resourcePayload = await marinaApiRequest("/v1/resources", { workspaceId });
+  const resources = marinaCollection(resourcePayload, ["resources"]);
+  marinaSourceCache.set(cacheKey, { ...cached, resources });
+  return resources;
+}
+
+async function fetchMarinaSourceBookingDetails(mode, providerBookingId) {
+  const sourceMode = mode === "tent" || mode === "rv" ? "camping" : "room";
+  const settings = effectiveMarinaApiSettings();
+  const workspaceId = sourceMode === "camping" ? settings.campingWorkspaceId : settings.roomsWorkspaceId;
+  const resources = await fetchMarinaWorkspaceResources(sourceMode);
+  const bookingPath = "/v1/bookings/" + encodeURIComponent(providerBookingId);
+  const payload = await marinaApiRequest(bookingPath, { workspaceId });
+  const rawBooking = marinaEntity(payload, ["booking"]);
+  if (!rawBooking || typeof rawBooking !== "object") {
+    throw requestError(502, "API-ul Marina nu a returnat rezervarea solicitată");
+  }
+
+  let booking = { ...rawBooking, id: rawBooking.id ?? rawBooking.booking_id ?? providerBookingId };
+  if (!marinaBookingNotes(booking).length || marinaBookingPrice(booking) <= 0) {
+    try {
+      const notesPayload = await marinaApiRequest(bookingPath + "/notes", { workspaceId });
+      const notes = marinaNoteRecords(notesPayload);
+      if (notes.length) booking = { ...booking, notes: [...(Array.isArray(booking.notes) ? booking.notes : []), ...notes] };
+    } catch {
+      // Details and existing list data remain usable when the optional notes endpoint is unavailable.
+    }
+  }
+
+  const normalized = marinaSourceBooking(booking, resources, sourceMode);
+  if (!normalized) throw requestError(502, "API-ul Marina nu a returnat o rezervare într-un format invalid");
+  return normalized;
 }
 
 function filteredSourceBookings(bookings, query, limit) {
@@ -3622,6 +3807,17 @@ const server = http.createServer(async (request, response) => {
     if (request.url.startsWith("/api/availability") && request.method === "GET") {
       const url = new URL(request.url, `http://${request.headers.host}`);
       send(response, 200, JSON.stringify(await fetchRoomAvailability(url.searchParams.get("date"))));
+      return;
+    }
+
+    if (request.url.startsWith("/api/source-booking-details") && request.method === "GET") {
+      const url = new URL(request.url, "http://" + request.headers.host);
+      const requestedMode = url.searchParams.get("mode");
+      const mode = requestedMode === "tent" || requestedMode === "rv" ? requestedMode : "room";
+      const providerBookingId = String(url.searchParams.get("id") || "").trim();
+      if (!providerBookingId || providerBookingId.length > 200) throw requestError(400, "Identificatorul rezervării Marina este invalid");
+      const booking = await fetchMarinaSourceBookingDetails(mode, providerBookingId);
+      send(response, 200, JSON.stringify({ ok: true, booking }));
       return;
     }
 
