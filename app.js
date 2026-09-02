@@ -6627,6 +6627,7 @@ function closeBookingModal() {
   deleteBookingButton.hidden = true;
   receiptFromBookingButton.hidden = true;
   bookingEditSession = null;
+  window.clearTimeout(sourceBookingLocalDebounceTimer);
   window.clearTimeout(sourceBookingSearchTimer);
   sourceBookingRequestId += 1;
   sourceBookingSelectionId += 1;
@@ -7408,14 +7409,18 @@ function renderSourceBookings() {
   `;
   };
 
+  const bookingIndexMap = new Map();
+  sourceBookings.forEach((booking, index) => bookingIndexMap.set(booking, index));
+
   if (sourceBookingQuery) {
     sourceRecordRows.innerHTML = orderedBookings
-      .map((booking) => rowForBooking(booking, sourceBookings.indexOf(booking)))
+      .slice(0, 100)
+      .map((booking) => rowForBooking(booking, bookingIndexMap.get(booking) ?? 0))
       .join("");
     return;
   }
 
-  const todayRows = todayBookings.map((booking) => rowForBooking(booking, sourceBookings.indexOf(booking)));
+  const todayRows = todayBookings.map((booking) => rowForBooking(booking, bookingIndexMap.get(booking) ?? 0));
   const separator =
     todayBookings.length && otherBookings.length
       ? [
@@ -7426,7 +7431,7 @@ function renderSourceBookings() {
         `
         ]
       : [];
-  const otherRows = otherBookings.map((booking) => rowForBooking(booking, sourceBookings.indexOf(booking)));
+  const otherRows = otherBookings.map((booking) => rowForBooking(booking, bookingIndexMap.get(booking) ?? 0));
 
   sourceRecordRows.innerHTML = [...todayRows, ...separator, ...otherRows].join("");
 }
@@ -7455,6 +7460,22 @@ function rememberSourceBookingCandidates(bookings, replace = false) {
   sourceBookingCandidates = [...candidateMap.values()];
 }
 
+const sourceBookingScoreCache = new WeakMap();
+
+function getSourceBookingFuzzyScore(query, booking) {
+  if (!booking || typeof booking !== "object") return Infinity;
+  let queryMap = sourceBookingScoreCache.get(booking);
+  if (!queryMap) {
+    queryMap = new Map();
+    sourceBookingScoreCache.set(booking, queryMap);
+  }
+  const cached = queryMap.get(query);
+  if (cached !== undefined) return cached;
+  const score = fuzzyMatchScore(query, booking.guest);
+  queryMap.set(query, score);
+  return score;
+}
+
 function orderedSourceBookings(todayText = toISODate(new Date())) {
   const todayValue = sourceRecordDateValue(todayText);
   return [...sourceBookings].sort((first, second) => {
@@ -7465,7 +7486,9 @@ function orderedSourceBookings(todayText = toISODate(new Date())) {
         normalizeSearchText(first.guest) === normalizeSearchText(second.guest) ||
         (firstPhone && firstPhone === secondPhone);
       if (!sameClient) {
-        const scoreCompare = fuzzyMatchScore(sourceBookingQuery, first.guest) - fuzzyMatchScore(sourceBookingQuery, second.guest);
+        const scoreCompare =
+          getSourceBookingFuzzyScore(sourceBookingQuery, first) -
+          getSourceBookingFuzzyScore(sourceBookingQuery, second);
         if (scoreCompare !== 0) return scoreCompare;
       }
     }
@@ -7664,12 +7687,14 @@ async function loadSourceBookings(query = bookingForm.elements.guest.value.trim(
   } finally {
     if (requestId === sourceBookingRequestId) {
       loadSourceBookingsButton.disabled = false;
-      refreshIcons();
+      refreshIcons(bookingModal);
     }
   }
 }
 
-function searchSourceBookingsFromName() {
+let sourceBookingLocalDebounceTimer = null;
+
+function performSourceBookingsSearch() {
   renderBookingStationingLink();
   showOldSourceBookingWarning();
   window.clearTimeout(sourceBookingSearchTimer);
@@ -7679,7 +7704,7 @@ function searchSourceBookingsFromName() {
   sourceBookingSearchPending = true;
   sourceBookings = sourceBookingQuery
     ? sourceBookingCandidates
-        .map((booking) => ({ booking, score: fuzzyMatchScore(sourceBookingQuery, booking.guest) }))
+        .map((booking) => ({ booking, score: getSourceBookingFuzzyScore(sourceBookingQuery, booking) }))
         .filter((match) => Number.isFinite(match.score))
         .sort((first, second) => first.score - second.score)
         .slice(0, 300)
@@ -7693,6 +7718,17 @@ function searchSourceBookingsFromName() {
   sourceBookingSearchTimer = window.setTimeout(() => {
     loadSourceBookings(sourceBookingQuery);
   }, 180);
+}
+
+function searchSourceBookingsFromName() {
+  window.clearTimeout(sourceBookingLocalDebounceTimer);
+  window.clearTimeout(sourceBookingSearchTimer);
+  const currentQuery = bookingForm.elements.guest.value.trim();
+  if (!currentQuery) {
+    performSourceBookingsSearch();
+    return;
+  }
+  sourceBookingLocalDebounceTimer = window.setTimeout(performSourceBookingsSearch, 120);
 }
 
 function openEditClient(stayKey) {
@@ -9333,18 +9369,15 @@ bookingForm.addEventListener("submit", async (event) => {
     : savedToast;
 
   if (shouldOpenLinkedDraftAfterSave) {
-    renderAll();
     setVisibleMonth(arrival);
     openBookingModal(linkedReservationDraftDefaultsFromStay(nextStay));
     showToast(`${deductionToast}. Alege următoarea unitate pentru același client.`);
   } else if (linkedAfterSave.length >= 2) {
-    renderAll();
     setVisibleMonth(arrival);
     openEditClient(nextStay.key);
     showToast(deductionToast);
   } else {
     closeBookingModal();
-    renderAll();
     setVisibleMonth(arrival);
     showToast(deductionToast);
     if (!existingStay) {

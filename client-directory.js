@@ -79,6 +79,7 @@ class ClientHistoryStore {
       CREATE INDEX IF NOT EXISTS idx_clients_guest ON clients(guest);
       CREATE INDEX IF NOT EXISTS idx_clients_group ON clients(group_name);
     `);
+    this._cachedClients = null;
     this.sanitizeStoredClients();
   }
 
@@ -206,14 +207,43 @@ class ClientHistoryStore {
       this.db.exec("ROLLBACK");
       throw error;
     }
+    if (changed > 0) this._cachedClients = null;
     return changed;
   }
 
   clients() {
-    return this.db
+    if (this._cachedClients) return this._cachedClients;
+    this._cachedClients = this.db
       .prepare("SELECT normalized_name, data FROM clients ORDER BY guest COLLATE NOCASE")
       .all()
       .map((row) => ({ normalizedName: row.normalized_name, ...JSON.parse(row.data) }));
+    return this._cachedClients;
+  }
+
+  searchClients(query, limit = 300) {
+    const normalized = normalizeClientName(query);
+    if (!normalized) return this.clients();
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    if (!tokens.length) return this.clients();
+
+    const whereClauses = tokens.map(() => "(normalized_name LIKE ? OR guest LIKE ? OR phone LIKE ? OR car LIKE ?)");
+    const params = [];
+    tokens.forEach((token) => {
+      const p = `%${token}%`;
+      params.push(p, p, p, p);
+    });
+    params.push(limit);
+
+    const rows = this.db
+      .prepare(`
+        SELECT normalized_name, data
+        FROM clients
+        WHERE ${whereClauses.join(" AND ")}
+        ORDER BY guest COLLATE NOCASE
+        LIMIT ?
+      `)
+      .all(...params);
+    return rows.map((row) => ({ normalizedName: row.normalized_name, ...JSON.parse(row.data) }));
   }
 
   checkpoint() {

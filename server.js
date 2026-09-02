@@ -424,16 +424,35 @@ function addActivityLogEntry(entry) {
   return { entry: normalized, inserted: result.changes > 0 };
 }
 
+let activityLogSnapshotTimer = null;
+
 async function writeActivityLogLocalFiles(entries, options = {}) {
   if (entries.length) {
     const jsonlLines = entries.map((entry) => JSON.stringify(entry)).join(os.EOL);
     await fs.appendFile(activityLogJsonlPath, `${jsonlLines}${os.EOL}`, "utf8");
   }
   if (!entries.length && !options.refreshSnapshot) return;
-  await fs.writeFile(activityLogJsonPath, `${JSON.stringify(activityLogRows(5000), null, 2)}${os.EOL}`, "utf8");
+  if (options.immediate) {
+    if (activityLogSnapshotTimer) {
+      clearTimeout(activityLogSnapshotTimer);
+      activityLogSnapshotTimer = null;
+    }
+    await fs.writeFile(activityLogJsonPath, `${JSON.stringify(activityLogRows(5000), null, 2)}${os.EOL}`, "utf8");
+  } else if (!activityLogSnapshotTimer) {
+    activityLogSnapshotTimer = setTimeout(async () => {
+      activityLogSnapshotTimer = null;
+      try {
+        await fs.writeFile(activityLogJsonPath, `${JSON.stringify(activityLogRows(5000), null, 2)}${os.EOL}`, "utf8");
+      } catch {}
+    }, 1500);
+  }
 }
 
 async function rewriteActivityLogLocalFiles() {
+  if (activityLogSnapshotTimer) {
+    clearTimeout(activityLogSnapshotTimer);
+    activityLogSnapshotTimer = null;
+  }
   const entries = allActivityLogRows();
   await fs.writeFile(activityLogJsonPath, `${JSON.stringify(entries.slice(0, 5000), null, 2)}${os.EOL}`, "utf8");
   const jsonl = entries.length ? `${entries.slice().reverse().map((entry) => JSON.stringify(entry)).join(os.EOL)}${os.EOL}` : "";
@@ -828,7 +847,7 @@ async function writeReservation(payload) {
 
   clientHistoryStore.syncReservations([{ ...stay, key, id, guest }]);
   clientDirectoryCache = null;
-  await enqueueDatabaseBackup({ afterMutation: true });
+  void enqueueDatabaseBackup({ afterMutation: true });
   return { savedAt: now, stay: { ...stay, key, id, guest } };
 }
 
@@ -1091,7 +1110,7 @@ async function refreshDatabaseBackups(options = {}) {
   const dailyMissing = !(await fileExists(dailyBackupPath));
   const weeklyMissing = !(await fileExists(weeklyBackupPath));
   const shouldWriteDaily = afterMutation || dailyMissing || meta.dailyDate !== today;
-  const shouldWriteWeekly = afterMutation || weeklyMissing || meta.weeklyWeek !== week;
+  const shouldWriteWeekly = weeklyMissing || meta.weeklyWeek !== week;
   const nextMeta = { ...meta };
 
   if (shouldWriteDaily) {
@@ -3545,7 +3564,12 @@ async function fetchFusedSourceBookings(mode, query = "") {
     .map((client) => sourceBookingFromDirectoryClient(client, mode))
     .filter((booking) => booking.mode === mode);
   const marinaNames = new Set(marinaBookings.map((booking) => normalizeClientName(booking.guest)));
-  const localClients = clientHistoryStore.clients();
+  const localClients = query && typeof clientHistoryStore.searchClients === "function"
+    ? (() => {
+        const sqlMatches = clientHistoryStore.searchClients(query, 300);
+        return sqlMatches.length ? sqlMatches : clientHistoryStore.clients();
+      })()
+    : clientHistoryStore.clients();
   const localBookings = localClients
     .map((client) => sourceBookingFromDirectoryClient({ ...client, directorySource: "local-history" }, mode))
     .filter((booking) => !marinaNames.has(normalizeClientName(booking.guest)));
