@@ -120,6 +120,14 @@ async function startFakeMarinaApi() {
               { body: "Cost total 150 RON, Depozit = 50 RON, Rest - 100 RON" }
             ]
           }, {
+            id: 509,
+            resource_id: 15,
+            status: "approved",
+            periods: [{ start_date: "2026-09-23", end_date: "2026-09-23" }],
+            customer: { first_name: "Notes", last_name: "Preferred" },
+            price: { total_minor: 10000, balance_minor: 9000 },
+            internal_note: "Cost total: 100 RON, Avans: 20 RON, Rest: 80 RON"
+          }, {
             id: 508,
             resource_id: 15,
             status: "approved",
@@ -260,6 +268,7 @@ test("Marina settings stay server-side and drive paginated workspace booking imp
   const notesOnly = roomSources.body.bookings.find((booking) => booking.guest === "Notes Only");
   assert.equal(notesOnly?.price, 100);
   assert.equal(notesOnly?.note, "Sosire după ora 18\n\nCost total 150 RON, Depozit = 50 RON, Rest - 100 RON");
+  assert.equal(roomSources.body.bookings.find((booking) => booking.guest === "Notes Preferred")?.price, 80);
   assert.equal(roomSources.body.bookings.some((booking) => booking.guest === "Rezervare Anulată"), false);
 
   const fetchedDetails = await jsonRequest(app.url, "/api/source-booking-details?mode=room&id=508");

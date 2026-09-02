@@ -3242,6 +3242,19 @@ function marinaNoteAmount(note, names) {
 }
 
 function marinaBookingPrice(booking) {
+  let noteBalance = null;
+  let noteTotal = null;
+  let noteDeposit = null;
+  for (const note of marinaBookingNotes(booking)) {
+    noteBalance ??= marinaNoteAmount(note, ["Rest", "Balance", "Sold", "Remaining", "Amount due"]);
+    noteTotal ??= marinaNoteAmount(note, ["Cost total", "Total initial", "Total", "Cost"]);
+    noteDeposit ??= marinaNoteAmount(note, ["Avans", "Depozit", "Advance", "Deposit", "Paid", "Achitat"]);
+  }
+
+  if (noteBalance !== null) return noteBalance;
+  if (noteTotal !== null && noteDeposit !== null) return Math.max(0, noteTotal - noteDeposit);
+  if (noteTotal !== null) return noteTotal;
+
   const balanceMinor = marinaMinorAmount(booking, [
     "balance_minor", "balanceMinor", "remaining_minor", "remainingMinor",
     "amount_due_minor", "amountDueMinor", "due_minor", "dueMinor",
@@ -3280,22 +3293,8 @@ function marinaBookingPrice(booking) {
   if (totalMajor !== null && totalMajor > 0 && depositMajor !== null) return Math.max(0, totalMajor - depositMajor);
   if (totalMajor !== null && totalMajor > 0 && depositMinor !== null) return Math.max(0, totalMajor - depositMinor / 100);
 
-  let noteBalance = null;
-  let noteTotal = null;
-  let noteDeposit = null;
-  for (const note of marinaBookingNotes(booking)) {
-    noteBalance ??= marinaNoteAmount(note, ["Rest", "Balance", "Sold", "Remaining", "Amount due"]);
-    noteTotal ??= marinaNoteAmount(note, ["Cost total", "Total initial", "Total", "Cost"]);
-    noteDeposit ??= marinaNoteAmount(note, ["Avans", "Depozit", "Advance", "Deposit", "Paid", "Achitat"]);
-  }
-
   if (totalMinor !== null && totalMinor > 0 && noteDeposit !== null) return Math.max(0, totalMinor - Math.round(noteDeposit * 100)) / 100;
   if (totalMajor !== null && totalMajor > 0 && noteDeposit !== null) return Math.max(0, totalMajor - noteDeposit);
-  if (noteBalance !== null) return noteBalance;
-  const paid = noteDeposit !== null ? noteDeposit : depositMajor;
-  if (noteTotal !== null && paid !== null) return Math.max(0, noteTotal - paid);
-
-  if (noteTotal !== null) return noteTotal;
   if (totalMinor !== null && totalMinor > 0) return totalMinor / 100;
   if (totalMajor !== null && totalMajor > 0) return totalMajor;
   return 0;
