@@ -136,8 +136,8 @@
                 <input id="marinaApiBaseUrl" name="marinaApiBaseUrl" type="url" value="https://booking.husi.ro" autocomplete="off" />
               </label>
               <label>
-                Token API
-                <input id="marinaApiToken" name="marinaApiToken" type="password" placeholder="Lasă gol pentru a păstra tokenul salvat" autocomplete="new-password" />
+                OAuth Client ID
+                <input id="marinaOAuthClientId" name="marinaOAuthClientId" type="text" placeholder="Client public Marina" autocomplete="off" />
               </label>
               <div class="field-grid">
                 <label>
@@ -149,18 +149,22 @@
                   <input id="marinaCampingWorkspaceId" name="marinaCampingWorkspaceId" type="number" min="1" step="1" placeholder="Implicit" />
                 </label>
               </div>
-              <label class="settings-check-row">
-                <input id="marinaClearToken" name="marinaClearToken" type="checkbox" />
-                Șterge tokenul API salvat local
-              </label>
               <div class="settings-inline-actions">
+                <button class="ghost-button compact-text" type="button" id="connectMarinaOAuth">
+                  <i data-lucide="log-in" aria-hidden="true"></i>
+                  <span>Conectează prin OAuth</span>
+                </button>
                 <button class="ghost-button compact-text" type="button" id="testMarinaConnection">
                   <i data-lucide="plug-zap" aria-hidden="true"></i>
                   <span>Testează conexiunea</span>
                 </button>
+                <button class="ghost-button compact-text" type="button" id="disconnectMarinaOAuth">
+                  <i data-lucide="log-out" aria-hidden="true"></i>
+                  <span>Deconectează</span>
+                </button>
                 <p class="settings-note" id="marinaConnectionStatus">Conexiunea nu a fost verificată.</p>
               </div>
-              <p class="settings-note">Tokenul rămâne în baza locală a aplicației și nu este afișat din nou. Lasă workspace-ul gol numai dacă tokenul are un workspace implicit.</p>
+              <p class="settings-note">Autentificarea folosește OAuth Authorization Code + PKCE. Client ID-ul este public; tokenurile de reîmprospătare sunt păstrate doar în stocarea securizată a sistemului. URI callback: <code>ro.marinapark.booking.desktop://oauth/callback</code>.</p>
             </section>
             <label>
               Director bonuri

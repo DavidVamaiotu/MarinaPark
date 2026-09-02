@@ -339,11 +339,12 @@ const timelineContextMenu = document.querySelector("#timelineContextMenu");
 const toast = document.querySelector("#toast");
 const settingsForm = document.querySelector("#settingsForm");
 const marinaApiBaseUrlInput = document.querySelector("#marinaApiBaseUrl");
-const marinaApiTokenInput = document.querySelector("#marinaApiToken");
+const marinaOAuthClientIdInput = document.querySelector("#marinaOAuthClientId");
 const marinaRoomsWorkspaceIdInput = document.querySelector("#marinaRoomsWorkspaceId");
 const marinaCampingWorkspaceIdInput = document.querySelector("#marinaCampingWorkspaceId");
-const marinaClearTokenInput = document.querySelector("#marinaClearToken");
+const connectMarinaOAuthButton = document.querySelector("#connectMarinaOAuth");
 const testMarinaConnectionButton = document.querySelector("#testMarinaConnection");
+const disconnectMarinaOAuthButton = document.querySelector("#disconnectMarinaOAuth");
 const marinaConnectionStatus = document.querySelector("#marinaConnectionStatus");
 const receiptDirectoryInput = document.querySelector("#receiptDirectory");
 const pickReceiptDirectoryButton = document.querySelector("#pickReceiptDirectory");
@@ -2385,20 +2386,24 @@ function marinaWorkspaceInputValue(value) {
 function applyMarinaSettings(settings = {}) {
   if (!marinaApiBaseUrlInput) return;
   marinaApiBaseUrlInput.value = settings.apiBaseUrl || "https://booking.husi.ro";
+  marinaOAuthClientIdInput.value = settings.oauthClientId || "";
   marinaRoomsWorkspaceIdInput.value = marinaWorkspaceInputValue(settings.roomsWorkspaceId);
   marinaCampingWorkspaceIdInput.value = marinaWorkspaceInputValue(settings.campingWorkspaceId);
-  marinaApiTokenInput.value = "";
-  marinaClearTokenInput.checked = false;
-  marinaApiTokenInput.disabled = settings.tokenManagedByEnvironment === true;
-  marinaClearTokenInput.disabled = settings.tokenManagedByEnvironment === true;
+  marinaOAuthClientIdInput.disabled = settings.oauthClientManagedByEnvironment === true;
   marinaApiBaseUrlInput.disabled = settings.apiUrlManagedByEnvironment === true;
   marinaRoomsWorkspaceIdInput.disabled = settings.workspacesManagedByEnvironment === true;
   marinaCampingWorkspaceIdInput.disabled = settings.workspacesManagedByEnvironment === true;
-  marinaConnectionStatus.textContent = settings.tokenConfigured
-    ? settings.tokenManagedByEnvironment
-      ? "Token configurat prin mediul aplicației."
-      : "Token configurat și păstrat local."
-    : "Tokenul API nu este configurat.";
+  if (settings.oauthError) {
+    marinaConnectionStatus.textContent = settings.oauthError;
+  } else if (settings.oauthConnected) {
+    marinaConnectionStatus.textContent = "Conectat prin OAuth Marina.";
+  } else if (settings.oauthConnecting) {
+    marinaConnectionStatus.textContent = "Se așteaptă autentificarea OAuth Marina în browser...";
+  } else if (settings.oauthConfigured) {
+    marinaConnectionStatus.textContent = "OAuth configurat. Apasă «Conectează prin OAuth».";
+  } else {
+    marinaConnectionStatus.textContent = "Introdu Client ID-ul OAuth Marina în Setări.";
+  }
 }
 
 async function loadMarinaSettings() {
@@ -2422,16 +2427,63 @@ async function saveMarinaSettings() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       apiBaseUrl: marinaApiBaseUrlInput.value.trim(),
-      apiToken: marinaApiTokenInput.value.trim(),
+      oauthClientId: marinaOAuthClientIdInput.value.trim(),
       roomsWorkspaceId: marinaRoomsWorkspaceIdInput.value,
-      campingWorkspaceId: marinaCampingWorkspaceIdInput.value,
-      clearToken: marinaClearTokenInput.checked
+      campingWorkspaceId: marinaCampingWorkspaceIdInput.value
     })
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.ok) throw new Error(result.error || "Setările Marina nu au putut fi salvate");
   applyMarinaSettings(result);
   return result;
+}
+
+let marinaOAuthPollTimer = null;
+
+function stopMarinaOAuthPolling() {
+  if (marinaOAuthPollTimer) window.clearInterval(marinaOAuthPollTimer);
+  marinaOAuthPollTimer = null;
+}
+
+function pollMarinaOAuthStatus() {
+  stopMarinaOAuthPolling();
+  let attempts = 0;
+  marinaOAuthPollTimer = window.setInterval(async () => {
+    attempts += 1;
+    try {
+      const response = await fetch("/api/marina-oauth/status", { cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "Starea OAuth Marina nu a putut fi citită");
+      applyMarinaSettings(result);
+      if (result.oauthConnected || result.oauthError || attempts >= 120) stopMarinaOAuthPolling();
+    } catch (error) {
+      if (attempts >= 120) {
+        stopMarinaOAuthPolling();
+        marinaConnectionStatus.textContent = error.message || "Starea OAuth Marina nu a putut fi citită.";
+      }
+    }
+  }, 1500);
+}
+
+async function connectMarinaOAuth() {
+  if (!connectMarinaOAuthButton) return;
+  try {
+    connectMarinaOAuthButton.disabled = true;
+    marinaConnectionStatus.textContent = "Se pregătește autentificarea OAuth Marina...";
+    await saveMarinaSettings();
+    const response = await fetch("/api/marina-oauth/start", { method: "POST" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || "Autentificarea OAuth Marina nu a putut fi pornită");
+    window.open(result.authorizationUrl, "_blank", "noopener,noreferrer");
+    marinaConnectionStatus.textContent = "Autentifică-te în browserul deschis; aplicația va detecta automat revenirea.";
+    pollMarinaOAuthStatus();
+  } catch (error) {
+    stopMarinaOAuthPolling();
+    marinaConnectionStatus.textContent = error.message || "Autentificarea OAuth Marina nu a putut fi pornită.";
+  } finally {
+    connectMarinaOAuthButton.disabled = false;
+    refreshIcons();
+  }
 }
 
 async function testMarinaConnection() {
@@ -2449,6 +2501,24 @@ async function testMarinaConnection() {
     marinaConnectionStatus.textContent = error.message || "Conexiunea Marina nu a putut fi verificată.";
   } finally {
     testMarinaConnectionButton.disabled = false;
+    refreshIcons();
+  }
+}
+
+async function disconnectMarinaOAuth() {
+  if (!disconnectMarinaOAuthButton) return;
+  try {
+    disconnectMarinaOAuthButton.disabled = true;
+    stopMarinaOAuthPolling();
+    marinaConnectionStatus.textContent = "Se închide sesiunea Marina...";
+    const response = await fetch("/api/marina-oauth/disconnect", { method: "POST" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || "Sesiunea Marina nu a putut fi închisă");
+    applyMarinaSettings(result);
+  } catch (error) {
+    marinaConnectionStatus.textContent = error.message || "Sesiunea Marina nu a putut fi închisă.";
+  } finally {
+    disconnectMarinaOAuthButton.disabled = false;
     refreshIcons();
   }
 }
@@ -8304,7 +8374,9 @@ settingsForm.addEventListener("submit", async (event) => {
   }
 });
 
+connectMarinaOAuthButton?.addEventListener("click", connectMarinaOAuth);
 testMarinaConnectionButton?.addEventListener("click", testMarinaConnection);
+disconnectMarinaOAuthButton?.addEventListener("click", disconnectMarinaOAuth);
 
 pickReceiptDirectoryButton.addEventListener("click", async () => {
   try {

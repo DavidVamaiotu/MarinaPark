@@ -1,15 +1,117 @@
-const { app, BrowserWindow, dialog, shell, screen } = require("electron");
+const { app, BrowserWindow, dialog, safeStorage, shell, screen } = require("electron");
 const fsp = require("fs/promises");
+const fsSync = require("fs");
+const { execFileSync } = require("child_process");
 const path = require("path");
 const { copyMissingFiles, pathExists } = require("./persistent-files");
 
 app.setName("Marina Park");
+if (process.platform === "linux") app.commandLine.appendSwitch("password-store", "gnome-libsecret");
 
 const COMPACT_UI_SCALE = 0.92;
 
 let mainWindow = null;
 let serverController = null;
 let updateTimer = null;
+const marinaOAuthProtocol = "ro.marinapark.booking.desktop";
+const pendingOAuthUrls = [];
+
+function oauthUrlFromArgs(args = []) {
+  return args.find((value) => String(value).startsWith(`${marinaOAuthProtocol}://`)) || null;
+}
+
+function registerDesktopOAuthProtocol() {
+  try {
+    if (app.isPackaged) app.setAsDefaultProtocolClient(marinaOAuthProtocol);
+    else app.setAsDefaultProtocolClient(marinaOAuthProtocol, process.execPath, [path.resolve(__dirname), "%u"]);
+  } catch (error) {
+    console.error("Marina OAuth protocol registration failed:", error.message);
+  }
+  if (process.platform !== "linux") return;
+  try {
+    const applicationsDirectory = path.join(app.getPath("home"), ".local", "share", "applications");
+    const desktopFile = path.join(applicationsDirectory, "marina-park-oauth.desktop");
+    const projectArgument = app.isPackaged ? "" : ` ${JSON.stringify(__dirname)}`;
+    const contents = [
+      "[Desktop Entry]",
+      "Type=Application",
+      "Name=Marina Park OAuth",
+      "NoDisplay=true",
+      `Exec=${JSON.stringify(process.execPath)}${projectArgument} %u`,
+      "Terminal=false",
+      `MimeType=x-scheme-handler/${marinaOAuthProtocol};`,
+      "Categories=Office;",
+      ""
+    ].join("\n");
+    fsSync.mkdirSync(applicationsDirectory, { recursive: true });
+    const temporaryFile = `${desktopFile}.${process.pid}.tmp`;
+    fsSync.writeFileSync(temporaryFile, contents, { mode: 0o644 });
+    fsSync.renameSync(temporaryFile, desktopFile);
+    try { execFileSync("update-desktop-database", [applicationsDirectory], { stdio: "ignore" }); } catch {}
+    try { execFileSync("xdg-mime", ["default", path.basename(desktopFile), `x-scheme-handler/${marinaOAuthProtocol}`], { stdio: "ignore" }); } catch {}
+  } catch (error) {
+    console.error("Marina OAuth Linux protocol registration failed:", error.message);
+  }
+}
+
+function createMarinaOAuthStorage(userDataDir) {
+  const tokenPath = path.join(userDataDir, "marina-oauth-refresh-token.bin");
+  const ensureSecureStorage = () => {
+    if (!safeStorage.isEncryptionAvailable() || safeStorage.getSelectedStorageBackend?.() === "basic_text") {
+      const error = new Error("Conectarea Marina necesită stocarea securizată a sistemului.");
+      error.code = "marina_secure_storage_unavailable";
+      throw error;
+    }
+  };
+  return {
+    hasRefreshTokenSync() {
+      try {
+        ensureSecureStorage();
+        return Boolean(safeStorage.decryptString(fsSync.readFileSync(tokenPath)));
+      } catch {
+        return false;
+      }
+    },
+    async getRefreshToken() {
+      ensureSecureStorage();
+      try {
+        return safeStorage.decryptString(await fsp.readFile(tokenPath));
+      } catch {
+        return "";
+      }
+    },
+    async setRefreshToken(value) {
+      ensureSecureStorage();
+      await fsp.writeFile(tokenPath, safeStorage.encryptString(String(value || "")), { mode: 0o600 });
+      await fsp.chmod(tokenPath, 0o600);
+    },
+    async clearRefreshToken() {
+      await fsp.rm(tokenPath, { force: true });
+    }
+  };
+}
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+async function handleOAuthUrl(url) {
+  if (!url) return;
+  if (!serverController) {
+    pendingOAuthUrls.push(url);
+    return;
+  }
+  try {
+    await serverController.handleMarinaOAuthCallback(url);
+    focusMainWindow();
+  } catch (error) {
+    console.error("Marina OAuth callback failed:", error.code || error.message);
+    focusMainWindow();
+  }
+}
 
 function syncWindowZoom() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -233,9 +335,12 @@ async function startApplication() {
   process.env.MARINA_DATA_DIR = dataDir;
   process.env.MARINA_RUNTIME_DIR = runtimeDir;
 
+  registerDesktopOAuthProtocol();
   serverController = require("./server");
+  serverController.setMarinaOAuthStorage(createMarinaOAuthStorage(userDataDir));
   const { url } = await serverController.startServer({ host: "0.0.0.0", localHost: "127.0.0.1", port: 4173, portAttempts: 100 });
   await createWindow(url, customDir);
+  for (const oauthUrl of pendingOAuthUrls.splice(0)) await handleOAuthUrl(oauthUrl);
   serverController.setLiveScreenCaptureProvider(captureMainWindowJpeg);
   serverController.setPdfRenderProvider(renderHtmlToPdf);
   setupAutoUpdater();
@@ -245,12 +350,16 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    void handleOAuthUrl(url);
   });
+  app.on("second-instance", (_event, commandLine) => {
+    void handleOAuthUrl(oauthUrlFromArgs(commandLine));
+    focusMainWindow();
+  });
+  const initialOAuthUrl = oauthUrlFromArgs(process.argv);
+  if (initialOAuthUrl) pendingOAuthUrls.push(initialOAuthUrl);
 
   app.whenReady().then(startApplication).catch(async (error) => {
     console.error(error);

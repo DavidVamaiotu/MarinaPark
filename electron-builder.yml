@@ -13,6 +13,7 @@ files:
   - persistent-files.js
   - client-directory.js
   - stationing-calculator.js
+  - marina-oauth.js
   - server.js
   - app.js
   - app-dialog.js

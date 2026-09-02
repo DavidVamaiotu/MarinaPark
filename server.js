@@ -4,6 +4,7 @@ const fsSync = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
+const { DEFAULT_SCOPES: MARINA_OAUTH_DEFAULT_SCOPES, DESKTOP_REDIRECT_URI: MARINA_OAUTH_REDIRECT_URI, buildAuthorizationUrl, createPkcePair, createState, formBody, parseCallbackUrl, validateState } = require("./marina-oauth");
 const { DatabaseSync } = require("node:sqlite");
 const { ClientHistoryStore, mergeClientDirectory, normalizeClientName } = require("./client-directory");
 const stationingCalculator = require("./stationing-calculator");
@@ -30,9 +31,21 @@ const legacyReservationsIndexPath = path.join(dataDir, "reservations", "index.js
 const legacyConfigPath = path.join(dataDir, "config.json");
 const port = Number(process.env.PORT || 4173);
 const defaultMarinaApiBaseUrl = "https://booking.husi.ro";
+const marinaOAuthMetadataPath = "/.well-known/oauth-authorization-server";
+const marinaOAuthPendingMaxAgeMs = 10 * 60 * 1000;
+const marinaOAuthAccessSkewMs = 60 * 1000;
+const marinaOAuthTerminalRefreshErrors = new Set(["invalid_grant", "invalid_token", "invalid_client", "unauthorized_client"]);
 let liveScreenCaptureProvider = null;
 let liveScreenFramePromise = null;
 let pdfRenderProvider = null;
+let marinaOAuthStorage = null;
+let marinaOAuthPending = null;
+let marinaOAuthAccessToken = "";
+let marinaOAuthAccessTokenExpiresAt = 0;
+let marinaOAuthRefreshPromise = null;
+let marinaOAuthMetadataCache = null;
+let marinaOAuthLastError = "";
+let marinaOAuthMemoryRefreshToken = "";
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -94,7 +107,10 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS marina_api_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     api_base_url TEXT NOT NULL,
+    -- Kept for SQLite compatibility with pre-OAuth installations; never read for authentication.
     api_token TEXT NOT NULL DEFAULT '',
+    oauth_client_id TEXT NOT NULL DEFAULT '',
+    oauth_scopes TEXT NOT NULL DEFAULT '',
     rooms_workspace_id INTEGER,
     camping_workspace_id INTEGER,
     updated_at TEXT NOT NULL
@@ -217,6 +233,8 @@ function ensureColumn(tableName, columnName, definition) {
 
 ensureColumn("stationing", "price_per_day_cents", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("stationing", "open_ended", "INTEGER NOT NULL DEFAULT 1");
+ensureColumn("marina_api_settings", "oauth_client_id", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("marina_api_settings", "oauth_scopes", "TEXT NOT NULL DEFAULT ''");
 
 function send(response, status, body, contentType = "application/json; charset=utf-8", headers = {}) {
   response.writeHead(status, {
@@ -2680,30 +2698,79 @@ function normalizeMarinaWorkspaceId(value, label) {
   return id;
 }
 
+function setMarinaOAuthStorage(storage) {
+  marinaOAuthStorage = storage && typeof storage === "object" ? storage : null;
+}
+
+function activeMarinaOAuthStorage() {
+  return marinaOAuthStorage || {
+    async getRefreshToken() { return marinaOAuthMemoryRefreshToken; },
+    async setRefreshToken(value) { marinaOAuthMemoryRefreshToken = String(value || ""); },
+    async clearRefreshToken() { marinaOAuthMemoryRefreshToken = ""; },
+    hasRefreshTokenSync() { return Boolean(marinaOAuthMemoryRefreshToken); }
+  };
+}
+
+async function marinaOAuthRefreshToken() {
+  try {
+    return String((await activeMarinaOAuthStorage().getRefreshToken()) || "").trim();
+  } catch (error) {
+    if (error?.code === "marina_secure_storage_unavailable") throw error;
+    return "";
+  }
+}
+
+async function storeMarinaOAuthRefreshToken(value) {
+  const token = String(value || "").trim();
+  await activeMarinaOAuthStorage().setRefreshToken(token);
+  marinaOAuthMemoryRefreshToken = token;
+}
+
+async function clearMarinaOAuthSession() {
+  marinaOAuthPending = null;
+  marinaOAuthAccessToken = "";
+  marinaOAuthAccessTokenExpiresAt = 0;
+  marinaOAuthLastError = "";
+  marinaOAuthMemoryRefreshToken = "";
+  try { await activeMarinaOAuthStorage().clearRefreshToken(); } catch {}
+}
+
+function normalizeMarinaOAuthClientId(value) {
+  const clientId = String(value || "").trim();
+  if (clientId.length > 512) throw requestError(400, "Client ID-ul OAuth Marina este prea lung");
+  return clientId;
+}
+
+function normalizeMarinaOAuthScopes(value) {
+  const values = Array.isArray(value) ? value : String(value || "").split(/[\s,]+/);
+  const scopes = [...new Set(values.map((scope) => String(scope).trim()).filter(Boolean))];
+  return scopes.length ? scopes : [...MARINA_OAUTH_DEFAULT_SCOPES];
+}
+
 function storedMarinaApiSettings() {
   return db.prepare(`
-    SELECT api_base_url, api_token, rooms_workspace_id, camping_workspace_id, updated_at
+    SELECT api_base_url, oauth_client_id, oauth_scopes, rooms_workspace_id, camping_workspace_id, updated_at
     FROM marina_api_settings WHERE id = 1
   `).get() || {
     api_base_url: defaultMarinaApiBaseUrl,
-    api_token: "",
+    oauth_client_id: "",
+    oauth_scopes: MARINA_OAUTH_DEFAULT_SCOPES.join(" "),
     rooms_workspace_id: null,
     camping_workspace_id: null,
     updated_at: ""
   };
 }
 
-function environmentMarinaToken() {
-  return String(process.env.MARINA_API_TOKEN || process.env.MARINA_BOOKING_CALENDAR_API_TOKEN || "").trim();
-}
-
 function effectiveMarinaApiSettings() {
   const stored = storedMarinaApiSettings();
   const environmentWorkspace = process.env.MARINA_WORKSPACE_ID;
+  const environmentClientId = String(process.env.MARINA_OAUTH_CLIENT_ID || "").trim();
+  const environmentScopes = String(process.env.MARINA_OAUTH_SCOPES || "").trim();
   const apiBaseUrlValue = process.env.MARINA_API_URL || process.env.MARINA_API_BASE_URL || stored.api_base_url || defaultMarinaApiBaseUrl;
   return {
     apiBaseUrl: normalizeMarinaApiBaseUrl(apiBaseUrlValue),
-    apiToken: environmentMarinaToken() || String(stored.api_token || "").trim(),
+    oauthClientId: normalizeMarinaOAuthClientId(environmentClientId || stored.oauth_client_id),
+    oauthScopes: normalizeMarinaOAuthScopes(environmentScopes || stored.oauth_scopes),
     roomsWorkspaceId: normalizeMarinaWorkspaceId(
       process.env.MARINA_ROOMS_WORKSPACE_ID || environmentWorkspace || stored.rooms_workspace_id,
       "Workspace-ul pentru Camere"
@@ -2712,7 +2779,8 @@ function effectiveMarinaApiSettings() {
       process.env.MARINA_CAMPING_WORKSPACE_ID || environmentWorkspace || stored.camping_workspace_id,
       "Workspace-ul pentru Camping"
     ),
-    tokenManagedByEnvironment: Boolean(environmentMarinaToken()),
+    oauthClientManagedByEnvironment: Boolean(environmentClientId),
+    oauthScopesManagedByEnvironment: Boolean(environmentScopes),
     apiUrlManagedByEnvironment: Boolean(process.env.MARINA_API_URL || process.env.MARINA_API_BASE_URL),
     workspacesManagedByEnvironment: Boolean(
       process.env.MARINA_ROOMS_WORKSPACE_ID || process.env.MARINA_CAMPING_WORKSPACE_ID || process.env.MARINA_WORKSPACE_ID
@@ -2721,16 +2789,32 @@ function effectiveMarinaApiSettings() {
   };
 }
 
+function marinaOAuthConnectedSync() {
+  const storage = activeMarinaOAuthStorage();
+  return Boolean(
+    (marinaOAuthAccessToken && marinaOAuthAccessTokenExpiresAt > Date.now()) ||
+    marinaOAuthMemoryRefreshToken ||
+    storage.hasRefreshTokenSync?.()
+  );
+}
+
 function publicMarinaApiSettings() {
   const settings = effectiveMarinaApiSettings();
   return {
     ok: true,
-    configured: Boolean(settings.apiToken),
-    tokenConfigured: Boolean(settings.apiToken),
+    configured: Boolean(settings.oauthClientId),
+    oauthConfigured: Boolean(settings.oauthClientId),
+    oauthConnected: Boolean(settings.oauthClientId && marinaOAuthConnectedSync()),
+    oauthConnecting: Boolean(marinaOAuthPending),
+    oauthError: marinaOAuthLastError,
+    oauthClientId: settings.oauthClientId,
+    oauthScopes: settings.oauthScopes,
+    redirectUri: MARINA_OAUTH_REDIRECT_URI,
     apiBaseUrl: settings.apiBaseUrl,
     roomsWorkspaceId: settings.roomsWorkspaceId,
     campingWorkspaceId: settings.campingWorkspaceId,
-    tokenManagedByEnvironment: settings.tokenManagedByEnvironment,
+    oauthClientManagedByEnvironment: settings.oauthClientManagedByEnvironment,
+    oauthScopesManagedByEnvironment: settings.oauthScopesManagedByEnvironment,
     apiUrlManagedByEnvironment: settings.apiUrlManagedByEnvironment,
     workspacesManagedByEnvironment: settings.workspacesManagedByEnvironment,
     updatedAt: settings.updatedAt
@@ -2740,22 +2824,28 @@ function publicMarinaApiSettings() {
 function saveMarinaApiSettings(payload = {}) {
   const current = storedMarinaApiSettings();
   const apiBaseUrl = normalizeMarinaApiBaseUrl(payload.apiBaseUrl ?? current.api_base_url);
+  const oauthClientId = normalizeMarinaOAuthClientId(payload.oauthClientId ?? current.oauth_client_id);
+  const oauthScopes = normalizeMarinaOAuthScopes(payload.oauthScopes ?? current.oauth_scopes).join(" ");
   const roomsWorkspaceId = normalizeMarinaWorkspaceId(payload.roomsWorkspaceId, "Workspace-ul pentru Camere");
   const campingWorkspaceId = normalizeMarinaWorkspaceId(payload.campingWorkspaceId, "Workspace-ul pentru Camping");
-  const submittedToken = String(payload.apiToken || "").trim();
-  const apiToken = payload.clearToken === true ? "" : submittedToken || String(current.api_token || "").trim();
+  const clientChanged = String(current.oauth_client_id || "").trim() !== oauthClientId;
+  const baseUrlChanged = String(current.api_base_url || "").trim() !== apiBaseUrl;
   const updatedAt = new Date().toISOString();
   db.prepare(`
     INSERT INTO marina_api_settings
-      (id, api_base_url, api_token, rooms_workspace_id, camping_workspace_id, updated_at)
-    VALUES (1, ?, ?, ?, ?, ?)
+      (id, api_base_url, api_token, oauth_client_id, oauth_scopes, rooms_workspace_id, camping_workspace_id, updated_at)
+    VALUES (1, ?, '', ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
+      api_token = '',
       api_base_url = excluded.api_base_url,
-      api_token = excluded.api_token,
+      oauth_client_id = excluded.oauth_client_id,
+      oauth_scopes = excluded.oauth_scopes,
       rooms_workspace_id = excluded.rooms_workspace_id,
       camping_workspace_id = excluded.camping_workspace_id,
       updated_at = excluded.updated_at
-  `).run(apiBaseUrl, apiToken, roomsWorkspaceId, campingWorkspaceId, updatedAt);
+  `).run(apiBaseUrl, oauthClientId, oauthScopes, roomsWorkspaceId, campingWorkspaceId, updatedAt);
+  if (baseUrlChanged) marinaOAuthMetadataCache = null;
+  if (clientChanged || baseUrlChanged) void clearMarinaOAuthSession();
   marinaSourceCache.clear();
   clientDirectoryCache = null;
   roomAvailabilityCache = null;
@@ -2769,48 +2859,244 @@ function marinaCollection(payload, keys = []) {
 }
 
 function marinaApiErrorMessage(status, payload) {
-  if (status === 401) return "Tokenul API Marina nu este valid";
-  if (status === 403) return "Tokenul API Marina nu are permisiunea bookings:read/resources:read";
+  if (status === 401) return "Conectarea OAuth Marina nu mai este validă. Reconectează contul.";
+  if (status === 403) return "Contul OAuth Marina nu are permisiunea bookings:read/resources:read";
   if (status === 404) return "Workspace-ul Marina nu este disponibil pentru această conexiune";
   if (status === 429) return "API-ul Marina a limitat temporar numărul de cereri";
   return String(payload?.detail || payload?.message || payload?.error || `API Marina: HTTP ${status}`);
 }
 
-async function marinaApiRequest(pathname, { workspaceId = null } = {}) {
-  const settings = effectiveMarinaApiSettings();
-  if (!settings.apiToken) throw requestError(503, "Configurează tokenul API Marina în Setări");
+function marinaOAuthEndpoint(value, label, settings) {
+  let endpoint;
+  try { endpoint = new URL(String(value || ""), `${settings.apiBaseUrl}/`); }
+  catch { throw requestError(502, `Endpoint-ul OAuth Marina ${label} este invalid`); }
+  const base = new URL(settings.apiBaseUrl);
+  if (endpoint.origin !== base.origin || endpoint.protocol !== base.protocol || endpoint.username || endpoint.password) {
+    throw requestError(502, `Endpoint-ul OAuth Marina ${label} nu aparține serverului configurat`);
+  }
+  return endpoint.toString();
+}
+
+async function marinaFetch(url, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
   try {
-    const headers = {
-      Accept: "application/json",
-      Authorization: `Bearer ${settings.apiToken}`
-    };
-    if (workspaceId !== null) headers["X-Workspace-ID"] = String(workspaceId);
-    let response;
     try {
-      response = await fetch(`${settings.apiBaseUrl}${pathname}`, {
-        method: "GET",
-        headers,
-        redirect: "error",
-        signal: controller.signal
-      });
+      return await fetch(url, { ...options, redirect: "error", signal: controller.signal });
     } catch (error) {
       throw requestError(502, error?.name === "AbortError" ? "Cererea către API-ul Marina a expirat" : "API-ul Marina nu poate fi accesat momentan");
     }
-    const text = await response.text();
-    let payload = {};
-    try { payload = text ? JSON.parse(text) : {}; } catch { payload = {}; }
-    if (!response.ok) throw requestError(response.status, marinaApiErrorMessage(response.status, payload));
-    return payload;
   } finally {
     clearTimeout(timer);
   }
 }
 
+async function marinaOAuthDiscovery(settings, { force = false } = {}) {
+  const cacheKey = `${settings.apiBaseUrl}|${settings.oauthClientId}`;
+  if (!force && marinaOAuthMetadataCache?.key === cacheKey) return marinaOAuthMetadataCache.metadata;
+  let response;
+  try {
+    response = await marinaFetch(`${settings.apiBaseUrl}${marinaOAuthMetadataPath}`, { method: "GET", headers: { Accept: "application/json" } });
+  } catch (error) {
+    throw requestError(502, `Descoperirea OAuth Marina a eșuat: ${error.message}`);
+  }
+  let payload = {};
+  const body = await response.text();
+  try { payload = body ? JSON.parse(body) : {}; } catch { payload = {}; }
+  if (!response.ok && ![404, 405].includes(response.status)) {
+    throw requestError(502, `Descoperirea OAuth Marina a eșuat (HTTP ${response.status})`);
+  }
+  const metadata = Object.freeze({
+    issuer: marinaOAuthEndpoint(payload.issuer || settings.apiBaseUrl, "issuer", settings),
+    authorizationEndpoint: marinaOAuthEndpoint(payload.authorization_endpoint || "/oauth/authorize", "de autorizare", settings),
+    tokenEndpoint: marinaOAuthEndpoint(payload.token_endpoint || "/oauth/token", "token", settings),
+    revocationEndpoint: marinaOAuthEndpoint(payload.revocation_endpoint || "/oauth/revoke", "revocare", settings)
+  });
+  marinaOAuthMetadataCache = { key: cacheKey, metadata };
+  return metadata;
+}
+
+async function marinaOAuthTokenRequest(settings, values) {
+  const metadata = await marinaOAuthDiscovery(settings);
+  const response = await marinaFetch(metadata.tokenEndpoint, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+    body: formBody(values)
+  });
+  const body = await response.text();
+  let payload = {};
+  try { payload = body ? JSON.parse(body) : {}; } catch { payload = {}; }
+  if (!response.ok || !payload.access_token) {
+    const error = requestError(response.status || 502, payload.error_description || "Schimbul tokenului OAuth Marina a eșuat");
+    error.code = String(payload.error || "marina_oauth_token_failed");
+    error.auth = true;
+    error.status = response.status;
+    throw error;
+  }
+  return payload;
+}
+
+async function applyMarinaOAuthToken(payload) {
+  marinaOAuthAccessToken = String(payload.access_token || "");
+  const expiresIn = Number(payload.expires_in);
+  const lifetimeMs = Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn * 1000 : 5 * 60 * 1000;
+  marinaOAuthAccessTokenExpiresAt = Date.now() + lifetimeMs;
+  if (payload.refresh_token) await storeMarinaOAuthRefreshToken(payload.refresh_token);
+}
+
+function marinaTestOAuthAccessToken() {
+  return process.env.NODE_ENV === "test" ? String(process.env.MARINA_OAUTH_TEST_ACCESS_TOKEN || "").trim() : "";
+}
+
+async function refreshMarinaOAuthAccessToken() {
+  if (marinaOAuthRefreshPromise) return marinaOAuthRefreshPromise;
+  marinaOAuthRefreshPromise = (async () => {
+    const settings = effectiveMarinaApiSettings();
+    if (!settings.oauthClientId) throw requestError(503, "Configurează Client ID-ul OAuth Marina în Setări");
+    const refreshToken = await marinaOAuthRefreshToken();
+    if (!refreshToken) throw requestError(401, "Conectează contul Marina prin OAuth înainte de a încărca rezervările");
+    try {
+      const payload = await marinaOAuthTokenRequest(settings, {
+        grant_type: "refresh_token",
+        client_id: settings.oauthClientId,
+        refresh_token: refreshToken
+      });
+      await applyMarinaOAuthToken(payload);
+      marinaOAuthLastError = "";
+      return marinaOAuthAccessToken;
+    } catch (error) {
+      marinaOAuthAccessToken = "";
+      marinaOAuthAccessTokenExpiresAt = 0;
+      if (marinaOAuthTerminalRefreshErrors.has(error.code) || error.status === 401) {
+        try { await activeMarinaOAuthStorage().clearRefreshToken(); } catch {}
+        marinaOAuthMemoryRefreshToken = "";
+      }
+      throw error;
+    }
+  })();
+  try { return await marinaOAuthRefreshPromise; }
+  finally { marinaOAuthRefreshPromise = null; }
+}
+
+async function marinaOAuthAccessTokenForApi() {
+  const testToken = marinaTestOAuthAccessToken();
+  if (testToken) return testToken;
+  const settings = effectiveMarinaApiSettings();
+  if (!settings.oauthClientId) throw requestError(503, "Configurează Client ID-ul OAuth Marina în Setări");
+  if (marinaOAuthAccessToken && marinaOAuthAccessTokenExpiresAt > Date.now() + marinaOAuthAccessSkewMs) return marinaOAuthAccessToken;
+  return refreshMarinaOAuthAccessToken();
+}
+
+async function marinaApiRequest(pathname, { workspaceId = null } = {}) {
+  const settings = effectiveMarinaApiSettings();
+  let token = await marinaOAuthAccessTokenForApi();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const headers = { Accept: "application/json", Authorization: `Bearer ${token}` };
+    if (workspaceId !== null) headers["X-Workspace-ID"] = String(workspaceId);
+    const response = await marinaFetch(`${settings.apiBaseUrl}${pathname}`, { method: "GET", headers });
+    const text = await response.text();
+    let payload = {};
+    try { payload = text ? JSON.parse(text) : {}; } catch { payload = {}; }
+    if (response.ok) return payload;
+    if (response.status === 401 && attempt === 0 && !marinaTestOAuthAccessToken()) {
+      marinaOAuthAccessToken = "";
+      marinaOAuthAccessTokenExpiresAt = 0;
+      token = await refreshMarinaOAuthAccessToken();
+      continue;
+    }
+    throw requestError(response.status, marinaApiErrorMessage(response.status, payload));
+  }
+  throw requestError(401, "Conectarea OAuth Marina nu mai este validă. Reconectează contul.");
+}
+
+async function startMarinaOAuth() {
+  const settings = effectiveMarinaApiSettings();
+  if (!settings.oauthClientId) throw requestError(400, "Introdu Client ID-ul OAuth Marina înainte de conectare");
+  const metadata = await marinaOAuthDiscovery(settings, { force: true });
+  const { codeVerifier, codeChallenge } = createPkcePair();
+  const state = createState();
+  marinaOAuthPending = { codeVerifier, state, createdAt: Date.now(), settings };
+  marinaOAuthLastError = "";
+  const authorizationUrl = buildAuthorizationUrl({
+    authorizationEndpoint: metadata.authorizationEndpoint,
+    clientId: settings.oauthClientId,
+    redirectUri: MARINA_OAUTH_REDIRECT_URI,
+    scopes: settings.oauthScopes,
+    state,
+    codeChallenge
+  });
+  return {
+    ok: true,
+    authorizationUrl,
+    redirectUri: MARINA_OAUTH_REDIRECT_URI,
+    scopes: settings.oauthScopes
+  };
+}
+
+async function handleMarinaOAuthCallback(callbackUrl) {
+  const pending = marinaOAuthPending;
+  if (!pending || Date.now() - pending.createdAt > marinaOAuthPendingMaxAgeMs) {
+    marinaOAuthPending = null;
+    throw requestError(400, "Nu există o autentificare Marina în curs sau cererea a expirat");
+  }
+  let callback;
+  try {
+    callback = parseCallbackUrl(callbackUrl, { protocol: "ro.marinapark.booking.desktop:", pathname: "/callback" });
+    validateState(pending.state, callback.state);
+  } catch (error) {
+    marinaOAuthPending = null;
+    marinaOAuthLastError = error.message;
+    throw requestError(400, error.message);
+  }
+  marinaOAuthPending = null;
+  try {
+    const payload = await marinaOAuthTokenRequest(pending.settings, {
+      grant_type: "authorization_code",
+      client_id: pending.settings.oauthClientId,
+      code: callback.code,
+      redirect_uri: MARINA_OAUTH_REDIRECT_URI,
+      code_verifier: pending.codeVerifier
+    });
+    await applyMarinaOAuthToken(payload);
+    marinaOAuthLastError = "";
+    marinaSourceCache.clear();
+    clientDirectoryCache = null;
+    roomAvailabilityCache = null;
+    return publicMarinaApiSettings();
+  } catch (error) {
+    marinaOAuthAccessToken = "";
+    marinaOAuthAccessTokenExpiresAt = 0;
+    marinaOAuthLastError = error.message;
+    throw error;
+  }
+}
+
+async function disconnectMarinaOAuth() {
+  const settings = effectiveMarinaApiSettings();
+  const refreshToken = await marinaOAuthRefreshToken();
+  try {
+    if (refreshToken && settings.oauthClientId) {
+      const metadata = await marinaOAuthDiscovery(settings);
+      await marinaFetch(metadata.revocationEndpoint, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+        body: formBody({ token: refreshToken, token_type_hint: "refresh_token", client_id: settings.oauthClientId })
+      });
+    }
+  } catch {
+    // The local session is still cleared when revocation is not reachable.
+  } finally {
+    await clearMarinaOAuthSession();
+    marinaSourceCache.clear();
+    clientDirectoryCache = null;
+    roomAvailabilityCache = null;
+  }
+  return publicMarinaApiSettings();
+}
+
 async function testMarinaApiConnection() {
   const settings = effectiveMarinaApiSettings();
-  if (!settings.apiToken) throw requestError(400, "Introdu tokenul API Marina înainte de testare");
+  if (!settings.oauthClientId && !marinaTestOAuthAccessToken()) throw requestError(400, "Introdu Client ID-ul OAuth Marina înainte de testare");
   const workspaces = [...new Set([settings.roomsWorkspaceId, settings.campingWorkspaceId])];
   const results = [];
   for (const workspaceId of workspaces) {
@@ -3358,6 +3644,21 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.url === "/api/marina-oauth/start" && ["GET", "POST"].includes(request.method)) {
+      send(response, 200, JSON.stringify(await startMarinaOAuth()));
+      return;
+    }
+
+    if (request.url === "/api/marina-oauth/status" && request.method === "GET") {
+      send(response, 200, JSON.stringify(publicMarinaApiSettings()));
+      return;
+    }
+
+    if (request.url === "/api/marina-oauth/disconnect" && request.method === "POST") {
+      send(response, 200, JSON.stringify(await disconnectMarinaOAuth()));
+      return;
+    }
+
     if (request.url === "/api/marina-settings/test" && request.method === "POST") {
       send(response, 200, JSON.stringify(await testMarinaApiConnection()));
       return;
@@ -3453,6 +3754,8 @@ if (require.main === module) {
 
 module.exports = {
   buildSagaBarSalesReportHtml,
+  handleMarinaOAuthCallback,
+  setMarinaOAuthStorage,
   setLiveScreenCaptureProvider,
   setPdfRenderProvider,
   startServer,

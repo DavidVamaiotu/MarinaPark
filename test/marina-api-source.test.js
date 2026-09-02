@@ -21,7 +21,17 @@ async function startFakeMarinaApi() {
     const workspaceId = request.headers["x-workspace-id"] || "";
     requests.push({ pathname: url.pathname, search: url.search, workspaceId, authorization: request.headers.authorization });
     response.setHeader("Content-Type", "application/json");
-    if (request.headers.authorization !== "Bearer secret-token") {
+    if (url.pathname === "/.well-known/oauth-authorization-server") {
+      const base = `http://${request.headers.host}`;
+      response.end(JSON.stringify({
+        issuer: base,
+        authorization_endpoint: `${base}/oauth/authorize`,
+        token_endpoint: `${base}/oauth/token`,
+        revocation_endpoint: `${base}/oauth/revoke`
+      }));
+      return;
+    }
+    if (request.headers.authorization !== "Bearer oauth-access-token") {
       response.statusCode = 401;
       response.end(JSON.stringify({ message: "unauthorized" }));
       return;
@@ -97,10 +107,10 @@ async function startAppServer() {
     env: {
       ...process.env,
       PORT: "0",
+      NODE_ENV: "test",
       MARINA_DATA_DIR: dataDir,
       MARINA_RUNTIME_DIR: runtimeDir,
-      MARINA_API_TOKEN: "",
-      MARINA_BOOKING_CALENDAR_API_TOKEN: "",
+      MARINA_OAUTH_TEST_ACCESS_TOKEN: "oauth-access-token",
       MARINA_API_URL: "",
       MARINA_API_BASE_URL: "",
       MARINA_WORKSPACE_ID: "",
@@ -147,7 +157,7 @@ test("Marina settings stay server-side and drive paginated workspace booking imp
     method: "POST",
     body: JSON.stringify({
       apiBaseUrl: marina.url,
-      apiToken: "secret-token",
+      oauthClientId: "test-client",
       roomsWorkspaceId: 11,
       campingWorkspaceId: 22
     })
@@ -157,7 +167,8 @@ test("Marina settings stay server-side and drive paginated workspace booking imp
   assert.equal("apiToken" in saved.body, false);
 
   const readBack = await jsonRequest(app.url, "/api/marina-settings");
-  assert.equal(readBack.body.tokenConfigured, true);
+  assert.equal(readBack.body.oauthConfigured, true);
+  assert.equal(readBack.body.oauthConnected, false);
   assert.equal("apiToken" in readBack.body, false);
 
   const tested = await jsonRequest(app.url, "/api/marina-settings/test", { method: "POST" });
@@ -181,7 +192,7 @@ test("Marina settings stay server-side and drive paginated workspace booking imp
   assert.ok(rvSources.body.bookings.some((booking) => booking.guest === "Radu Rulotă" && booking.mode === "rv"));
 
   assert.ok(marina.requests.some((request) => request.pathname === "/v1/bookings" && request.search.includes("after=rooms-page-2")));
-  assert.ok(marina.requests.every((request) => request.authorization === "Bearer secret-token"));
+  assert.ok(marina.requests.filter((request) => request.pathname !== "/.well-known/oauth-authorization-server").every((request) => request.authorization === "Bearer oauth-access-token"));
   assert.ok(marina.requests.some((request) => request.workspaceId === "11"));
   assert.ok(marina.requests.some((request) => request.workspaceId === "22"));
 });

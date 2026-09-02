@@ -45,18 +45,24 @@ Instalarea Electron separă aplicația de fișierele care trebuie păstrate:
 ## Fuziunea registrului de clienți
 
 Lista „Rezervări efectuate” din formularul de adăugare client combină
-rezervările citite din bazele SQL Marina Park cu istoricul local. Aplicația
+rezervările citite din API-ul Marina prin OAuth cu istoricul local. Aplicația
 păstrează istoricul într-un fișier SQLite separat:
 
 - `%APPDATA%\Marina Park\data\client-history.sqlite`
 
 La sincronizare, numele sunt comparate fără diferențe de majuscule, diacritice,
 semne sau spații multiple. Orice client salvat local într-o unitate este păstrat
-în istoricul separat, indiferent dacă apare și în SQL. În lista fuzionată,
-rezervările SQL au prioritate pentru același nume, ca să nu apară duplicate.
+în istoricul separat, indiferent dacă apare și în API. În lista fuzionată,
+rezervările Marina au prioritate pentru același nume, ca să nu apară duplicate.
 Detaliile locale rămân în fișier chiar dacă rezervarea activă este eliminată
 ulterior. Când este selectat un client din istoricul local, formularul preia doar
 datele de identificare/contact; perioada și prețul rămân cele ale rezervării noi.
+
+Configurează conexiunea din Setări cu API URL-ul, OAuth Client ID-ul public și
+workspace-urile Camere/Camping. Butonul „Conectează prin OAuth” deschide autentificarea
+Marina în browser; callback-ul desktop este `ro.marinapark.booking.desktop://oauth/callback`.
+Access token-ul rămâne doar în memorie, iar refresh token-ul este păstrat în stocarea
+securizată a sistemului.
 
 Pentru o rezervare viitoare de camping, butonul de legare caută o staționare
 cu același nume normalizat și cu nopți rămase. Dacă există exact una, formularul
