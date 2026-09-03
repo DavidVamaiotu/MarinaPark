@@ -67,10 +67,12 @@ if (clientHistoryDatabasePath === databasePath) {
   throw new Error("Baza istoricului de clienți trebuie să fie un fișier SQLite separat.");
 }
 const clientHistoryStore = new ClientHistoryStore(clientHistoryDatabasePath);
-const clientDirectoryCacheMs = 60 * 1000;
+const clientDirectoryCacheMs = 10 * 60 * 1000;
+const roomAvailabilityCacheMs = 60 * 1000;
 let clientDirectoryCache = null;
 let roomAvailabilityCache = null;
 const marinaSourceCache = new Map();
+const inFlightMarinaRequests = new Map();
 db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
@@ -3101,6 +3103,7 @@ async function handleMarinaOAuthCallback(callbackUrl) {
     await applyMarinaOAuthToken(payload);
     marinaOAuthLastError = "";
     marinaSourceCache.clear();
+    inFlightMarinaRequests.clear();
     clientDirectoryCache = null;
     roomAvailabilityCache = null;
     return publicMarinaApiSettings();
@@ -3129,6 +3132,7 @@ async function disconnectMarinaOAuth() {
   } finally {
     await clearMarinaOAuthSession();
     marinaSourceCache.clear();
+    inFlightMarinaRequests.clear();
     clientDirectoryCache = null;
     roomAvailabilityCache = null;
   }
@@ -3370,6 +3374,8 @@ function marinaSourceBooking(booking, resources, mode) {
     id: booking.id ?? booking.booking_id ?? booking.uuid ?? `${resourceId}:${start}:${guest}`,
     providerBookingId: booking.id ?? booking.booking_id ?? booking.uuid ?? "",
     source: "marina",
+    directorySource: "marina",
+    normalizedName: normalizeClientName(guest),
     guest,
     phone: String(customer.phone ?? booking.phone ?? "").trim(),
     car: marinaCustomField(booking, ["car_plates", "car", "vehicle_registration", "registration_number"]),
@@ -3393,25 +3399,50 @@ function marinaSourceBooking(booking, resources, mode) {
   };
 }
 
-async function fetchMarinaWorkspaceBookings(mode) {
+async function fetchMarinaWorkspaceBookings(mode, { limit = 300, maxPages = 2, force = false } = {}) {
   const settings = effectiveMarinaApiSettings();
   const workspaceId = mode === "camping" ? settings.campingWorkspaceId : settings.roomsWorkspaceId;
   const cacheKey = `${mode}:${workspaceId ?? "default"}`;
   const cached = marinaSourceCache.get(cacheKey);
-  if (cached?.expiresAt > Date.now()) return cached.bookings;
-  const resources = await fetchMarinaWorkspaceResources(mode);
-  const rows = [];
-  let after = "";
-  do {
-    const params = new URLSearchParams({ limit: "200" });
-    if (after) params.set("after", after);
-    const payload = await marinaApiRequest(`/v1/bookings?${params}`, { workspaceId });
-    rows.push(...marinaCollection(payload, ["bookings"]));
-    after = String(payload?.next_cursor ?? payload?.pagination?.next_cursor ?? payload?.meta?.next_cursor ?? "");
-  } while (after);
-  const bookings = rows.map((booking) => marinaSourceBooking(booking, resources, mode)).filter(Boolean);
-  marinaSourceCache.set(cacheKey, { ...marinaSourceCache.get(cacheKey), expiresAt: Date.now() + clientDirectoryCacheMs, bookings, resources });
-  return bookings;
+  if (!force && cached?.expiresAt > Date.now()) return cached.bookings;
+
+  if (inFlightMarinaRequests.has(cacheKey)) {
+    return inFlightMarinaRequests.get(cacheKey);
+  }
+
+  const fetchPromise = (async () => {
+    try {
+      const batchLimit = Math.max(1, Math.min(200, Number(limit) || 200));
+      const firstParams = new URLSearchParams({ limit: String(batchLimit) });
+
+      await marinaOAuthAccessTokenForApi();
+      const [resources, firstPayload] = await Promise.all([
+        fetchMarinaWorkspaceResources(mode),
+        marinaApiRequest(`/v1/bookings?${firstParams}`, { workspaceId })
+      ]);
+
+      const rows = [...marinaCollection(firstPayload, ["bookings"])];
+      let after = String(firstPayload?.next_cursor ?? firstPayload?.pagination?.next_cursor ?? firstPayload?.meta?.next_cursor ?? "");
+      let pageCount = 1;
+
+      while (after && rows.length < limit && pageCount < maxPages) {
+        const nextParams = new URLSearchParams({ limit: String(batchLimit), after });
+        const nextPayload = await marinaApiRequest(`/v1/bookings?${nextParams}`, { workspaceId });
+        rows.push(...marinaCollection(nextPayload, ["bookings"]));
+        after = String(nextPayload?.next_cursor ?? nextPayload?.pagination?.next_cursor ?? nextPayload?.meta?.next_cursor ?? "");
+        pageCount += 1;
+      }
+
+      const bookings = rows.map((booking) => marinaSourceBooking(booking, resources, mode)).filter(Boolean);
+      marinaSourceCache.set(cacheKey, { ...marinaSourceCache.get(cacheKey), expiresAt: Date.now() + clientDirectoryCacheMs, bookings, resources });
+      return bookings;
+    } finally {
+      inFlightMarinaRequests.delete(cacheKey);
+    }
+  })();
+
+  inFlightMarinaRequests.set(cacheKey, fetchPromise);
+  return fetchPromise;
 }
 
 async function fetchMarinaWorkspaceResources(mode) {
@@ -3419,10 +3450,10 @@ async function fetchMarinaWorkspaceResources(mode) {
   const workspaceId = mode === "camping" ? settings.campingWorkspaceId : settings.roomsWorkspaceId;
   const cacheKey = String(mode) + ":" + (workspaceId ?? "default");
   const cached = marinaSourceCache.get(cacheKey);
-  if (Array.isArray(cached?.resources)) return cached.resources;
+  if (Array.isArray(cached?.resources) && cached?.resourcesExpiresAt > Date.now()) return cached.resources;
   const resourcePayload = await marinaApiRequest("/v1/resources", { workspaceId });
   const resources = marinaCollection(resourcePayload, ["resources"]);
-  marinaSourceCache.set(cacheKey, { ...cached, resources });
+  marinaSourceCache.set(cacheKey, { ...cached, resources, resourcesExpiresAt: Date.now() + 60 * 60 * 1000 });
   return resources;
 }
 
@@ -3456,7 +3487,17 @@ async function fetchMarinaSourceBookingDetails(mode, providerBookingId) {
 
 function filteredSourceBookings(bookings, query, limit) {
   const normalizedQuery = normalizeSearchText(query);
-  if (!normalizedQuery) return [...bookings].sort(sortSourceBookings).slice(0, limit);
+  if (!normalizedQuery) {
+    const ranked = [...bookings].sort(sortSourceBookings);
+    const kept = ranked.slice(0, limit);
+    // Active stays started earlier must never fall out of the capped pool:
+    // they occupy today and are needed for availability and the client directory.
+    const todayText = localISODate();
+    for (const booking of ranked.slice(limit)) {
+      if (sourceBookingOccupiesDate(booking, todayText)) kept.push(booking);
+    }
+    return kept;
+  }
   return bookings
     .map((booking) => ({ booking, score: fuzzyMatchScore(query, booking.guest) }))
     .filter((match) => Number.isFinite(match.score))
@@ -3476,8 +3517,16 @@ async function fetchSourceBookings(mode, query = "", options = {}) {
   const isCamping = mode === "camping";
   const limit = Math.max(1, Math.min(50000, Number(options.limit || 300)));
   const fixtureBookings = await sourceBookingFixture(isCamping ? "camping" : "room");
-  if (fixtureBookings) return filteredSourceBookings(fixtureBookings, query, limit);
-  return filteredSourceBookings(await fetchMarinaWorkspaceBookings(isCamping ? "camping" : "room"), query, limit);
+  if (fixtureBookings) {
+    const normalized = fixtureBookings.map((b) => ({ ...b, directorySource: "marina" }));
+    return filteredSourceBookings(normalized, query, limit);
+  }
+  const maxPages = options.all ? 100 : Math.max(1, Math.ceil(limit / 200));
+  return filteredSourceBookings(
+    await fetchMarinaWorkspaceBookings(isCamping ? "camping" : "room", { limit, maxPages, force: options.force === true }),
+    query,
+    limit
+  );
 }
 
 async function fetchClientDirectory(options = {}) {
@@ -3487,16 +3536,15 @@ async function fetchClientDirectory(options = {}) {
   }
 
   const sources = await Promise.allSettled([
-    fetchSourceBookings("room", "", { all: true, limit: 50000 }),
-    fetchSourceBookings("camping", "", { all: true, limit: 50000 })
+    fetchSourceBookings("room", "", { limit: 300 }),
+    fetchSourceBookings("camping", "", { limit: 300 })
   ]);
   const marinaBookings = sources.flatMap((result) => result.status === "fulfilled" ? result.value : []);
   const warnings = sources
     .filter((result) => result.status === "rejected")
     .map((result) => String(result.reason?.message || result.reason || "Marina indisponibil"));
   const localReservations = reservationRows().filter((stay) => normalizeClientName(stay.guest));
-  const historyChanges = clientHistoryStore.syncReservations(localReservations);
-  if (historyChanges > 0) await enqueueDatabaseBackup({ afterMutation: true });
+  clientHistoryStore.syncReservations(localReservations);
   const localClients = clientHistoryStore.clients();
   const clients = mergeClientDirectory(marinaBookings, localClients);
   const result = {
@@ -3530,8 +3578,11 @@ function sourceBookingFromDirectoryClient(client = {}, fallbackMode = "room") {
   const children = Math.max(0, Number(client.children || 0));
   const previousRoom = localHistory ? String(client.room || "").trim() : "";
   const previousCategory = localHistory ? String(client.category || "").trim() : "";
+  const normalizedName = client.normalizedName || normalizeClientName(client.guest);
   return {
     ...client,
+    normalizedName,
+    directorySource: localHistory ? "local-history" : (client.directorySource || "marina"),
     source: localHistory ? "istoric local" : client.source || (group === "camping" ? "camping" : "camere"),
     guest: client.guest || "",
     phone: client.phone || "",
@@ -3558,11 +3609,23 @@ function sourceBookingFromDirectoryClient(client = {}, fallbackMode = "room") {
 }
 
 async function fetchFusedSourceBookings(mode, query = "") {
-  const directory = await fetchClientDirectory();
-  const marinaBookings = directory.clients
-    .filter((client) => client.directorySource === "marina")
-    .map((client) => sourceBookingFromDirectoryClient(client, mode))
-    .filter((booking) => booking.mode === mode);
+  const isCamping = mode === "camping" || mode === "rv" || mode === "tent";
+  const sourceMode = isCamping ? "camping" : "room";
+
+  let marinaBookings = [];
+  let marinaAvailable = true;
+  const warnings = [];
+
+  try {
+    const rawBookings = await fetchSourceBookings(sourceMode, "", { limit: 300 });
+    marinaBookings = rawBookings
+      .map((booking) => sourceBookingFromDirectoryClient(booking, mode))
+      .filter((booking) => isCamping ? (booking.mode === mode || mode === "camping") : booking.group === "room");
+  } catch (error) {
+    marinaAvailable = false;
+    warnings.push(String(error?.message || error || "Marina indisponibil"));
+  }
+
   const marinaNames = new Set(marinaBookings.map((booking) => normalizeClientName(booking.guest)));
   const localClients = query && typeof clientHistoryStore.searchClients === "function"
     ? (() => {
@@ -3574,13 +3637,13 @@ async function fetchFusedSourceBookings(mode, query = "") {
     .map((client) => sourceBookingFromDirectoryClient({ ...client, directorySource: "local-history" }, mode))
     .filter((booking) => !marinaNames.has(normalizeClientName(booking.guest)));
   const filteredMarinaBookings = filteredSourceBookings(marinaBookings, query, 300);
-  const filteredLocalBookings = filteredSourceBookings(localBookings, query, Math.max(1, localBookings.length));
+  const filteredLocalBookings = filteredSourceBookings(localBookings, query, query ? Math.max(1, localBookings.length) : 100);
   const filteredBookings = [...filteredMarinaBookings, ...filteredLocalBookings];
   return {
     ok: true,
     bookings: filteredBookings,
-    marinaAvailable: directory.marinaAvailable,
-    warnings: directory.warnings,
+    marinaAvailable,
+    warnings,
     sources: {
       marina: filteredBookings.filter((booking) => booking.directorySource === "marina").length,
       local: filteredBookings.filter((booking) => booking.directorySource === "local-history").length
@@ -3609,7 +3672,9 @@ async function fetchRoomAvailability(dateValue) {
 
   let result;
   try {
-    const bookings = await fetchSourceBookings("room", "", { all: true, limit: 50000 });
+    // Fresh pool on every availability recompute so externally booked units
+    // appear within the 60s availability TTL, not the 10-minute directory TTL.
+    const bookings = await fetchSourceBookings("room", "", { limit: 300, force: true });
     const occupiedUnitIds = [...new Set(
       bookings
         .filter((booking) => sourceBookingOccupiesDate(booking, date))
@@ -3627,7 +3692,7 @@ async function fetchRoomAvailability(dateValue) {
     };
   }
 
-  roomAvailabilityCache = { date, expiresAt: now + clientDirectoryCacheMs, result };
+  roomAvailabilityCache = { date, expiresAt: now + roomAvailabilityCacheMs, result };
   return result;
 }
 

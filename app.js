@@ -238,7 +238,7 @@ const TIMELINE_ROW_GAP = 1;
 const TIMELINE_ROW_OVERSCAN = 10;
 let reservationPage = 1;
 let staysByUnitIndex = new Map();
-let timelineLayoutCache = new Map();
+const timelineLayoutCache = new Map();
 let reservationAutoLoadObserver = null;
 let reservationAutoLoadQueued = false;
 let timelineStayHighlightTimer = null;
@@ -1051,7 +1051,7 @@ function inclusiveDateTexts(startDate, endDate) {
 
 function unitDailyPrimaryPrice(unit, dateText) {
   const dailyPrices = normalizeDailyPrices(unit?.dailyPrices);
-  const hasCustomPrice = Object.prototype.hasOwnProperty.call(dailyPrices, dateText);
+  const hasCustomPrice = Object.hasOwn(dailyPrices, dateText);
   const primaryPrice = hasCustomPrice ? dailyPrices[dateText] : 0;
   return {
     primaryPrice: normalizeMoneyValue(primaryPrice),
@@ -1518,7 +1518,7 @@ function rebuildStaysByUnitIndex() {
 }
 
 function timelineUnitRows() {
-  return unitOptions()
+  const units = unitOptions()
     .filter((unit) => unitMatchesTimelineMode(unit))
     .map((unit) => {
       const unitStays = staysByUnitIndex.get(`${unit.group}:${unit.id}`) || [];
@@ -1528,15 +1528,20 @@ function timelineUnitRows() {
         allStays: unitStays
       };
     })
-    .filter((unit) => matchesUnitSearch(unit, unit.allStays))
-    .sort((first, second) => {
-      if (searchTerm) {
-        const scoreCompare = unitSearchScore(first) - unitSearchScore(second);
-        if (scoreCompare !== 0) return scoreCompare;
-      }
+    .filter((unit) => matchesUnitSearch(unit, unit.allStays));
 
-      return first.id.localeCompare(second.id, "ro-RO", { numeric: true });
-    });
+  if (!units.length) return [];
+
+  const scores = searchTerm ? new Map(units.map((unit) => [unit.id, unitSearchScore(unit)])) : null;
+
+  return units.sort((first, second) => {
+    if (searchTerm) {
+      const scoreCompare = scores.get(first.id) - scores.get(second.id);
+      if (scoreCompare !== 0) return scoreCompare;
+    }
+
+    return first.id.localeCompare(second.id, "ro-RO", { numeric: true });
+  });
 }
 
 function daysBetween(start, end) {
@@ -2208,13 +2213,23 @@ async function loadFileBackedData() {
       };
     }
 
-    if (typeof data.config?.sidebarCollapsed === "boolean") {
+    const storedSidebarCollapsed = localStorage.getItem("marinaParkSidebarCollapsed");
+    if (storedSidebarCollapsed !== null) {
+      // Local value wins: the server copy is no longer saved on every toggle.
+      sidebarCollapsed = storedSidebarCollapsed === "true";
+      applySidebarState();
+    } else if (typeof data.config?.sidebarCollapsed === "boolean") {
       sidebarCollapsed = data.config.sidebarCollapsed;
       localStorage.setItem("marinaParkSidebarCollapsed", String(sidebarCollapsed));
       applySidebarState();
     }
 
-    if (data.config?.activeMode) {
+    const storedActiveMode = localStorage.getItem("marinaParkActiveMode");
+    if (storedActiveMode) {
+      activeMode = normalizeTimelineMode(storedActiveMode);
+      document.body.dataset.mode = groupForMode(activeMode);
+      updateModeSwitchUi();
+    } else if (data.config?.activeMode) {
       activeMode = normalizeTimelineMode(data.config.activeMode);
       document.body.dataset.mode = groupForMode(activeMode);
       updateModeSwitchUi();
@@ -2959,7 +2974,7 @@ function setUnitPricingSelection(startText, endText = startText) {
   if (!bounds) return;
   unitPricingSelectedDates = new Set(inclusiveDateTexts(bounds.start, bounds.end));
   const dailyPrices = normalizeDailyPrices(unitPricingDraft);
-  const selectedRate = Object.prototype.hasOwnProperty.call(dailyPrices, bounds.startText) ? dailyPrices[bounds.startText] : 0;
+  const selectedRate = Object.hasOwn(dailyPrices, bounds.startText) ? dailyPrices[bounds.startText] : 0;
   unitDayPriceInput.value = selectedRate.toFixed(2);
   renderUnitPricingCalendar();
 }
@@ -3449,7 +3464,7 @@ async function generateLegacyReceipt(stayKey, method) {
           : [];
     let savedStationingRecord = null;
     let linkedPaymentBefore = [];
-    let linkedPaymentRecords = [];
+    const linkedPaymentRecords = [];
 
     if (!isVoucher) {
       const response = await fetch("/api/receipt", {
@@ -4374,7 +4389,9 @@ function setMode(mode) {
     dirtyPages.delete("calendar");
   }
   refreshIcons();
-  queueFileSave();
+  try {
+    localStorage.setItem("marinaParkActiveMode", activeMode);
+  } catch {}
   showToast(`${unitTypeLabel(activeMode)} activ`);
 }
 
@@ -4568,31 +4585,38 @@ function renderAvailableUnitsToday() {
 }
 
 function visibleClientStays() {
-  return stays
+  const filtered = stays
     .filter(
       (stay) =>
         stay.guest !== "Disponibil" &&
         (searchTerm || unitMatchesTimelineMode(stay)) &&
         matchesSearch(stay)
-    )
-    .sort((first, second) => {
-      const paymentCompare = Number(isStayFullyPaid(first)) - Number(isStayFullyPaid(second));
-      if (paymentCompare !== 0) return paymentCompare;
+    );
 
-      if (searchTerm) {
-        const scoreCompare = staySearchScore(first) - staySearchScore(second);
-        if (scoreCompare !== 0) return scoreCompare;
-      }
+  if (!filtered.length) return [];
 
-      const firstUrgency = clientUrgency(first);
-      const secondUrgency = clientUrgency(second);
+  const searchScores = searchTerm ? new Map(filtered.map((stay) => [stay.key, staySearchScore(stay)])) : null;
+  const urgencies = new Map(filtered.map((stay) => [stay.key, clientUrgency(stay)]));
+  const paidStatuses = new Map(filtered.map((stay) => [stay.key, Number(isStayFullyPaid(stay))]));
 
-      if (firstUrgency.priority !== secondUrgency.priority) {
-        return firstUrgency.priority - secondUrgency.priority;
-      }
+  return filtered.sort((first, second) => {
+    const paymentCompare = paidStatuses.get(first.key) - paidStatuses.get(second.key);
+    if (paymentCompare !== 0) return paymentCompare;
 
-      return String(first.end || first.start).localeCompare(String(second.end || second.start));
-    });
+    if (searchTerm) {
+      const scoreCompare = searchScores.get(first.key) - searchScores.get(second.key);
+      if (scoreCompare !== 0) return scoreCompare;
+    }
+
+    const firstUrgency = urgencies.get(first.key);
+    const secondUrgency = urgencies.get(second.key);
+
+    if (firstUrgency.priority !== secondUrgency.priority) {
+      return firstUrgency.priority - secondUrgency.priority;
+    }
+
+    return String(first.end || first.start).localeCompare(String(second.end || second.start));
+  });
 }
 
 function renderReservations() {
@@ -5062,9 +5086,7 @@ function renderBarArticles() {
 function renderBarCheckout() {
   if (!barCheckoutList || !barCheckoutSummary || !barCheckoutPayButton) return;
   const totals = barCartTotals();
-  if (!totals.lines.length) {
-    barCheckoutList.innerHTML = `<p class="empty-state bar-checkout-empty">Checkout-ul este gol.</p>`;
-  } else {
+  if (totals.lines.length) {
     barCheckoutList.innerHTML = totals.lines
       .map(
         (line) => `
@@ -5087,6 +5109,8 @@ function renderBarCheckout() {
         `
       )
       .join("");
+  } else {
+    barCheckoutList.innerHTML = `<p class="empty-state bar-checkout-empty">Checkout-ul este gol.</p>`;
   }
 
   barCheckoutSummary.innerHTML = `
@@ -6245,7 +6269,6 @@ function toggleSidebar() {
   localStorage.setItem("marinaParkSidebarCollapsed", String(sidebarCollapsed));
   applySidebarState();
   requestAnimationFrame(syncTimelineAfterSidebarToggle);
-  runWhenIdle(queueFileSave);
 }
 
 async function loadAppVersion() {
@@ -7431,7 +7454,7 @@ function renderSourceBookings() {
         `
         ]
       : [];
-  const otherRows = otherBookings.map((booking) => rowForBooking(booking, bookingIndexMap.get(booking) ?? 0));
+  const otherRows = otherBookings.slice(0, 100).map((booking) => rowForBooking(booking, bookingIndexMap.get(booking) ?? 0));
 
   sourceRecordRows.innerHTML = [...todayRows, ...separator, ...otherRows].join("");
 }
@@ -8367,7 +8390,6 @@ function setVisibleMonth(month, options = {}) {
     dirtyPages.delete("clients");
   }
   refreshIcons();
-  if (options.save !== false) queueFileSave();
   timelineProgrammaticScrollFrame = requestAnimationFrame(() => {
     timelineProgrammaticScrollFrame = null;
     timelineShell.scrollLeft = scrollLeftForDate(targetMonth);
@@ -9082,9 +9104,7 @@ bookingRangeCalendar.addEventListener("click", (event) => {
 
 document.addEventListener("pointermove", (event) => {
   if (unitPricingDrag) {
-    if (event.buttons !== 1) {
-      finishUnitPricingDrag();
-    } else {
+    if (event.buttons === 1) {
       const dateText = calendarDateFromPointer(event, "[data-unit-price-date]", "unitPriceDate");
       if (dateText && dateText !== unitPricingDrag.last) {
         unitPricingDrag.last = dateText;
@@ -9092,13 +9112,13 @@ document.addEventListener("pointermove", (event) => {
         unitPricingAnchorDate = null;
         setUnitPricingSelection(unitPricingDrag.start, dateText);
       }
+    } else {
+      finishUnitPricingDrag();
     }
   }
 
   if (bookingCalendarDrag) {
-    if (event.buttons !== 1) {
-      finishBookingCalendarDrag();
-    } else {
+    if (event.buttons === 1) {
       const dateText = calendarDateFromPointer(event, "[data-booking-range-date]", "bookingRangeDate");
       if (dateText && dateText !== bookingCalendarDrag.last) {
         bookingCalendarDrag.last = dateText;
@@ -9106,6 +9126,8 @@ document.addEventListener("pointermove", (event) => {
         bookingRangeAnchorDate = null;
         setBookingRangeFromCalendar(bookingCalendarDrag.start, dateText);
       }
+    } else {
+      finishBookingCalendarDrag();
     }
   }
 });
