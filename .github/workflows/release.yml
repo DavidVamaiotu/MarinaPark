@@ -14,13 +14,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        # v4.4.0; no cache input is set, but zizmor flags setup-node
+        # conservatively in workflows that publish release artifacts.
+        # zizmor: ignore[cache-poisoning]
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
-          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -58,16 +60,22 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $assets.FullName --clobber
           } else {
-            gh release create $tag $assets.FullName --title "Marina Park $version" --notes "Actualizare automată Marina Park $version"
+            $title = "Marina Park $version"
+            $notes = "Actualizare automată Marina Park $version"
+            gh release create $tag $assets.FullName `
+              --title $title --notes $notes
           }
 
           $verifyDir = Join-Path $env:RUNNER_TEMP "marina-release-verify"
           New-Item -ItemType Directory -Force -Path $verifyDir | Out-Null
           foreach ($asset in $assets) {
-            gh release download $tag --pattern $asset.Name --dir $verifyDir --clobber
+            gh release download $tag --pattern $asset.Name `
+              --dir $verifyDir --clobber
             $remotePath = Join-Path $verifyDir $asset.Name
-            $localHash = (Get-FileHash -LiteralPath $asset.FullName -Algorithm SHA256).Hash
-            $remoteHash = (Get-FileHash -LiteralPath $remotePath -Algorithm SHA256).Hash
+            $localHash = (Get-FileHash -LiteralPath $asset.FullName `
+              -Algorithm SHA256).Hash
+            $remoteHash = (Get-FileHash -LiteralPath $remotePath `
+              -Algorithm SHA256).Hash
             if ($localHash -ne $remoteHash) {
               throw "Asset-ul public nu corespunde: $($asset.Name)"
             }

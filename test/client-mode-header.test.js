@@ -21,88 +21,151 @@ test("today's free rooms use only reservations saved in the app", () => {
 
   assert.match(
     app,
-    /function stayCountsAsPresent\(stay\)[\s\S]*stay\.guest === "Disponibil"[\s\S]*const start = stayStartDate\(stay\);[\s\S]*return !start \|\| start <= today;/
+    /function stayCountsAsPresent\(stay\)[\s\S]*stay\.guest === "Disponibil"[\s\S]*const start = stayStartDate\(stay\);[\s\S]*return !start \|\| start <= today;/,
   );
   assert.match(
     app,
-    /function occupiedUnitKeysFromSavedStays\(\)[\s\S]*stays\.forEach\(\(stay\) => \{[\s\S]*if \(!stayCountsAsPresent\(stay\)\) return;[\s\S]*occupied\.add\(unitOccupancyKey\(stay\.group, stay\.id\)\)/
+    /function occupiedUnitKeysFromSavedStays\(\)[\s\S]*stays\.forEach\(\(stay\) => \{[\s\S]*if \(!stayCountsAsPresent\(stay\)\) return;[\s\S]*occupied\.add\(unitOccupancyKey\(stay\.group, stay\.id\)\)/,
   );
-  assert.match(app, /function availableUnitsFromSavedStays\(\)[\s\S]*occupiedUnitKeysFromSavedStays\(\)/);
-  assert.doesNotMatch(app, /if \(stayOccupiesDate\(stay, date\)\) occupied\.add/);
+  assert.match(
+    app,
+    /function availableUnitsFromSavedStays\(\)[\s\S]*occupiedUnitKeysFromSavedStays\(\)/,
+  );
+  assert.doesNotMatch(
+    app,
+    /if \(stayOccupiesDate\(stay, date\)\) occupied\.add/,
+  );
   assert.match(app, /Calculat din rezervările salvate în aplicație\./);
   assert.doesNotMatch(app, /fetch\(`\/api\/availability/);
 });
 
 test("compound occupancy counts guests until their reservation is deleted", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
-  const occupancyFunction = app.match(/function renderSidebarOccupancy\(\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
+  const occupancyFunction = app.match(
+    /function renderSidebarOccupancy\(\) \{[\s\S]*?\n\}\n\nfunction /,
+  )?.[0];
 
   assert.ok(occupancyFunction, "renderSidebarOccupancy should exist");
   assert.match(occupancyFunction, /stays\.forEach\(\(stay\) => \{/);
-  assert.match(occupancyFunction, /if \(!stayCountsAsPresent\(stay\)\) return;/);
+  assert.match(
+    occupancyFunction,
+    /if \(!stayCountsAsPresent\(stay\)\) return;/,
+  );
   assert.match(occupancyFunction, /Number\(stay\.party \|\| 0\)/);
   assert.doesNotMatch(occupancyFunction, /stayEndDate/);
 });
 
 test("local-history selection applies every retained client field", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
-  const applySource = app.match(/function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
+  const applySource = app.match(
+    /function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /,
+  )?.[0];
 
   assert.ok(applySource, "applySourceBooking should exist");
   assert.match(applySource, /booking\.previousRoom \|\| booking\.room/);
   assert.match(applySource, /booking\.previousCategory \|\| booking\.category/);
-  assert.match(applySource, /bookingForm\.elements\.guest\.value = booking\.guest \|\| "";/);
-  assert.match(applySource, /bookingForm\.elements\.phone\.value = booking\.phone \|\| "";/);
-  assert.match(applySource, /bookingForm\.elements\.adults\.value = Math\.max\(0, Number\(booking\.adults \|\| 0\)\);/);
-  assert.match(applySource, /bookingForm\.elements\.children\.value = Math\.max\(0, Number\(booking\.children \|\| 0\)\);/);
-  assert.match(applySource, /bookingForm\.elements\.car\.value = booking\.car \|\| "";/);
-  assert.match(applySource, /bookingForm\.elements\.note\.value = booking\.note \|\| "";/);
+  assert.match(
+    applySource,
+    /bookingForm\.elements\.guest\.value = booking\.guest \|\| "";/,
+  );
+  assert.match(
+    applySource,
+    /bookingForm\.elements\.phone\.value = booking\.phone \|\| "";/,
+  );
+  assert.match(
+    applySource,
+    /bookingForm\.elements\.adults\.value = Math\.max\(0, Number\(booking\.adults \|\| 0\)\);/,
+  );
+  assert.match(
+    applySource,
+    /bookingForm\.elements\.children\.value = Math\.max\(\s*0,\s*Number\(booking\.children \|\| 0\),?\s*\);/,
+  );
+  assert.match(
+    applySource,
+    /bookingForm\.elements\.car\.value = booking\.car \|\| "";/,
+  );
+  assert.match(
+    applySource,
+    /bookingForm\.elements\.note\.value = booking\.note \|\| "";/,
+  );
 });
 
 test("local-history Rulote selection uses the same exact-name Stationare auto-link as Marina", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
-  const applySource = app.match(/function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
-  const autoLink = app.match(/function autoLinkStationingForFutureBooking\(booking = \{\}\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
+  const applySource = app.match(
+    /function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /,
+  )?.[0];
+  const autoLink = app.match(
+    /function autoLinkStationingForFutureBooking\(booking = \{\}\) \{[\s\S]*?\n\}\n\nfunction /,
+  )?.[0];
 
   assert.ok(applySource, "applySourceBooking should exist");
   assert.ok(autoLink, "autoLinkStationingForFutureBooking should exist");
   assert.match(
     applySource,
-    /if \(detailsOnly\) \{\s*if \(currentBookingIsRv\(\)\) \{\s*autoLinkStationingForFutureBooking\(\{\s*\.\.\.booking,\s*group: currentBookingGroup\(\),\s*start: bookingForm\.elements\.arrival\.value,\s*end: bookingForm\.elements\.departure\.value/
+    /if \(detailsOnly\) \{\s*if \(currentBookingIsRv\(\)\) \{\s*autoLinkStationingForFutureBooking\(\{\s*\.\.\.booking,\s*group: currentBookingGroup\(\),\s*start: bookingForm\.elements\.arrival\.value,\s*end: bookingForm\.elements\.departure\.value/,
   );
-  assert.equal(applySource.match(/autoLinkStationingForFutureBooking/g)?.length, 2);
-  assert.match(autoLink, /const matches = exactAvailableStationingMatches\(booking\.guest \|\| bookingForm\.elements\.guest\.value\);/);
+  assert.equal(
+    applySource.match(/autoLinkStationingForFutureBooking/g)?.length,
+    2,
+  );
+  assert.match(
+    autoLink,
+    /const matches = exactAvailableStationingMatches\(\s*booking\.guest \|\| bookingForm\.elements\.guest\.value,?\s*\);/,
+  );
   assert.match(autoLink, /if \(matches\.length !== 1\) return false;/);
   assert.match(autoLink, /autoLinked: true,\s*subtractDays: false/);
 });
 
 test("expired Marina source reservations start today while preserving their duration", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
-  const applySource = app.match(/function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /)?.[0];
+  const applySource = app.match(
+    /function applySourceBooking\(booking\) \{[\s\S]*?\n\}\n\nfunction /,
+  )?.[0];
 
   assert.ok(applySource, "applySourceBooking should exist");
-  assert.match(applySource, /const sourceCheckoutDate = validDateFromISO\(booking\.end\);/);
+  assert.match(
+    applySource,
+    /const sourceCheckoutDate = validDateFromISO\(booking\.end\);/,
+  );
   assert.match(applySource, /sourceCheckoutDate && sourceCheckoutDate < today/);
-  assert.match(applySource, /bookingForm\.elements\.arrival\.value = toISODate\(today\);\s*syncDepartureFromNights\(\);/);
+  assert.match(
+    applySource,
+    /bookingForm\.elements\.arrival\.value = toISODate\(today\);\s*syncDepartureFromNights\(\);/,
+  );
   assert.match(applySource, /showOldSourceBookingWarning\(booking\);/);
 });
 
 test("Marina source rows hydrate missing notes and prices before selection", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
-  const selection = app.match(/function sourceBookingNeedsDetails\(booking\) \{[\s\S]*?\n\}\n\nasync function selectSourceBooking/)?.[0];
+  const selection = app.match(
+    /function sourceBookingNeedsDetails\(booking\) \{[\s\S]*?\n\}\n\nasync function selectSourceBooking/,
+  )?.[0];
 
   assert.ok(selection, "source row hydration should exist");
   assert.match(selection, /booking\?\.directorySource === "marina"/);
   assert.match(selection, /providerBookingId/);
   assert.match(app, /\/api\/source-booking-details\?" \+ params\.toString\(\)/);
-  assert.match(app, /const enriched = \{ \.\.\.booking, \.\.\.result\.booking \};/);
+  assert.match(
+    app,
+    /const enriched = \{ \.\.\.booking, \.\.\.result\.booking \};/,
+  );
   assert.match(app, /applySourceBooking\(enriched\);/);
 });
 
 test("only Marina source records are grouped as arrivals today", () => {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
 
-  assert.match(app, /function isMarinaSourceArrivalToday[\s\S]*directorySource === "marina"/);
-  assert.match(app, /todayBookings = orderedBookings\.filter\(\(booking\) => isMarinaSourceArrivalToday\(booking, todayText\)\)/);
-  assert.match(app, /sourceBookings\.filter\(\(booking\) => isMarinaSourceArrivalToday\(booking, todayText\)\)/);
+  assert.match(
+    app,
+    /function isMarinaSourceArrivalToday[\s\S]*directorySource === "marina"/,
+  );
+  assert.match(
+    app,
+    /todayBookings = orderedBookings\.filter\(\(booking\) =>\s*isMarinaSourceArrivalToday\(booking, todayText\),?\s*\)/,
+  );
+  assert.match(
+    app,
+    /sourceBookings\.filter\(\(booking\) =>\s*isMarinaSourceArrivalToday\(booking, todayText\),?\s*\)/,
+  );
 });

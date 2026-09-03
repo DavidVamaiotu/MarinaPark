@@ -17,14 +17,27 @@ function normalizeClientName(value) {
     .replace(/\s+/g, " ");
 }
 
+function safeJsonParse(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 function clientDateValue(client = {}) {
-  return String(client.end || client.lastEnd || client.start || client.lastStart || "");
+  return String(
+    client.end || client.lastEnd || client.start || client.lastStart || "",
+  );
 }
 
 function richerClientDetails(primary = {}, fallback = {}) {
   const merged = { ...fallback, ...primary };
   for (const field of ["phone", "car", "note", "personId"]) {
-    if (!String(primary[field] || "").trim() && String(fallback[field] || "").trim()) {
+    if (
+      !String(primary[field] || "").trim() &&
+      String(fallback[field] || "").trim()
+    ) {
       merged[field] = fallback[field];
     }
   }
@@ -36,7 +49,9 @@ function newestClient(first, second) {
   if (!second) return first;
   const firstDate = clientDateValue(first);
   const secondDate = clientDateValue(second);
-  return secondDate > firstDate ? richerClientDetails(second, first) : richerClientDetails(first, second);
+  return secondDate > firstDate
+    ? richerClientDetails(second, first)
+    : richerClientDetails(first, second);
 }
 
 function clientHistoryDetails(client = {}) {
@@ -47,12 +62,16 @@ function clientHistoryDetails(client = {}) {
     room: String(client.room || client.id || client.unitHint || "").trim(),
     category: String(client.category || client.kind || "").trim(),
     adults: Math.max(0, Number(client.adults || 0)) || 0,
-    children: Math.max(0, Number(client.children || 0)) || 0
+    children: Math.max(0, Number(client.children || 0)) || 0,
   };
 }
 
 function directoryKey(prefix, parts) {
-  const digest = crypto.createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 20);
+  const digest = crypto
+    .createHash("sha256")
+    .update(parts.join("|"))
+    .digest("hex")
+    .slice(0, 20);
   return `${prefix}-${digest}`;
 }
 
@@ -84,11 +103,13 @@ class ClientHistoryStore {
   }
 
   sanitizeStoredClients() {
-    const rows = this.db.prepare(`
+    const rows = this.db
+      .prepare(`
       SELECT normalized_name, guest, phone, car, group_name, kind, last_start, last_end,
              first_seen_at, updated_at, data
       FROM clients
-    `).all();
+    `)
+      .all();
     if (!rows.length) return 0;
 
     const update = this.db.prepare(`
@@ -112,22 +133,34 @@ class ClientHistoryStore {
           guest: current.guest || row.guest,
           phone: current.phone || row.phone,
           car: current.car || row.car,
-          category: current.category || current.kind || row.kind
+          category: current.category || current.kind || row.kind,
         });
         const stored = {
           ...details,
           historySource: "local",
           historyNormalizedName: row.normalized_name,
           historyFirstSeenAt: current.historyFirstSeenAt || row.first_seen_at,
-          historyUpdatedAt: current.historyUpdatedAt || row.updated_at
+          historyUpdatedAt: current.historyUpdatedAt || row.updated_at,
         };
         const nextData = JSON.stringify(stored);
         const alreadySanitized =
-          !row.group_name && row.kind === details.category && !row.last_start && !row.last_end &&
-          row.guest === details.guest && row.phone === details.phone && row.car === details.car &&
+          !row.group_name &&
+          row.kind === details.category &&
+          !row.last_start &&
+          !row.last_end &&
+          row.guest === details.guest &&
+          row.phone === details.phone &&
+          row.car === details.car &&
           row.data === nextData;
         if (alreadySanitized) continue;
-        update.run(details.guest, details.phone, details.car, details.category, nextData, row.normalized_name);
+        update.run(
+          details.guest,
+          details.phone,
+          details.car,
+          details.category,
+          nextData,
+          row.normalized_name,
+        );
         changed += 1;
       }
       this.db.exec("COMMIT");
@@ -139,8 +172,10 @@ class ClientHistoryStore {
   }
 
   existingClient(normalizedName) {
-    const row = this.db.prepare("SELECT data FROM clients WHERE normalized_name = ?").get(normalizedName);
-    return row ? JSON.parse(row.data) : null;
+    const row = this.db
+      .prepare("SELECT data FROM clients WHERE normalized_name = ?")
+      .get(normalizedName);
+    return row ? safeJsonParse(row.data) : null;
   }
 
   syncReservations(reservations = []) {
@@ -149,7 +184,10 @@ class ClientHistoryStore {
       if (!reservation || reservation.guest === "Disponibil") continue;
       const normalizedName = normalizeClientName(reservation.guest);
       if (!normalizedName) continue;
-      candidates.set(normalizedName, newestClient(candidates.get(normalizedName), reservation));
+      candidates.set(
+        normalizedName,
+        newestClient(candidates.get(normalizedName), reservation),
+      );
     }
     if (!candidates.size) return 0;
 
@@ -182,10 +220,15 @@ class ClientHistoryStore {
           historySource: "local",
           historyNormalizedName: normalizedName,
           historyFirstSeenAt: firstSeenAt,
-          historyUpdatedAt: now
+          historyUpdatedAt: now,
         };
-        const currentFingerprint = current ? JSON.stringify({ ...current, historyUpdatedAt: "" }) : "";
-        const storedFingerprint = JSON.stringify({ ...stored, historyUpdatedAt: "" });
+        const currentFingerprint = current
+          ? JSON.stringify({ ...current, historyUpdatedAt: "" })
+          : "";
+        const storedFingerprint = JSON.stringify({
+          ...stored,
+          historyUpdatedAt: "",
+        });
         if (currentFingerprint === storedFingerprint) continue;
         upsert.run(
           normalizedName,
@@ -198,7 +241,7 @@ class ClientHistoryStore {
           null,
           firstSeenAt,
           now,
-          JSON.stringify(stored)
+          JSON.stringify(stored),
         );
         changed += 1;
       }
@@ -214,9 +257,17 @@ class ClientHistoryStore {
   clients() {
     if (this._cachedClients) return this._cachedClients;
     this._cachedClients = this.db
-      .prepare("SELECT normalized_name, data FROM clients ORDER BY guest COLLATE NOCASE")
+      .prepare(
+        "SELECT normalized_name, data FROM clients ORDER BY guest COLLATE NOCASE",
+      )
       .all()
-      .map((row) => ({ normalizedName: row.normalized_name, ...JSON.parse(row.data) }));
+      .map((row) => {
+        const parsed = safeJsonParse(row.data);
+        return parsed
+          ? { normalizedName: row.normalized_name, ...parsed }
+          : null;
+      })
+      .filter(Boolean);
     return this._cachedClients;
   }
 
@@ -226,7 +277,10 @@ class ClientHistoryStore {
     const tokens = normalized.split(/\s+/).filter(Boolean);
     if (!tokens.length) return this.clients();
 
-    const whereClauses = tokens.map(() => "(normalized_name LIKE ? OR guest LIKE ? OR phone LIKE ? OR car LIKE ?)");
+    const whereClauses = tokens.map(
+      () =>
+        "(normalized_name LIKE ? OR guest LIKE ? OR phone LIKE ? OR car LIKE ?)",
+    );
     const params = [];
     tokens.forEach((token) => {
       const p = `%${token}%`;
@@ -243,7 +297,14 @@ class ClientHistoryStore {
         LIMIT ?
       `)
       .all(...params);
-    return rows.map((row) => ({ normalizedName: row.normalized_name, ...JSON.parse(row.data) }));
+    return rows
+      .map((row) => {
+        const parsed = safeJsonParse(row.data);
+        return parsed
+          ? { normalizedName: row.normalized_name, ...parsed }
+          : null;
+      })
+      .filter(Boolean);
   }
 
   checkpoint() {
@@ -259,44 +320,63 @@ function marinaDirectoryEntry(booking = {}) {
   const normalizedName = normalizeClientName(booking.guest);
   return {
     ...booking,
-    key: directoryKey("marina", [booking.source, booking.providerBookingId, booking.guest, booking.phone, booking.start, booking.end, booking.unitHint]),
+    key: directoryKey("marina", [
+      booking.source,
+      booking.providerBookingId,
+      booking.guest,
+      booking.phone,
+      booking.start,
+      booking.end,
+      booking.unitHint,
+    ]),
     id: booking.unitHint || "-",
     kind: booking.kind || (booking.group === "camping" ? "Camping" : "Camere"),
     directorySource: "marina",
     directoryReadOnly: true,
-    normalizedName
+    normalizedName,
   };
 }
 
 function localDirectoryEntry(client = {}) {
-  const normalizedName = client.normalizedName || normalizeClientName(client.guest);
+  const normalizedName =
+    client.normalizedName || normalizeClientName(client.guest);
   return {
     ...client,
     key: directoryKey("local", [normalizedName]),
     id: client.id || "Istoric local",
     directorySource: "local-history",
     directoryReadOnly: true,
-    normalizedName
+    normalizedName,
   };
 }
 
 function mergeClientDirectory(marinaBookings = [], localClients = []) {
-  const validMarinaBookings = marinaBookings.filter((booking) => normalizeClientName(booking?.guest));
-  const marinaNames = new Set(validMarinaBookings.map((booking) => normalizeClientName(booking.guest)));
+  const validMarinaBookings = marinaBookings.filter((booking) =>
+    normalizeClientName(booking?.guest),
+  );
+  const marinaNames = new Set(
+    validMarinaBookings.map((booking) => normalizeClientName(booking.guest)),
+  );
   const marinaEntries = validMarinaBookings.map(marinaDirectoryEntry);
   const localByName = new Map();
   localClients.forEach((client) => {
-    const normalizedName = client.normalizedName || normalizeClientName(client.guest);
+    const normalizedName =
+      client.normalizedName || normalizeClientName(client.guest);
     if (!normalizedName || marinaNames.has(normalizedName)) return;
-    localByName.set(normalizedName, newestClient(localByName.get(normalizedName), { ...client, normalizedName }));
+    localByName.set(
+      normalizedName,
+      newestClient(localByName.get(normalizedName), {
+        ...client,
+        normalizedName,
+      }),
+    );
   });
-  const localEntries = [...localByName.values()]
-    .map(localDirectoryEntry);
+  const localEntries = [...localByName.values()].map(localDirectoryEntry);
   return [...marinaEntries, ...localEntries];
 }
 
 module.exports = {
   ClientHistoryStore,
   mergeClientDirectory,
-  normalizeClientName
+  normalizeClientName,
 };

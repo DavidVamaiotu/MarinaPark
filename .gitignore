@@ -5,6 +5,8 @@ dist-electron/
 bin/
 .codex/
 .agents/
+.pi-smart-router/
+.plan_task/
 
 *.log
 *.tmp
