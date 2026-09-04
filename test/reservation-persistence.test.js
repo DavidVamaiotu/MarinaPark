@@ -21,6 +21,25 @@ test("booking details are logged before persistence so failed reservations remai
   assert.doesNotMatch(submitSource, /showToast\([^)]*(?:log|jurnal)/i);
 });
 
+test("automatic stationing deductions use the atomic reservation persistence boundary", () => {
+  const saveSource = appSource.match(
+    /async function saveBookingReservation\(stay, previousStay = null\) \{[\s\S]*?\n\}\n\nfunction /,
+  )?.[0];
+  const submitStart = appSource.indexOf('bookingForm.addEventListener("submit"');
+  const submitEnd = appSource.indexOf("async function initializeApp", submitStart);
+  const submitSource = appSource.slice(submitStart, submitEnd);
+
+  assert.ok(saveSource, "saveBookingReservation should exist");
+  assert.match(saveSource, /previousStationingKey/);
+  assert.match(saveSource, /stationingDeduction/);
+  assert.match(saveSource, /result\.stationing/);
+  assert.doesNotMatch(
+    submitSource,
+    /await applyStationingDeductionForStay\(nextStay, \{ ask: false \}\)/,
+  );
+  assert.match(submitSource, /reservationSaved\.stationing/);
+});
+
 test("reservation upserts remain writable after the full-database revision changes", async (context) => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "marina-reservation-test-"));
   context.after(() => fsp.rm(root, { recursive: true, force: true }));

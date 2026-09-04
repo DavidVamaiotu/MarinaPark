@@ -128,6 +128,13 @@ async function startFakeMarinaApi() {
             price: { total_minor: 10000, balance_minor: 9000 },
             internal_note: "Cost total: 100 RON, Avans: 20 RON, Rest: 80 RON"
           }, {
+            id: 510,
+            resource_id: 15,
+            status: "approved",
+            periods: [{ start_date: "2026-09-04T21:00:00.000Z", end_date: "2026-09-05T21:00:00.000Z" }],
+            customer: { first_name: "Timezone", last_name: "Booking" },
+            price: { total_minor: 10000 }
+          }, {
             id: 508,
             resource_id: 15,
             status: "approved",
@@ -184,6 +191,7 @@ async function startAppServer() {
       ...process.env,
       PORT: "0",
       NODE_ENV: "test",
+      TZ: "Europe/Bucharest",
       MARINA_DATA_DIR: dataDir,
       MARINA_RUNTIME_DIR: runtimeDir,
       MARINA_OAUTH_TEST_ACCESS_TOKEN: "oauth-access-token",
@@ -265,6 +273,9 @@ test("Marina settings stay server-side and drive paginated workspace booking imp
   assert.equal(roomSources.body.bookings.find((booking) => booking.guest === "Fallback Major")?.price, 70);
   assert.equal(roomSources.body.bookings.find((booking) => booking.guest === "Fallback Pricing")?.price, 520);
   assert.equal(roomSources.body.bookings.find((booking) => booking.guest === "Fallback Remark")?.price, 80);
+  const timezoneBooking = roomSources.body.bookings.find((booking) => booking.guest === "Timezone Booking");
+  assert.equal(timezoneBooking?.start, "2026-09-05");
+  assert.equal(timezoneBooking?.end, "2026-09-07");
   const notesOnly = roomSources.body.bookings.find((booking) => booking.guest === "Notes Only");
   assert.equal(notesOnly?.price, 100);
   assert.equal(notesOnly?.note, "Sosire după ora 18\n\nCost total 150 RON, Depozit = 50 RON, Rest - 100 RON");

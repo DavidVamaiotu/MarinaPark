@@ -2934,22 +2934,41 @@ function cacheCurrentData() {
 
 async function saveBookingReservation(stay, previousStay = null) {
   try {
+    const stationingDeduction =
+      stay?.stationingDeduction?.subtractDays === true
+        ? stay.stationingDeduction
+        : null;
     const response = await fetch("/api/reservation", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         stay,
         previousKey: previousStay?.key || stay.key,
+        previousStationingKey:
+          previousStay?.stationingDeduction?.recordKey || "",
+        stationingDeduction,
       }),
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result.ok === false)
       throw new Error(result.error || `HTTP ${response.status}`);
     lastDatabaseSavedAt = result.savedAt || lastDatabaseSavedAt;
+    if (result.stay?.key === stay.key) Object.assign(stay, result.stay);
+    if (result.stationing?.key) {
+      const normalizedRecord = normalizeStationingRecord(result.stationing);
+      const stationingIndex = stationing.findIndex(
+        (record) => record.key === normalizedRecord.key,
+      );
+      if (stationingIndex >= 0) {
+        stationing[stationingIndex] = normalizedRecord;
+      } else {
+        stationing.push(normalizedRecord);
+      }
+    }
     markPagesDirty();
     cacheCurrentData();
     rebuildStaysByUnitIndex();
-    return true;
+    return result;
   } catch (error) {
     await loadFileBackedData();
     rebuildStaysByUnitIndex();
@@ -4244,6 +4263,24 @@ function stationingDeductionEntryForStay(stay, _record) {
   };
 }
 
+function logStationingDeductionActivity(stay, record, entry, previous = null) {
+  return logActivity({
+    eventType: "update",
+    entityType: "stationing",
+    entityKey: record.key,
+    entityLabel: activityStationingLabel(record),
+    amount: entry.amount,
+    method: "client-rv-deduction",
+    message: `${entry.nights} ${entry.nights === 1 ? "noapte" : "nopti"} au fost legate la staționarea ${stationingRecordLabel(record)} pentru ${stay.guest}; zilele de cazare sunt albastre și nu se taxează.`,
+    data: {
+      ...(previous ? { previous } : {}),
+      current: record,
+      deduction: entry,
+      stayKey: stay.key,
+    },
+  });
+}
+
 async function applyStationingDeductionForStay(stay, options = {}) {
   const deduction = normalizeStayStationingDeduction(stay?.stationingDeduction);
   if (!stay || !deduction || deduction.subtractDays !== true) return null;
@@ -4291,21 +4328,7 @@ async function applyStationingDeductionForStay(stay, options = {}) {
   });
   stay.stationingDeduction = updatedDeduction;
 
-  await logActivity({
-    eventType: "update",
-    entityType: "stationing",
-    entityKey: nextRecord.key,
-    entityLabel: activityStationingLabel(nextRecord),
-    amount: entry.amount,
-    method: "client-rv-deduction",
-    message: `${entry.nights} ${entry.nights === 1 ? "noapte" : "nopti"} au fost legate la staționarea ${stationingRecordLabel(nextRecord)} pentru ${stay.guest}; zilele de cazare sunt albastre și nu se taxează.`,
-    data: {
-      previous: previousRecord,
-      current: nextRecord,
-      deduction: entry,
-      stayKey: stay.key,
-    },
-  });
+  await logStationingDeductionActivity(stay, nextRecord, entry, previousRecord);
 
   return { record: nextRecord, deduction: updatedDeduction };
 }
@@ -9024,6 +9047,7 @@ function applySourceBooking(booking) {
     Number(booking.children || 0),
   );
   bookingForm.elements.car.value = booking.car || "";
+  bookingForm.elements.note.value = booking.note || "";
   updatePartyTotal();
   if (detailsOnly) {
     if (currentBookingIsRv()) {
@@ -9054,7 +9078,6 @@ function applySourceBooking(booking) {
   }
   syncBookingCalendarMonthToArrival();
   bookingForm.elements.paymentMethod.value = "";
-  bookingForm.elements.note.value = booking.note || "";
   syncBookingPaymentFields();
   lockImportedPricing();
   bookingFacilityDraft = normalizeStayFacilities(booking.facilities, {
@@ -11005,9 +11028,28 @@ bookingForm.addEventListener("submit", async (event) => {
   const reservationSaved = await saveBookingReservation(nextStay, previousStay);
   if (!reservationSaved) return;
   const automaticDeduction =
-    nextStay.stationingDeduction?.subtractDays === true
-      ? await applyStationingDeductionForStay(nextStay, { ask: false })
+    nextStay.stationingDeduction?.subtractDays === true &&
+    reservationSaved.stationing?.key
+      ? {
+          record:
+            stationing.find(
+              (record) => record.key === reservationSaved.stationing.key,
+            ) || reservationSaved.stationing,
+          deduction: nextStay.stationingDeduction,
+        }
       : null;
+  if (automaticDeduction) {
+    const entry = normalizeStationingDeductions(
+      automaticDeduction.record.deductions,
+    ).find((deduction) => deduction.stayKey === nextStay.key);
+    if (entry) {
+      await logStationingDeductionActivity(
+        nextStay,
+        automaticDeduction.record,
+        entry,
+      );
+    }
+  }
   visibleMonth = monthStart(arrival);
   activeMode =
     group === "camping"

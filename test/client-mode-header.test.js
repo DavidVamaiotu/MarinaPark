@@ -88,6 +88,7 @@ test("local-history selection applies every retained client field", () => {
     applySource,
     /bookingForm\.elements\.note\.value = booking\.note \|\| "";/,
   );
+  assert.doesNotMatch(applySource, /transferNote/);
 });
 
 test("local-history Rulote selection uses the same exact-name Stationare auto-link as Marina", () => {

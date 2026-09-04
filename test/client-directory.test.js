@@ -83,7 +83,7 @@ test("client directory fuses Marina bookings with persistent unmatched local cli
     stays: [
       { key: "local-alice", id: "D-1", guest: "Alice Popescu", phone: "0701", group: "room", kind: "Cameră", start: "2026-05-01", end: "2026-05-03" },
       { key: "local-only-old", id: "D-2", guest: "Local Only", phone: "0733", car: "B-01-OLD", group: "room", kind: "Cameră", start: "2025-05-01", end: "2025-05-03" },
-      { key: "local-only-new", id: "D-3", guest: "Local Only", phone: "", car: "", adults: 2, children: 1, group: "room", kind: "Cameră", start: "2026-05-01", end: "2026-05-03" },
+      { key: "local-only-new", id: "D-3", guest: "Local Only", phone: "", car: "", adults: 2, children: 1, group: "room", kind: "Cameră", start: "2026-05-01", end: "2026-05-03", note: "booking-specific note" },
       { key: "local-camp", id: "C-1", guest: "Camp Local", phone: "0744", group: "camping", kind: "Campare cort", start: "2026-04-01", end: "2026-04-03" }
     ],
     units: [{ id: "D-1", group: "room", kind: "Cameră" }],
@@ -127,6 +127,19 @@ test("client directory fuses Marina bookings with persistent unmatched local cli
   assert.equal(localOnly.directorySource, "local-history");
   assert.equal(localOnly.phone, "0733");
   assert.equal(localOnly.car, "B-01-OLD");
+  assert.equal(localOnly.transferNote, undefined);
+
+  const localSourceWithNote = await request(
+    server.url,
+    "/api/source-bookings?mode=room&query=Local%20Only",
+  );
+  assert.equal(localSourceWithNote.status, 200);
+  const localNoteBooking = localSourceWithNote.body.bookings.find(
+    (booking) => booking.guest === "Local Only",
+  );
+  assert.equal(localNoteBooking.note, "booking-specific note");
+  assert.equal(localNoteBooking.transferNote, undefined);
+  assert.equal(localNoteBooking.transferSourceKey, undefined);
 
   const history = new DatabaseSync(server.historyPath, { readOnly: true });
   assert.equal(history.prepare("SELECT COUNT(*) count FROM clients").get().count, 3);
@@ -165,6 +178,7 @@ test("client directory fuses Marina bookings with persistent unmatched local cli
   assert.equal(localSourceClient.adults, 2);
   assert.equal(localSourceClient.children, 1);
   assert.equal(localSourceClient.price, 0);
+  assert.equal(localSourceClient.transferNote, undefined);
   for (const reservationField of ["id", "start", "end", "unitHint", "note"]) {
     if (reservationField === "id") {
       assert.equal(localSourceClient[reservationField], undefined);

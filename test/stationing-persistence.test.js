@@ -107,3 +107,116 @@ test("stationing payments and idempotent stay links survive an application resta
   assert.equal(restored.manualPrepaidNights, 2);
   assert.equal(restored.endDate, "2026-07-04");
 });
+
+test("automatic reservation stationing deductions are atomic and idempotent across restart", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "marina-stationing-reservation-"));
+  let server = null;
+  context.after(async () => {
+    if (server) await server.stop().catch(() => {});
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  server = await startServer(root);
+
+  const seeded = await request(server.url, "/api/data", {
+    method: "POST",
+    body: JSON.stringify({
+      stays: [],
+      units: [],
+      stationing: [{
+        key: "station-atomic",
+        schemaVersion: 2,
+        owner: "Ana",
+        caravan: "R1",
+        startDate: "2026-07-01",
+        endDate: "2026-07-10",
+        openEnded: false,
+        pricePerDayCents: 2000,
+        paymentTransactions: [],
+        deductions: [],
+        stayLinks: []
+      }],
+      barArticles: [],
+      config: { savedAt: "stationing-atomic-seed" },
+      allowEmptyCollections: true
+    })
+  });
+  assert.equal(seeded.status, 200);
+
+  const stay = {
+    key: "stay-atomic",
+    id: "RV-atomic",
+    guest: "Ana",
+    group: "camping",
+    kind: "Campare rulotă",
+    start: "2026-07-02",
+    end: "2026-07-05",
+    stationingDeduction: {
+      recordKey: "station-atomic",
+      recordLabel: "Ana (R1)",
+      selectedAt: "2026-07-01T08:00:00.000Z",
+      nights: 3,
+      subtractDays: true
+    }
+  };
+  const failed = await request(server.url, "/api/reservation", {
+    method: "POST",
+    body: JSON.stringify({
+      stay: {
+        ...stay,
+        key: "stay-invalid",
+        stationingDeduction: {
+          ...stay.stationingDeduction,
+          recordKey: "station-missing"
+        }
+      },
+      stationingDeduction: {
+        ...stay.stationingDeduction,
+        recordKey: "station-missing"
+      }
+    })
+  });
+  assert.equal(failed.status, 404);
+  const afterFailure = await request(server.url, "/api/data");
+  assert.ok(!afterFailure.body.stays.some((item) => item.key === "stay-invalid"));
+
+  const save = (reservation) => request(server.url, "/api/reservation", {
+    method: "POST",
+    body: JSON.stringify({
+      stay: reservation,
+      stationingDeduction: reservation.stationingDeduction
+    })
+  });
+
+  const first = await save(stay);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.stay.stationingDeduction.appliedNights, 3);
+  assert.ok(first.body.stay.stationingDeduction.appliedAt);
+  assert.equal(first.body.stationing.deductions.length, 1);
+  assert.equal(first.body.stationing.stayLinks.length, 1);
+  assert.equal(first.body.stationing.stayLinks[0].stayKey, "stay-atomic");
+
+  const second = await save(stay);
+  assert.equal(second.status, 200);
+  assert.equal(
+    second.body.stay.stationingDeduction.appliedAt,
+    first.body.stay.stationingDeduction.appliedAt,
+  );
+  assert.equal(second.body.stationing.deductions.length, 1);
+  assert.equal(second.body.stationing.stayLinks.length, 1);
+
+  const beforeRestart = await request(server.url, "/api/data");
+  const savedStay = beforeRestart.body.stays.find((item) => item.key === "stay-atomic");
+  const savedStationing = beforeRestart.body.stationing.find((item) => item.key === "station-atomic");
+  assert.equal(savedStay.stationingDeduction.appliedNights, 3);
+  assert.equal(savedStationing.deductions.length, 1);
+  assert.equal(savedStationing.stayLinks.length, 1);
+
+  await server.stop();
+  server = await startServer(root);
+  const afterRestart = await request(server.url, "/api/data");
+  const restoredStay = afterRestart.body.stays.find((item) => item.key === "stay-atomic");
+  const restoredStationing = afterRestart.body.stationing.find((item) => item.key === "station-atomic");
+  assert.deepEqual(restoredStay.stationingDeduction, savedStay.stationingDeduction);
+  assert.deepEqual(restoredStationing.deductions, savedStationing.deductions);
+  assert.deepEqual(restoredStationing.stayLinks, savedStationing.stayLinks);
+});

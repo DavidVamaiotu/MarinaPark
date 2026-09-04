@@ -1,4 +1,5 @@
 const http = require("http");
+const { createHash } = require("node:crypto");
 const fs = require("fs/promises");
 const fsSync = require("fs");
 const os = require("os");
@@ -57,6 +58,7 @@ const legacyReservationsIndexPath = path.join(
 const legacyConfigPath = path.join(dataDir, "config.json");
 const port = Number(process.env.PORT || 4173);
 const defaultMarinaApiBaseUrl = "https://booking.husi.ro";
+const barReceiptStateRebuildVersion = 1;
 const marinaOAuthMetadataPath = "/.well-known/oauth-authorization-server";
 const marinaOAuthPendingMaxAgeMs = 10 * 60 * 1000;
 const marinaOAuthAccessSkewMs = 60 * 1000;
@@ -258,6 +260,13 @@ db.exec(`
     handled_sgr_total REAL NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL,
     PRIMARY KEY(stay_key, item_id)
+  );
+  CREATE TABLE IF NOT EXISTS reservation_bar_receipt_state_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    rebuild_version INTEGER NOT NULL,
+    transaction_fingerprint TEXT NOT NULL,
+    last_error TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
   );
 `);
 
@@ -992,6 +1001,162 @@ async function writeData(payload) {
   return { savedAt: nextConfig.savedAt };
 }
 
+function reservationDeductionNights(stay, deduction) {
+  const requested = Number(deduction?.nights);
+  if (Number.isFinite(requested) && requested > 0) {
+    return Math.min(3660, Math.max(1, Math.round(requested)));
+  }
+  const start = String(stay?.start || "");
+  const end = String(stay?.end || "");
+  if (stationingCalculator.validISODate(start) && stationingCalculator.validISODate(end)) {
+    const startTime = Date.parse(`${start}T12:00:00Z`);
+    const endTime = Date.parse(`${end}T12:00:00Z`);
+    if (endTime > startTime) {
+      return Math.min(3660, Math.max(1, Math.round((endTime - startTime) / 86400000)));
+    }
+  }
+  return 1;
+}
+
+function reservationStationingDeduction(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (value.subtractDays !== true) return null;
+  const recordKey = String(value.recordKey || "").trim();
+  if (!recordKey) {
+    throw requestError(
+      400,
+      "Legătura de staționare trebuie să conțină recordKey.",
+    );
+  }
+  return { ...value, recordKey };
+}
+
+function stationingRecordWithoutStay(record, stayKey) {
+  const normalizedStayKey = String(stayKey || "").trim();
+  const deductions = Array.isArray(record?.deductions)
+    ? record.deductions.filter(
+        (deduction) => String(deduction?.stayKey || "") !== normalizedStayKey,
+      )
+    : [];
+  const stayLinks = Array.isArray(record?.stayLinks)
+    ? record.stayLinks.filter(
+        (link) => String(link?.stayKey || "") !== normalizedStayKey,
+      )
+    : [];
+  return stationingCalculator.normalizeRecord({
+    ...record,
+    deductions,
+    stayLinks,
+  });
+}
+
+function stationingRecordWithStayDeduction(record, stay, requested, now) {
+  const existingDeduction = Array.isArray(record?.deductions)
+    ? record.deductions.find(
+        (deduction) => String(deduction?.stayKey || "") === String(stay.key),
+      )
+    : null;
+  const existingLink = stationingCalculator
+    .normalizeStayLinks(record)
+    .find((link) => link.stayKey === String(stay.key));
+  const appliedAt = String(
+    existingDeduction?.appliedAt || existingLink?.linkedAt || requested.appliedAt || now,
+  );
+  const nights = reservationDeductionNights(stay, requested);
+  const entry = {
+    key: String(
+      existingDeduction?.key || `stationing-deduction-${String(stay.key)}`,
+    ),
+    stayKey: String(stay.key),
+    guest: String(stay.guest || "").trim(),
+    unitId: String(stay.id || "").trim(),
+    start: String(stay.start || ""),
+    end: String(stay.end || ""),
+    nights,
+    amount: 0,
+    subtractDays: true,
+    appliedAt,
+  };
+  const withoutStay = stationingRecordWithoutStay(record, stay.key);
+  const nextRecord = stationingCalculator.normalizeRecord({
+    ...withoutStay,
+    deductions: [...(Array.isArray(withoutStay.deductions) ? withoutStay.deductions : []), entry],
+    stayLinks: [
+      ...stationingCalculator.normalizeStayLinks(withoutStay),
+      { stayKey: String(stay.key), subtractDays: true, linkedAt: appliedAt },
+    ],
+  });
+  const currentDeduction =
+    stay.stationingDeduction && typeof stay.stationingDeduction === "object"
+      ? stay.stationingDeduction
+      : {};
+  const deduction = {
+    ...currentDeduction,
+    recordKey: String(record.key),
+    recordLabel:
+      String(
+        requested.recordLabel || `${record.owner || ""} (${record.caravan || ""})`,
+      ).trim(),
+    selectedAt: String(currentDeduction.selectedAt || requested.selectedAt || appliedAt),
+    appliedAt,
+    appliedNights: nights,
+    appliedAmount: 0,
+    subtractDays: true,
+    nights,
+  };
+  return { record: nextRecord, deduction, entry };
+}
+
+function persistReservationStationing(
+  stay,
+  previousReservation,
+  payload,
+  now,
+) {
+  const requested = reservationStationingDeduction(
+    payload.stationingDeduction === undefined
+      ? stay.stationingDeduction
+      : payload.stationingDeduction,
+  );
+  const nextRecordKey = requested?.recordKey || "";
+  const previousRecordKeys = new Set(
+    [
+      payload.previousStationingKey,
+      previousReservation?.stationingDeduction?.recordKey,
+    ]
+      .map((key) => String(key || "").trim())
+      .filter(Boolean),
+  );
+  const nextRecords = new Map();
+
+  for (const recordKey of previousRecordKeys) {
+    if (recordKey === nextRecordKey) continue;
+    const record = stationingByKey(recordKey);
+    if (record) nextRecords.set(recordKey, stationingRecordWithoutStay(record, stay.key));
+  }
+
+  let stationing = null;
+  let persistedStay = { ...stay };
+  if (nextRecordKey) {
+    const current = stationingByKey(nextRecordKey);
+    if (!current) {
+      throw requestError(404, `Staționarea ${nextRecordKey} nu mai există`);
+    }
+    const next = stationingRecordWithStayDeduction(
+      nextRecords.get(nextRecordKey) || current,
+      stay,
+      requested,
+      now,
+    );
+    nextRecords.set(nextRecordKey, next.record);
+    persistedStay = { ...stay, stationingDeduction: next.deduction };
+    stationing = next.record;
+  }
+
+  for (const record of nextRecords.values()) updateStationingRow(record, now);
+  return { stay: persistedStay, stationing };
+}
+
 async function writeReservation(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw requestError(
@@ -1028,9 +1193,18 @@ async function writeReservation(payload) {
     ? Number(existing.order_index)
     : Number(firstOrder ?? 0) - 1;
   const now = new Date().toISOString();
+  const previousReservation =
+    reservationByKey(previousKey) || reservationByKey(key);
 
+  let stationingMutation;
   db.exec("BEGIN IMMEDIATE");
   try {
+    stationingMutation = persistReservationStationing(
+      { ...stay, key, id, guest },
+      previousReservation,
+      payload,
+      now,
+    );
     if (previousKey !== key) {
       db.prepare("DELETE FROM reservations WHERE key = ?").run(previousKey);
     }
@@ -1057,7 +1231,7 @@ async function writeReservation(payload) {
       stay.start || null,
       stay.end || null,
       now,
-      JSON.stringify({ ...stay, key, id, guest }),
+      JSON.stringify(stationingMutation.stay),
     );
     bumpDatabaseSavedAt(now);
     db.exec("COMMIT");
@@ -1066,10 +1240,14 @@ async function writeReservation(payload) {
     throw error;
   }
 
-  clientHistoryStore.syncReservations([{ ...stay, key, id, guest }]);
+  clientHistoryStore.syncReservations([stationingMutation.stay]);
   clientDirectoryCache = null;
   void enqueueDatabaseBackup({ afterMutation: true });
-  return { savedAt: now, stay: { ...stay, key, id, guest } };
+  return {
+    savedAt: now,
+    stay: stationingMutation.stay,
+    stationing: stationingMutation.stationing,
+  };
 }
 
 async function exportedDatabaseFile() {
@@ -1661,8 +1839,8 @@ function reservationBarReceiptLines(stays, mode, context) {
   return lines;
 }
 
-function backfillBarExportLedger() {
-  const transactions = db
+function barReceiptStateTransactions() {
+  return db
     .prepare(`
       SELECT id, type, method, result, created_at
       FROM payment_transactions
@@ -1670,16 +1848,135 @@ function backfillBarExportLedger() {
       ORDER BY created_at ASC, id ASC
     `)
     .all();
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.exec("DELETE FROM reservation_bar_receipt_state");
-    transactions.forEach((transaction) => {
-      let result;
-      try {
-        result = JSON.parse(transaction.result || "{}");
-      } catch {
-        return;
+}
+
+function barReceiptStateFingerprint(transactions) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        transactions.map((transaction) => ({
+          id: transaction.id,
+          type: transaction.type,
+          method: transaction.method,
+          result: transaction.result,
+          created_at: transaction.created_at,
+        })),
+      ),
+    )
+    .digest("hex");
+}
+
+function validateBarReceiptItems(items, label) {
+  if (!Array.isArray(items)) {
+    throw new Error(`${label} trebuie să fie o listă`);
+  }
+  items.forEach((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`${label}[${index}] este invalid`);
+    }
+    const quantity = Number(item.quantity);
+    const price = Number(item.price);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error(`${label}[${index}] are cantitate invalidă`);
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new Error(`${label}[${index}] are preț invalid`);
+    }
+    if (
+      item.sgrTotal !== undefined &&
+      (!Number.isFinite(Number(item.sgrTotal)) || Number(item.sgrTotal) < 0)
+    ) {
+      throw new Error(`${label}[${index}] are SGR invalid`);
+    }
+  });
+}
+
+function validatedBarReceiptTransactions(transactions) {
+  return transactions.map((transaction) => {
+    let result;
+    try {
+      result = JSON.parse(transaction.result || "");
+    } catch {
+      throw new Error(`Rezultatul plății ${transaction.id} nu este JSON valid`);
+    }
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      throw new Error(`Rezultatul plății ${transaction.id} este invalid`);
+    }
+    if (transaction.type === "bar") {
+      if (result.type !== "bar" || !result.sale || typeof result.sale !== "object") {
+        throw new Error(`Rezultatul plății bar ${transaction.id} este incomplet`);
       }
+      validateBarReceiptItems(result.sale.items, `Plata bar ${transaction.id}`);
+    } else if (transaction.type === "stay") {
+      if (result.type !== "stay" || !Array.isArray(result.stays)) {
+        throw new Error(`Rezultatul plății de cazare ${transaction.id} este incomplet`);
+      }
+      result.stays.forEach((stay, index) => {
+        if (!stay || typeof stay !== "object" || Array.isArray(stay)) {
+          throw new Error(`Rezervarea din plata ${transaction.id}[${index}] este invalidă`);
+        }
+        if (stay.barItems !== undefined) {
+          validateBarReceiptItems(
+            stay.barItems,
+            `Articolele bar din plata ${transaction.id}[${index}]`,
+          );
+        }
+      });
+    }
+    return { transaction, result };
+  });
+}
+
+function saveBarReceiptStateMarker(transactions, now) {
+  validatedBarReceiptTransactions(transactions);
+  db.prepare(`
+    INSERT INTO reservation_bar_receipt_state_meta
+      (id, rebuild_version, transaction_fingerprint, last_error, updated_at)
+    VALUES (1, ?, ?, '', ?)
+    ON CONFLICT(id) DO UPDATE SET
+      rebuild_version = excluded.rebuild_version,
+      transaction_fingerprint = excluded.transaction_fingerprint,
+      last_error = excluded.last_error,
+      updated_at = excluded.updated_at
+  `).run(
+    barReceiptStateRebuildVersion,
+    barReceiptStateFingerprint(transactions),
+    now,
+  );
+}
+
+function backfillBarExportLedger() {
+  const transactions = barReceiptStateTransactions();
+  const fingerprint = barReceiptStateFingerprint(transactions);
+  const marker = db
+    .prepare(
+      "SELECT rebuild_version, transaction_fingerprint FROM reservation_bar_receipt_state_meta WHERE id = 1",
+    )
+    .get();
+  if (
+    marker?.rebuild_version === barReceiptStateRebuildVersion &&
+    marker.transaction_fingerprint === fingerprint
+  ) {
+    return { rebuilt: false };
+  }
+
+  let validated;
+  try {
+    validated = validatedBarReceiptTransactions(transactions);
+  } catch (error) {
+    console.error(
+      "Bar receipt state reconstruction skipped:",
+      error.message,
+    );
+    return { rebuilt: false, error: error.message };
+  }
+
+  let transactionStarted = false;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    transactionStarted = true;
+    db.exec("DELETE FROM reservation_bar_receipt_state");
+    validated.forEach(({ transaction, result }) => {
       const context = {
         paymentId: transaction.id,
         method: transaction.method,
@@ -1702,10 +1999,16 @@ function backfillBarExportLedger() {
         );
       }
     });
+    saveBarReceiptStateMarker(transactions, new Date().toISOString());
     db.exec("COMMIT");
+    return { rebuilt: true };
   } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
+    if (transactionStarted) db.exec("ROLLBACK");
+    console.error(
+      "Bar receipt state reconstruction skipped:",
+      error.message,
+    );
+    return { rebuilt: false, error: error.message };
   }
 }
 
@@ -3079,6 +3382,9 @@ async function commitPayment(payload) {
       now,
     );
     insertBarExportLines(paymentId, mutation.barExportLines, context);
+    if (type === "bar" || type === "stay") {
+      saveBarReceiptStateMarker(barReceiptStateTransactions(), now);
+    }
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -3984,7 +4290,12 @@ async function testMarinaApiConnection() {
 }
 
 function marinaDatePart(value) {
-  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const parsed = new Date(text);
+  if (Number.isFinite(parsed.getTime())) return localISODate(parsed);
+  const match = text.match(/^(\d{4}-\d{2}-\d{2})/);
   return match ? match[1] : "";
 }
 
@@ -4767,11 +5078,46 @@ function sourceBookingFromDirectoryClient(client = {}, fallbackMode = "room") {
     unitHint: localHistory ? "" : client.unitHint || "",
     previousRoom,
     previousCategory,
-    note: localHistory ? "" : client.note || "",
+    note: localHistory ? String(client.note || "").trim() : client.note || "",
     modifiedAt:
       client.modifiedAt || client.historyUpdatedAt || client.updatedAt || "",
     detailsOnly: localHistory,
   };
+}
+
+function transferPhoneDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function localHistoryBookingNote(client = {}, reservations = []) {
+  const normalizedName = normalizeClientName(client.guest);
+  if (!normalizedName) return "";
+  const candidates = reservations.filter(
+    (stay) =>
+      stay &&
+      stay.guest !== "Disponibil" &&
+      normalizeClientName(stay.guest) === normalizedName,
+  );
+  if (!candidates.length) return "";
+
+  const preferredRoom = String(client.room || "").trim();
+  const preferredPhone = transferPhoneDigits(client.phone);
+  const preferred = candidates.filter((stay) => {
+    const roomMatches =
+      preferredRoom && String(stay.id || "").trim() === preferredRoom;
+    const phoneMatches =
+      preferredPhone && transferPhoneDigits(stay.phone) === preferredPhone;
+    return roomMatches || phoneMatches;
+  });
+  const source = [...(preferred.length ? preferred : candidates)].sort(
+    (first, second) =>
+      String(second.end || second.start || "").localeCompare(
+        String(first.end || first.start || ""),
+      ) ||
+      String(second.start || "").localeCompare(String(first.start || "")) ||
+      String(second.updatedAt || "").localeCompare(String(first.updatedAt || "")),
+  )[0];
+  return String(source?.note || "").trim();
 }
 
 async function fetchFusedSourceBookings(mode, query = "") {
@@ -4808,10 +5154,15 @@ async function fetchFusedSourceBookings(mode, query = "") {
           return sqlMatches.length ? sqlMatches : clientHistoryStore.clients();
         })()
       : clientHistoryStore.clients();
+  const localReservations = reservationRows();
   const localBookings = localClients
     .map((client) =>
       sourceBookingFromDirectoryClient(
-        { ...client, directorySource: "local-history" },
+        {
+          ...client,
+          note: localHistoryBookingNote(client, localReservations),
+          directorySource: "local-history",
+        },
         mode,
       ),
     )
