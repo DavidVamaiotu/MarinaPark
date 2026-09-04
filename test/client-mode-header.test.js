@@ -88,6 +88,10 @@ test("local-history selection applies every retained client field", () => {
     applySource,
     /bookingForm\.elements\.note\.value = booking\.note \|\| "";/,
   );
+  assert.match(
+    applySource,
+    /if \(detailsOnly\) \{\s*bookingForm\.elements\.arrival\.value = toISODate\(today\);\s*syncDepartureFromNights\(\);/,
+  );
   assert.doesNotMatch(applySource, /transferNote/);
 });
 
@@ -104,7 +108,7 @@ test("local-history Rulote selection uses the same exact-name Stationare auto-li
   assert.ok(autoLink, "autoLinkStationingForFutureBooking should exist");
   assert.match(
     applySource,
-    /if \(detailsOnly\) \{\s*if \(currentBookingIsRv\(\)\) \{\s*autoLinkStationingForFutureBooking\(\{\s*\.\.\.booking,\s*group: currentBookingGroup\(\),\s*start: bookingForm\.elements\.arrival\.value,\s*end: bookingForm\.elements\.departure\.value/,
+    /if \(detailsOnly\) \{\s*bookingForm\.elements\.arrival\.value = toISODate\(today\);\s*syncDepartureFromNights\(\);\s*if \(currentBookingIsRv\(\)\) \{\s*autoLinkStationingForFutureBooking\(\{\s*\.\.\.booking,\s*group: currentBookingGroup\(\),\s*start: bookingForm\.elements\.arrival\.value,\s*end: bookingForm\.elements\.departure\.value/,
   );
   assert.equal(
     applySource.match(/autoLinkStationingForFutureBooking/g)?.length,

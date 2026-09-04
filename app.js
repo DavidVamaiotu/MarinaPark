@@ -9050,6 +9050,8 @@ function applySourceBooking(booking) {
   bookingForm.elements.note.value = booking.note || "";
   updatePartyTotal();
   if (detailsOnly) {
+    bookingForm.elements.arrival.value = toISODate(today);
+    syncDepartureFromNights();
     if (currentBookingIsRv()) {
       autoLinkStationingForFutureBooking({
         ...booking,
