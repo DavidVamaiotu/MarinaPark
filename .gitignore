@@ -1,13 +1,24 @@
 node_modules/
 data/
 dist/
+dist-electron/
 bin/
 .codex/
 .agents/
+.pi-smart-router/
+.plan_task/
 
 *.log
 *.tmp
 *.bak
+
+# Legacy customer exports and local migration databases
+/dbField-2.json
+/Stationare.json
+/marina-park.sqlite2
+/marina-park.sqlite2.backup-*.sqlite
+/marina-park.sqlite2-shm
+/marina-park.sqlite2-wal
 
 bon.inp
 seed-stress-test.js

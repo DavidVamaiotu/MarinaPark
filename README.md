@@ -1,70 +1,130 @@
-# Administrare clienti Marina Park
+# Marina Park Desktop
 
-Aplicatie locala pentru administrarea clientilor Marina Park.
+Aplicație Windows pentru administrarea clienților Marina Park.
 
-## Rulare
-
-Porneste serverul local:
+## Rulare în dezvoltare
 
 ```powershell
+npm install
 npm start
 ```
 
-Deschide apoi:
-
-```text
-http://localhost:4173
-```
-
-Cand ruleaza prin server, aplicatia salveaza rezervarile si configuratia intr-o baza de date SQLite locala: `data/marina-park.sqlite`. Daca deschizi direct `index.html`, aplicatia ramane functionala, dar poate salva doar in `localStorage`.
-
-## Baza de date
-
-- `data/marina-park.sqlite` contine rezervarile si configuratia aplicatiei.
-- Tabela `reservations` contine cate un rand per rezervare.
-- Tabela `app_config` contine configuratia locala a aplicatiei.
-
-## Update automat pe toate PC-urile
-
-Aplicatia se poate actualiza singura la pornire, folosind GitHub Releases.
-
-Fluxul este:
-
-1. Publici o versiune noua in GitHub Releases.
-2. Fiecare PC porneste `MarinaPark.exe` (sau `MarinaPark.bat` ca varianta de rezerva).
-3. `MarinaPark.ps1` citeste `version.json`, verifica manifestul `latest.json` din GitHub si descarca update-ul daca versiunea este mai noua.
-4. Sunt inlocuite doar fisierele aplicatiei. Datele locale din `data/`, `node_modules/`, logurile si bonurile nu sunt incluse in update si raman pe PC.
-
-Pentru a pregati un release nou:
+Pentru a porni doar serverul local în browser:
 
 ```powershell
-.\scripts\New-MarinaParkRelease.ps1 -Version 1.0.1
+npm run server
 ```
 
-Scriptul creeaza:
+## Import din aplicația veche
 
-- `dist/MarinaPark-1.0.1.zip`
-- `dist/latest.json`
-
-In GitHub, creezi un release cu tagul `v1.0.1` si incarci ambele fisiere ca assets. PC-urile se vor actualiza la urmatoarea pornire.
-
-Dupa ce proiectul este pus pe GitHub, release-ul se poate face automat doar prin tag:
+Pune `dbField-2.json`, `Stationare.json` și baza țintă `marina-park.sqlite2`
+în rădăcina proiectului. Verifică mai întâi importul fără modificări:
 
 ```powershell
-git tag v1.0.1
-git push origin v1.0.1
+npm run migrate:legacy -- --dry-run
 ```
 
-Workflow-ul `.github/workflows/release.yml` va construi zip-ul, va crea release-ul si va incarca `latest.json`.
-
-Daca repo-ul GitHub are alt nume, modifica in `version.json` campul `manifestUrl` si ruleaza scriptul cu:
+Apoi execută migrarea:
 
 ```powershell
-.\scripts\New-MarinaParkRelease.ps1 -Version 1.0.1 -Repository "USER/REPO"
+npm run migrate:legacy
 ```
 
-Pentru pornire fara update, foloseste:
+Scriptul creează automat un backup, actualizează rezervările cu același GUID,
+adaugă rezervările și staționările noi și păstrează nemodificate articolele,
+stocurile și produsele de bar deja atașate rezervărilor.
+
+## Fișiere păstrate la actualizare
+
+Instalarea Electron separă aplicația de fișierele care trebuie păstrate:
+
+- `%APPDATA%\Marina Park\data` — baza SQLite, jurnalul și backupurile;
+- `%APPDATA%\Marina Park\runtime` — fișiere generate în timpul rulării;
+- `%APPDATA%\Marina Park\custom` — fișiere adăugate sau modificate de utilizator.
+
+## Fuziunea registrului de clienți
+
+Lista „Rezervări efectuate” din formularul de adăugare client combină
+rezervările citite din API-ul Marina prin OAuth cu istoricul local. Aplicația
+păstrează istoricul într-un fișier SQLite separat:
+
+- `%APPDATA%\Marina Park\data\client-history.sqlite`
+
+La sincronizare, numele sunt comparate fără diferențe de majuscule, diacritice,
+semne sau spații multiple. Orice client salvat local într-o unitate este păstrat
+în istoricul separat, indiferent dacă apare și în API. În lista fuzionată,
+rezervările Marina au prioritate pentru același nume, ca să nu apară duplicate.
+Detaliile locale rămân în fișier chiar dacă rezervarea activă este eliminată
+ulterior. Când este selectat un client din istoricul local, formularul preia doar
+datele de identificare/contact; perioada și prețul rămân cele ale rezervării noi.
+
+Configurează conexiunea din Setări cu API URL-ul, OAuth Client ID-ul public și
+workspace-urile Camere/Camping. Butonul „Conectează prin OAuth” deschide autentificarea
+Marina în browser; callback-ul desktop este `ro.marinapark.booking.desktop://oauth/callback`.
+Access token-ul rămâne doar în memorie, iar refresh token-ul este păstrat în stocarea
+securizată a sistemului.
+
+Pentru o rezervare viitoare de camping, butonul de legare caută o staționare
+cu același nume normalizat și cu nopți rămase. Dacă există exact una, formularul
+este deschis automat pe Rulote, iar nopțile rezervării sunt înregistrate o
+singură dată în contorul de staționare când rezervarea este salvată, fără să
+scadă din preț sau din restul de plată. Dacă există mai multe potriviri,
+alegerea rămâne manuală pentru a evita legarea staționării greșite.
+
+Actualizatorul înlocuiește numai fișierele administrate ale aplicației. Nu șterge datele de mai sus, nici la actualizare, nici la dezinstalare.
+
+Fișierele puse de dezvoltator în `custom-defaults/` sunt copiate în directorul persistent `custom` la pornire. Copierea este de tip **missing-only**: un fișier nou este adăugat, dar un fișier existent cu același nume nu este înlocuit.
+
+La prima instalare, aplicația poate importa baza de date din vechiul folder Marina Park. Pentru migrare automată, rulează prima dată installerul din folderul instalării vechi; dacă acesta nu este detectat, aplicația permite alegerea manuală a folderului.
+
+Trecerea de la launcherul vechi PowerShell la Electron necesită o singură rulare manuală a installerului. După aceea, toate versiunile Electron se actualizează automat.
+
+## Construire installer Windows
 
 ```powershell
-.\MarinaPark.ps1 --no-update
+npm run dist
 ```
+
+Rezultatul este creat în `dist-electron/`:
+
+- `MarinaPark-Setup-<versiune>.exe`;
+- `latest.yml`;
+- metadatele necesare actualizării diferențiale.
+
+Installerul este NSIS per-user, nu cere drepturi de administrator și nu șterge datele aplicației la dezinstalare.
+
+## Publicare și actualizare automată
+
+Rulează scriptul `bump` din rădăcina proiectului. Implicit, acesta publică
+următoarea versiune patch:
+
+```bash
+./bump
+```
+
+Poți cere o versiune minoră, majoră sau explicită:
+
+```bash
+./bump minor
+./bump major
+./bump 2.0.0
+```
+
+Scriptul verifică autentificarea GitHub, ia versiunea curentă din ultimul
+release public, actualizează fișierele de versiune, rulează testele, comite
+toate modificările curente, împinge branch-ul și tag-ul, așteaptă workflow-ul
+Windows și verifică installerul, `latest.yml` și blockmap-ul descărcate din
+release. Dacă un tag patch există deja după un release eșuat, scriptul trece
+automat la următorul număr disponibil. Este disponibil și prin `npm run bump`.
+
+La prima utilizare, dacă autentificarea a expirat:
+
+```bash
+gh auth login -h github.com -p https -w
+```
+
+Workflow-ul `.github/workflows/release.yml` construiește installerul pe Windows și publică în GitHub Releases installerul, `latest.yml` și metadatele de update.
+
+Aplicația verifică actualizările la cinci secunde după pornire și apoi la fiecare patru ore. Update-ul este descărcat în fundal și instalat la repornire sau la închiderea aplicației.
+
+Pentru distribuție în afara PC-urilor controlate, installerul trebuie semnat cu un certificat Windows pentru a evita avertismentele SmartScreen.

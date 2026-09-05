@@ -1,0 +1,64 @@
+appId: ro.marinapark.desktop
+productName: Marina Park
+asar: true
+compression: maximum
+npmRebuild: false
+
+directories:
+  output: dist-electron
+  buildResources: assets
+
+files:
+  - electron-main.js
+  - persistent-files.js
+  - client-directory.js
+  - stationing-calculator.js
+  - marina-oauth.js
+  - server.js
+  - app.js
+  - app-dialog.js
+  - app-dialog.css
+  - index.html
+  - styles.css
+  - activity.js
+  - activity.html
+  - activity.css
+  - screen.js
+  - screen.html
+  - screen.css
+  - version.json
+  - package.json
+  - node_modules/**/*
+  - assets/**/*
+  - fonts/**/*
+
+extraResources:
+  - from: custom-defaults
+    to: custom-defaults
+    filter:
+      - "**/*"
+
+win:
+  icon: assets/marina-park.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: MarinaPark-Setup-${version}.${ext}
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  include: installer.nsh
+
+publish:
+  provider: github
+  owner: DavidVamaiotu
+  repo: MarinaPark
+  releaseType: release
+
+electronUpdaterCompatibility: ">=2.16"

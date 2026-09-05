@@ -6,28 +6,62 @@
     <title>Jurnal activitate Marina Park</title>
     <link rel="icon" href="assets/marina-park-logo.png" type="image/png" />
     <link rel="stylesheet" href="activity.css" />
+    <link rel="stylesheet" href="app-dialog.css" />
   </head>
   <body>
     <main class="log-shell">
       <header class="log-header">
-        <div>
+        <div class="log-title">
           <p class="eyebrow">Marina Park</p>
           <h1>Jurnal activitate</h1>
+          <p>Vezi rapid ce s-a modificat și ce plăți trebuie verificate.</p>
         </div>
         <div class="log-actions">
           <label class="search-box">
-            <span>Caută</span>
+            <span>Caută în jurnal</span>
             <input id="logSearch" type="search" placeholder="Client, sumă, card, șters..." />
           </label>
-          <button type="button" id="refreshLog">Reîncarcă</button>
-          <button type="button" id="exportDatabase">Exportă baza de date</button>
-          <button class="danger-button" type="button" id="clearActivityLog">Șterge jurnalul</button>
+          <div class="log-view-controls">
+            <span class="control-label">Arată</span>
+            <div class="event-filters" aria-label="Filtrează jurnalul">
+              <button class="event-filter is-active" type="button" data-event-filter="all" aria-pressed="true">Toate</button>
+              <button class="event-filter" type="button" data-event-filter="suspicious" aria-pressed="false">De verificat</button>
+              <button class="event-filter" type="button" data-event-filter="payment" aria-pressed="false">Plăți</button>
+              <button class="event-filter" type="button" data-event-filter="update" aria-pressed="false">Editări</button>
+              <button class="event-filter" type="button" data-event-filter="delete" aria-pressed="false">Ștergeri</button>
+            </div>
+            <button class="filter-button" type="button" id="dailyTotalsFilter" aria-pressed="false">Totaluri plăți</button>
+          </div>
+          <a class="live-screen-link" href="/screen">Live Screen</a>
+          <details class="log-maintenance">
+            <summary>Opțiuni jurnal</summary>
+            <div>
+              <button type="button" id="refreshLog">Reîncarcă</button>
+              <button type="button" id="exportDatabase">Exportă baza de date</button>
+              <div class="log-range-clear" aria-label="Șterge jurnalul pentru un interval">
+                <label>
+                  <span>De la</span>
+                  <input id="clearLogFromDate" type="date" />
+                </label>
+                <label>
+                  <span>Până la</span>
+                  <input id="clearLogToDate" type="date" />
+                </label>
+                <button class="danger-button" type="button" id="clearActivityLogRange">Șterge intervalul</button>
+              </div>
+              <button class="danger-button" type="button" id="clearActivityLog">Șterge jurnalele rezervărilor</button>
+            </div>
+          </details>
         </div>
       </header>
 
       <section class="summary-grid" id="summaryGrid" aria-label="Rezumat activitate"></section>
       <section class="log-feed" id="logFeed" aria-live="polite"></section>
+      <div class="load-more-log">
+        <button type="button" id="loadMoreLog" hidden>Încarcă mai multe</button>
+      </div>
     </main>
+    <script src="app-dialog.js"></script>
     <script src="activity.js"></script>
   </body>
 </html>

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ro">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; font-src 'self'; img-src 'self' blob:; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'" />
+    <title>Live Screen Marina Park</title>
+    <link rel="icon" href="assets/marina-park-logo.png" type="image/png" />
+    <link rel="stylesheet" href="screen.css" />
+  </head>
+  <body>
+    <main class="screen-shell">
+      <header class="screen-header">
+        <div>
+          <p class="eyebrow">Marina Park</p>
+          <h1>Live Screen</h1>
+          <p>Vizualizare numai în citire a ferestrei aplicației Marina Park.</p>
+        </div>
+        <a class="back-link" href="/log">Înapoi la jurnal</a>
+      </header>
+
+      <section class="viewer-card" id="viewerCard">
+        <div class="viewer-status">
+          <span id="viewerStatus" aria-live="polite">Se conectează…</span>
+          <span>Fără control la distanță</span>
+        </div>
+        <div class="screen-frame">
+          <div class="screen-image-wrap">
+            <img id="screenImage" alt="Fereastra live Marina Park" draggable="false" />
+            <svg class="screen-pointer-layer" aria-hidden="true">
+              <svg class="screen-pointer" id="screenPointer" x="0" y="0" width="0" height="0" viewBox="0 0 18 26" preserveAspectRatio="xMinYMin meet" hidden>
+                <path d="M0.8 0.8v19.7l4.8-4.4 3.7 8.2 3.5-1.8-3.6-7.8h6.6L0.8 0.8Z" />
+              </svg>
+            </svg>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="screen.js"></script>
+  </body>
+</html>

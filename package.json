@@ -1,9 +1,29 @@
 {
+  "name": "marina-park",
+  "version": "1.0.85",
+  "description": "Aplicație desktop pentru administrarea Marina Park",
+  "main": "electron-main.js",
+  "author": "Marina Park",
   "scripts": {
-    "start": "node --no-warnings server.js",
-    "open": "node MarinaPark"
+    "start": "node scripts/start-electron.js",
+    "server": "node --no-warnings server.js",
+    "test": "node --test test/*.test.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis --x64 --publish never",
+    "migrate:legacy": "node scripts/Migrate-LegacyToSqlite.js",
+    "empty:database": "node scripts/Empty-SqliteData.js",
+    "verify:release": "node scripts/verify-electron-release.js",
+    "bump": "bash ./bump"
   },
   "dependencies": {
-    "mysql2": "^3.22.3"
+    "electron-updater": "6.8.9"
+  },
+  "devDependencies": {
+    "electron": "39.8.10",
+    "electron-builder": "26.15.3"
+  },
+  "allowScripts": {
+    "electron@39.8.10": true,
+    "electron-winstaller@5.4.0": true
   }
 }

@@ -6,6 +6,7 @@
     <title>Administrare clienți Marina Park</title>
     <link rel="icon" href="assets/marina-park-logo.png" type="image/png" />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="app-dialog.css" />
   </head>
   <body data-mode="room">
     <div class="app-shell" id="appShell">
@@ -24,11 +25,7 @@
         </div>
 
         <nav class="nav-list" aria-label="Spațiu de lucru">
-          <button class="nav-item is-active" type="button" data-page="calendar" onclick="window.setActivePage?.('calendar')">
-            <i data-lucide="calendar-days" aria-hidden="true"></i>
-            <span>Calendar</span>
-          </button>
-          <button class="nav-item" type="button" data-page="clients" onclick="window.setActivePage?.('clients')">
+          <button class="nav-item is-active" type="button" data-page="clients" onclick="window.setActivePage?.('clients')">
             <i data-lucide="book-open-check" aria-hidden="true"></i>
             <span>Clienți</span>
           </button>
@@ -50,24 +47,24 @@
           </button>
         </nav>
 
-        <section class="side-summary" aria-label="Rezumat proprietate">
-          <p class="eyebrow">Vama Veche</p>
-          <h2>Camere, bungalouri, corturi și rulote</h2>
+        <section class="side-summary sidebar-occupancy" aria-label="Indicatori operaționali">
+          <h2><span class="sidebar-occupancy-code">C00</span><strong id="sidebarOccupancyTotal">0</strong></h2>
           <dl>
             <div>
-              <dt>Plajă</dt>
-              <dd>400 m</dd>
+              <dt><span class="sidebar-occupancy-code">C01</span></dt>
+              <dd id="sidebarOccupancyRooms">0</dd>
             </div>
             <div>
-              <dt>Rating Google</dt>
-              <dd>4.7</dd>
+              <dt><span class="sidebar-occupancy-code">CO1</span></dt>
+              <dd id="sidebarOccupancyTents">0</dd>
             </div>
             <div>
-              <dt>Contact</dt>
-              <dd>+40 723 690 941</dd>
+              <dt><span class="sidebar-occupancy-code">R01</span></dt>
+              <dd id="sidebarOccupancyRvs">0</dd>
             </div>
           </dl>
         </section>
+
         <p class="app-version" id="appVersion">Versiune</p>
       </aside>
 
@@ -129,6 +126,46 @@
             </div>
           </div>
           <form class="settings-form" id="settingsForm">
+            <section class="settings-subsection" aria-labelledby="marinaSettingsTitle">
+              <div>
+                <p class="eyebrow">Sursă rezervări</p>
+                <h3 id="marinaSettingsTitle">Conexiune Marina API</h3>
+              </div>
+              <label>
+                Adresă API
+                <input id="marinaApiBaseUrl" name="marinaApiBaseUrl" type="url" value="https://booking.husi.ro" autocomplete="off" />
+              </label>
+              <label>
+                OAuth Client ID
+                <input id="marinaOAuthClientId" name="marinaOAuthClientId" type="text" placeholder="Client public Marina" autocomplete="off" />
+              </label>
+              <div class="field-grid">
+                <label>
+                  Workspace Camere
+                  <input id="marinaRoomsWorkspaceId" name="marinaRoomsWorkspaceId" type="number" min="1" step="1" placeholder="Implicit" />
+                </label>
+                <label>
+                  Workspace Camping
+                  <input id="marinaCampingWorkspaceId" name="marinaCampingWorkspaceId" type="number" min="1" step="1" placeholder="Implicit" />
+                </label>
+              </div>
+              <div class="settings-inline-actions">
+                <button class="ghost-button compact-text" type="button" id="connectMarinaOAuth">
+                  <i data-lucide="log-in" aria-hidden="true"></i>
+                  <span>Conectează prin OAuth</span>
+                </button>
+                <button class="ghost-button compact-text" type="button" id="testMarinaConnection">
+                  <i data-lucide="plug-zap" aria-hidden="true"></i>
+                  <span>Testează conexiunea</span>
+                </button>
+                <button class="ghost-button compact-text" type="button" id="disconnectMarinaOAuth">
+                  <i data-lucide="log-out" aria-hidden="true"></i>
+                  <span>Deconectează</span>
+                </button>
+                <p class="settings-note" id="marinaConnectionStatus">Conexiunea nu a fost verificată.</p>
+              </div>
+              <p class="settings-note">Autentificarea folosește OAuth Authorization Code + PKCE. Client ID-ul este public; tokenurile de reîmprospătare sunt păstrate doar în stocarea securizată a sistemului. URI callback: <code>ro.marinapark.booking.desktop://oauth/callback</code>.</p>
+            </section>
             <label>
               Director bonuri
               <span class="settings-path-row">
@@ -236,6 +273,46 @@
             </button>
           </div>
           <div class="metric-grid stationing-metrics" id="stationingMetricGrid" aria-label="Indicatori staționare"></div>
+          <details class="stationing-timeline-panel" aria-labelledby="stationingTimelineTitle">
+            <summary class="stationing-timeline-toggle">
+              <div>
+                <p class="eyebrow">Plăți pe zile</p>
+                <h3 id="stationingTimelineTitle">Calendar staționare</h3>
+              </div>
+              <span class="stationing-timeline-toggle-label" aria-hidden="true"></span>
+            </summary>
+            <div class="stationing-timeline-content">
+              <div class="timeline-actions">
+                <div class="month-controls" aria-label="Schimbă luna timeline-ului de staționare">
+                  <button class="icon-button compact" type="button" id="stationingTimelinePrev" title="Luna anterioară" aria-label="Luna anterioară">
+                    <i data-lucide="chevron-left" aria-hidden="true"></i>
+                  </button>
+                  <strong id="stationingTimelineMonthLabel"></strong>
+                  <button class="icon-button compact" type="button" id="stationingTimelineNext" title="Luna următoare" aria-label="Luna următoare">
+                    <i data-lucide="chevron-right" aria-hidden="true"></i>
+                  </button>
+                  <button class="ghost-button compact-text" type="button" id="stationingTimelineToday">Luna curentă</button>
+                </div>
+                <div class="stationing-timeline-zoom" aria-label="Zoom timeline staționare">
+                  <button class="icon-button compact" type="button" id="stationingTimelineZoomOut" title="Micșorează" aria-label="Micșorează">
+                    <i data-lucide="zoom-out" aria-hidden="true"></i>
+                  </button>
+                  <button class="icon-button compact" type="button" id="stationingTimelineZoomIn" title="Mărește" aria-label="Mărește">
+                    <i data-lucide="zoom-in" aria-hidden="true"></i>
+                  </button>
+                </div>
+              </div>
+              <div class="stationing-timeline-legend" aria-label="Legendă stări staționare">
+                <span class="is-unpaid"><b aria-hidden="true">!</b> Neplătit</span>
+                <span class="is-paid"><b aria-hidden="true">✓</b> Plătit</span>
+                <span class="is-excluded"><b aria-hidden="true">−</b> Client cazat, fără taxă</span>
+              </div>
+              <div class="timeline-shell stationing-timeline-shell" id="stationingTimelineShell" aria-label="Timeline plăți staționare">
+                <div class="timeline-scale" id="stationingTimelineScale"></div>
+                <div class="guest-timeline stationing-timeline" id="stationingTimelineRows"></div>
+              </div>
+            </div>
+          </details>
           <div class="stationing-layout">
             <section class="stationing-board" aria-labelledby="stationingBoardTitle">
               <div class="section-header tight">
@@ -328,9 +405,16 @@
         <section class="details-grid page-section" data-page-section="clients" hidden>
           <section class="panel" id="reservations-section" aria-labelledby="reservationsTitle">
             <div class="section-header">
-              <div>
-                <p class="eyebrow">Registru clienți</p>
-                <h2 id="reservationsTitle">Clienți</h2>
+              <div class="client-mode-identity" id="clientModeIdentity" data-mode="room">
+                <h2 id="reservationsTitle">Clienți · <strong id="clientModeLabel">Camere</strong></h2>
+                <button class="client-mode-image-picker" id="clientModeImageButton" type="button" aria-label="Adaugă imagine pentru Camere">
+                  <img id="clientModeImagePreview" alt="" hidden />
+                  <span id="clientModeImagePlaceholder">
+                    <i data-lucide="image-plus" aria-hidden="true"></i>
+                    <small>Imagine</small>
+                  </span>
+                </button>
+                <input id="clientModeImageInput" type="file" accept="image/*" hidden />
               </div>
               <div class="clients-header-tools">
                 <div class="available-units-today" id="availableUnitsToday" aria-live="polite">
@@ -385,9 +469,9 @@
                       </button>
                     </div>
                   </div>
-                  <div class="source-record-status" id="sourceRecordStatus">Se încarcă ultimele 300 rezervări.</div>
+                  <div class="source-record-status" id="sourceRecordStatus">Se încarcă ultimele 300 rezervări Marina.</div>
                   <div class="source-record-table-wrap">
-                    <table class="source-record-table" aria-label="Clienți din baza de date">
+                    <table class="source-record-table" aria-label="Clienți din Marina API">
                       <thead>
                         <tr>
                           <th>Nume</th>
@@ -499,6 +583,9 @@
                   </div>
                 </section>
 
+              </div>
+
+              <div class="booking-form-column booking-side-column">
                 <section class="form-section booking-stationing-link-section" id="bookingStationingLinkSection" hidden>
                   <div class="form-section-head">
                     <div>
@@ -509,9 +596,7 @@
                   <div class="stationing-link-status" id="bookingStationingLinkStatus"></div>
                   <div class="stationing-link-results" id="bookingStationingLinkResults"></div>
                 </section>
-              </div>
 
-              <div class="booking-form-column booking-side-column">
                 <section class="form-section booking-extras-section">
                   <div class="form-section-head">
                     <div>
@@ -729,6 +814,30 @@
         <section class="form-section">
           <div class="form-section-head">
             <div>
+              <p class="eyebrow">Format</p>
+              <h3>Alege fișierul exportat</h3>
+            </div>
+          </div>
+          <div class="saga-export-format-options" role="radiogroup" aria-label="Format export">
+            <label>
+              <input name="format" type="radio" value="xml" required />
+              <span>
+                <strong>Export XML</strong>
+                <small>Fișier compatibil cu importul SAGA existent</small>
+              </span>
+            </label>
+            <label>
+              <input name="format" type="radio" value="pdf" required />
+              <span>
+                <strong>Export PDF</strong>
+                <small>Raport lizibil cu produse, cantități și valori</small>
+              </span>
+            </label>
+          </div>
+        </section>
+        <section class="form-section">
+          <div class="form-section-head">
+            <div>
               <p class="eyebrow">Perioadă</p>
               <h3>Vânzări incluse</h3>
             </div>
@@ -737,7 +846,7 @@
             Toate vânzările
             <span class="checkbox-row">
               <input name="allSales" type="checkbox" />
-              <span>Ignoră intervalul de date</span>
+              <span>Ignoră intervalul de date și exportă toate vânzările</span>
             </span>
           </label>
           <div class="field-grid">
@@ -792,11 +901,11 @@
             <input name="clientName" type="text" value="Client generic bar" required />
           </label>
         </section>
-        <button class="primary-button full" type="submit">
+        <button class="primary-button full" type="submit" id="sagaExportSubmit">
           <i data-lucide="file-down" aria-hidden="true"></i>
-          <span>Generează XML SAGA</span>
+          <span id="sagaExportSubmitLabel">Generează exportul</span>
         </button>
-        <p class="settings-note">Fișierul se importă în SAGA la Import Date / Facturi și intră în Ieșiri când codul fiscal al firmei este același cu cel din SAGA. Articolele sunt linii de bon, iar AMBALAJ SGR este linie separată cu TVA 0%.</p>
+        <p class="settings-note">XML păstrează structura pentru importul SAGA la Import Date / Facturi. PDF generează un raport de vânzări ușor de citit. Este creat numai formatul ales, iar aceeași perioadă poate fi exportată de câte ori este nevoie. Vânzările achitate cu voucher nu sunt incluse. Pentru rezervări, intră aici doar articolele pentru care bonul a fost ales separat de cazare.</p>
       </form>
     </section>
 
@@ -946,86 +1055,48 @@
         </button>
       </div>
       <form id="stationingForm">
-        <section class="form-section">
-          <div class="form-section-head">
-            <div>
-              <p class="eyebrow">Proprietar</p>
-              <h3>Contact și rulotă</h3>
-            </div>
-          </div>
-          <div class="field-grid">
-            <label>
-              Nume proprietar
-              <input name="owner" type="text" placeholder="Nume complet" required />
-            </label>
-            <label>
-              Telefon
-              <input name="phone" type="tel" placeholder="+40 ..." required />
-            </label>
-          </div>
+        <div class="stationing-form-fields">
           <label>
+            Nume proprietar
+            <input name="owner" type="text" placeholder="Nume complet" required />
+          </label>
+          <label>
+            Telefon
+            <input name="phone" type="tel" placeholder="+40 ..." required />
+          </label>
+          <label class="stationing-caravan-field">
             Rulotă / număr
             <input name="caravan" type="text" placeholder="Adria, Hobby, număr auto" required />
           </label>
-        </section>
-        <section class="form-section">
-          <div class="form-section-head">
-            <div>
-              <p class="eyebrow">Perioadă</p>
-              <h3>Nopți preplătite</h3>
-            </div>
-          </div>
-          <div class="field-grid three">
-            <label>
-              Data început
-              <input name="startDate" type="date" required />
-            </label>
-            <label>
-              Nopți
-              <input name="prepaidNights" type="number" min="1" max="1095" value="30" required />
-            </label>
-            <label>
-              Final estimat
-              <input name="endDate" type="text" readonly />
-            </label>
-          </div>
-          <p class="calendar-summary" id="stationingRangeSummary"></p>
-        </section>
-        <section class="form-section">
-          <div class="form-section-head">
-            <div>
-              <p class="eyebrow">Plată</p>
-              <h3>Tarif staționare</h3>
-            </div>
-          </div>
-          <div class="field-grid">
-            <label>
-              Preț pe noapte
-              <input name="nightlyPrice" type="number" min="0" step="0.01" value="0.00" required />
-            </label>
-            <label>
-              Total
-              <input name="totalPrice" type="number" min="0" step="0.01" value="0.00" readonly />
-            </label>
-          </div>
-          <div class="field-grid">
-            <label>
-              Plătit
-              <input name="paidAmount" type="number" min="0" step="0.01" value="0.00" />
-            </label>
-            <label>
-              Rest de plată
-              <input name="balance" type="number" min="0" step="0.01" value="0.00" readonly />
-            </label>
-          </div>
-        </section>
-        <section class="form-section">
-          <div class="form-section-head">
-            <div>
-              <p class="eyebrow">Observații</p>
-              <h3>Detalii interne</h3>
-            </div>
-          </div>
+          <label>
+            Data început
+            <input name="startDate" type="date" required />
+          </label>
+          <label>
+            Data sfârșit (opțional)
+            <input name="periodEndDate" type="date" />
+            <small>Lasă gol pentru staționare activă; se calculează până ieri.</small>
+          </label>
+          <label>
+            Nopți preplătite (zile albastre)
+            <input name="prepaidNights" type="number" min="0" step="1" value="0" />
+            <small>Poți schimba totalul direct. Zilele albastre noi pornesc de la data de început și sar peste zilele deja plătite.</small>
+          </label>
+          <label>
+            Preț pe zi
+            <input name="nightlyPrice" type="number" min="0.01" step="0.01" value="0.00" required />
+          </label>
+          <label>
+            Plătit
+            <input name="paidAmount" type="number" min="0" step="0.01" value="0.00" />
+          </label>
+          <input name="endDate" type="hidden" />
+          <input name="totalPrice" type="hidden" value="0.00" />
+          <input name="balance" type="hidden" value="0.00" />
+          <p class="calendar-summary stationing-form-summary" id="stationingRangeSummary"></p>
+          <div class="stationing-payment-history" id="stationingPaymentHistory" aria-live="polite"></div>
+        </div>
+        <section class="stationing-notes-section">
           <label>
             Observații
             <textarea name="note" rows="3" placeholder="Chei, stare rulotă, acces, instrucțiuni"></textarea>
@@ -1061,6 +1132,8 @@
     </div>
 
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script src="app-dialog.js"></script>
+    <script src="stationing-calculator.js"></script>
     <script src="app.js?v=unit-type-segments-20260518"></script>
   </body>
 </html>
