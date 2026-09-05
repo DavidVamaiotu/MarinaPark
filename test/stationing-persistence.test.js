@@ -7,6 +7,14 @@ const { DatabaseSync } = require("node:sqlite");
 const test = require("node:test");
 
 async function request(url, pathname, options = {}) {
+  if (options.body && ["/api/data", "/api/reservation", "/api/payment"].includes(pathname)) {
+    const payload = JSON.parse(options.body);
+    if (!Object.hasOwn(payload, "baseSavedAt")) {
+      const current = await fetch(`${url}/api/data`).then((response) => response.json());
+      if (current.config?.savedAt) payload.baseSavedAt = current.config.savedAt;
+      options = { ...options, body: JSON.stringify(payload) };
+    }
+  }
   const response = await fetch(`${url}${pathname}`, {
     ...options,
     headers: options.body ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers
@@ -219,4 +227,70 @@ test("automatic reservation stationing deductions are atomic and idempotent acro
   assert.deepEqual(restoredStay.stationingDeduction, savedStay.stationingDeduction);
   assert.deepEqual(restoredStationing.deductions, savedStationing.deductions);
   assert.deepEqual(restoredStationing.stayLinks, savedStationing.stayLinks);
+});
+
+test("confirmed final bar, stationing, and unit deletions persist across restart", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "marina-final-deletions-"));
+  let server = null;
+  context.after(async () => {
+    if (server) await server.stop().catch(() => {});
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  server = await startServer(root);
+
+  const seeded = await request(server.url, "/api/data", {
+    method: "POST",
+    body: JSON.stringify({
+      stays: [],
+      units: [{ id: "D-final", group: "room", kind: "Room" }],
+      stationing: [{
+        key: "station-final",
+        owner: "Final Owner",
+        caravan: "RV",
+        startDate: "2026-09-01",
+        openEnded: true,
+      }],
+      barArticles: [{ key: "bar-final", name: "Final article", stock: 1 }],
+      config: {},
+      allowEmptyCollections: true,
+    }),
+  });
+  assert.equal(seeded.status, 200);
+
+  const original = await request(server.url, "/api/data");
+  const refused = await request(server.url, "/api/data", {
+    method: "POST",
+    body: JSON.stringify({
+      ...original.body,
+      barArticles: [],
+      baseSavedAt: original.body.config.savedAt,
+    }),
+  });
+  assert.equal(refused.status, 409);
+
+  let current = original.body;
+  for (const [collection, value] of [
+    ["barArticles", []],
+    ["stationing", []],
+    ["units", []],
+  ]) {
+    const saved = await request(server.url, "/api/data", {
+      method: "POST",
+      body: JSON.stringify({
+        ...current,
+        [collection]: value,
+        baseSavedAt: current.config.savedAt,
+        allowEmptyCollections: [collection],
+      }),
+    });
+    assert.equal(saved.status, 200);
+    current = (await request(server.url, "/api/data")).body;
+  }
+
+  await server.stop();
+  server = await startServer(root);
+  const restored = await request(server.url, "/api/data");
+  assert.deepEqual(restored.body.units, []);
+  assert.deepEqual(restored.body.stationing, []);
+  assert.deepEqual(restored.body.barArticles, []);
 });

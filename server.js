@@ -79,6 +79,7 @@ let marinaOAuthRefreshPromise = null;
 let marinaOAuthMetadataCache = null;
 let marinaOAuthLastError = "";
 let marinaOAuthMemoryRefreshToken = "";
+let paymentPublicationQueue = Promise.resolve();
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -108,6 +109,7 @@ let clientDirectoryCache = null;
 let roomAvailabilityCache = null;
 const marinaSourceCache = new Map();
 const inFlightMarinaRequests = new Map();
+let marinaSourceGeneration = 0;
 db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
@@ -717,8 +719,8 @@ function replaceDatabaseData(
   units = [],
   stationing = [],
   barArticles = [],
+  options = {},
 ) {
-  const now = new Date().toISOString();
   const normalizedUnits = units.map(normalizeUnitForStorage);
   const insertReservation = db.prepare(`
     INSERT INTO reservations (key, order_index, id, guest, group_name, kind, start_date, end_date, updated_at, data)
@@ -753,6 +755,8 @@ function replaceDatabaseData(
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    const currentSavedAt = requireCurrentRevision(options.baseSavedAt);
+    const now = nextDatabaseSavedAt(currentSavedAt);
     db.exec("DELETE FROM reservations");
     stays.forEach((stay, index) => {
       insertReservation.run(
@@ -840,8 +844,9 @@ function replaceDatabaseData(
         JSON.stringify({ ...article, key }),
       );
     });
-    upsertConfig.run(now, JSON.stringify(config || {}));
+    upsertConfig.run(now, JSON.stringify({ ...(config || {}), savedAt: now }));
     db.exec("COMMIT");
+    return now;
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -880,6 +885,35 @@ function requestError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function staleDataError() {
+  const error = requestError(
+    409,
+    "Datele au fost modificate. Modificările tale nesalvate au fost păstrate.",
+  );
+  error.code = "STALE_DATA";
+  return error;
+}
+
+function currentDatabaseSavedAt() {
+  return String(configRow().savedAt || "");
+}
+
+function requireCurrentRevision(baseSavedAt) {
+  const current = currentDatabaseSavedAt();
+  if (!current) return current;
+  if (!baseSavedAt || String(baseSavedAt) !== current) throw staleDataError();
+  return current;
+}
+
+function nextDatabaseSavedAt(current = currentDatabaseSavedAt()) {
+  const currentTime = Date.parse(current);
+  const nextTime = Math.max(
+    Date.now(),
+    Number.isFinite(currentTime) ? currentTime + 1 : 0,
+  );
+  return new Date(nextTime).toISOString();
 }
 
 function tableCount(tableName) {
@@ -976,29 +1010,19 @@ async function writeData(payload) {
   preventAccidentalWipe(payload, "units", "units", units);
   preventAccidentalWipe(payload, "stationing", "stationing", stationing);
   preventAccidentalWipe(payload, "barArticles", "bar_articles", barArticles);
-  const currentConfig = configRow();
-  const baseSavedAt = String(payload.baseSavedAt || "");
-  if (
-    baseSavedAt &&
-    currentConfig.savedAt &&
-    baseSavedAt !== currentConfig.savedAt
-  ) {
-    const error = new Error(
-      "Baza de date locală a fost modificată în altă fereastră. Reîncarcă aplicația înainte de salvare.",
-    );
-    error.statusCode = 409;
-    throw error;
-  }
-
-  const nextConfig = {
-    ...config,
-    savedAt: config.savedAt || new Date().toISOString(),
-  };
-  replaceDatabaseData(stays, nextConfig, units, stationing, barArticles);
+  const { savedAt: discardedSavedAt, ...serverConfig } = config;
+  const savedAt = replaceDatabaseData(
+    stays,
+    serverConfig,
+    units,
+    stationing,
+    barArticles,
+    { baseSavedAt: payload.baseSavedAt },
+  );
   clientHistoryStore.syncReservations(stays);
   clientDirectoryCache = null;
   await enqueueDatabaseBackup({ afterMutation: true });
-  return { savedAt: nextConfig.savedAt };
+  return { savedAt };
 }
 
 function reservationDeductionNights(stay, deduction) {
@@ -1008,11 +1032,17 @@ function reservationDeductionNights(stay, deduction) {
   }
   const start = String(stay?.start || "");
   const end = String(stay?.end || "");
-  if (stationingCalculator.validISODate(start) && stationingCalculator.validISODate(end)) {
+  if (
+    stationingCalculator.validISODate(start) &&
+    stationingCalculator.validISODate(end)
+  ) {
     const startTime = Date.parse(`${start}T12:00:00Z`);
     const endTime = Date.parse(`${end}T12:00:00Z`);
     if (endTime > startTime) {
-      return Math.min(3660, Math.max(1, Math.round((endTime - startTime) / 86400000)));
+      return Math.min(
+        3660,
+        Math.max(1, Math.round((endTime - startTime) / 86400000)),
+      );
     }
   }
   return 1;
@@ -1060,7 +1090,10 @@ function stationingRecordWithStayDeduction(record, stay, requested, now) {
     .normalizeStayLinks(record)
     .find((link) => link.stayKey === String(stay.key));
   const appliedAt = String(
-    existingDeduction?.appliedAt || existingLink?.linkedAt || requested.appliedAt || now,
+    existingDeduction?.appliedAt ||
+      existingLink?.linkedAt ||
+      requested.appliedAt ||
+      now,
   );
   const nights = reservationDeductionNights(stay, requested);
   const entry = {
@@ -1080,7 +1113,10 @@ function stationingRecordWithStayDeduction(record, stay, requested, now) {
   const withoutStay = stationingRecordWithoutStay(record, stay.key);
   const nextRecord = stationingCalculator.normalizeRecord({
     ...withoutStay,
-    deductions: [...(Array.isArray(withoutStay.deductions) ? withoutStay.deductions : []), entry],
+    deductions: [
+      ...(Array.isArray(withoutStay.deductions) ? withoutStay.deductions : []),
+      entry,
+    ],
     stayLinks: [
       ...stationingCalculator.normalizeStayLinks(withoutStay),
       { stayKey: String(stay.key), subtractDays: true, linkedAt: appliedAt },
@@ -1093,11 +1129,13 @@ function stationingRecordWithStayDeduction(record, stay, requested, now) {
   const deduction = {
     ...currentDeduction,
     recordKey: String(record.key),
-    recordLabel:
-      String(
-        requested.recordLabel || `${record.owner || ""} (${record.caravan || ""})`,
-      ).trim(),
-    selectedAt: String(currentDeduction.selectedAt || requested.selectedAt || appliedAt),
+    recordLabel: String(
+      requested.recordLabel ||
+        `${record.owner || ""} (${record.caravan || ""})`,
+    ).trim(),
+    selectedAt: String(
+      currentDeduction.selectedAt || requested.selectedAt || appliedAt,
+    ),
     appliedAt,
     appliedNights: nights,
     appliedAmount: 0,
@@ -1107,12 +1145,7 @@ function stationingRecordWithStayDeduction(record, stay, requested, now) {
   return { record: nextRecord, deduction, entry };
 }
 
-function persistReservationStationing(
-  stay,
-  previousReservation,
-  payload,
-  now,
-) {
+function persistReservationStationing(stay, previousReservation, payload, now) {
   const requested = reservationStationingDeduction(
     payload.stationingDeduction === undefined
       ? stay.stationingDeduction
@@ -1132,7 +1165,8 @@ function persistReservationStationing(
   for (const recordKey of previousRecordKeys) {
     if (recordKey === nextRecordKey) continue;
     const record = stationingByKey(recordKey);
-    if (record) nextRecords.set(recordKey, stationingRecordWithoutStay(record, stay.key));
+    if (record)
+      nextRecords.set(recordKey, stationingRecordWithoutStay(record, stay.key));
   }
 
   let stationing = null;
@@ -1153,8 +1187,9 @@ function persistReservationStationing(
     stationing = next.record;
   }
 
-  for (const record of nextRecords.values()) updateStationingRow(record, now);
-  return { stay: persistedStay, stationing };
+  const stationingMutations = [...nextRecords.values()];
+  for (const record of stationingMutations) updateStationingRow(record, now);
+  return { stay: persistedStay, stationing, stationingMutations };
 }
 
 async function writeReservation(payload) {
@@ -1192,13 +1227,15 @@ async function writeReservation(payload) {
   const orderIndex = existing
     ? Number(existing.order_index)
     : Number(firstOrder ?? 0) - 1;
-  const now = new Date().toISOString();
   const previousReservation =
     reservationByKey(previousKey) || reservationByKey(key);
 
   let stationingMutation;
+  let savedAt;
   db.exec("BEGIN IMMEDIATE");
   try {
+    const currentSavedAt = requireCurrentRevision(payload.baseSavedAt);
+    const now = nextDatabaseSavedAt(currentSavedAt);
     stationingMutation = persistReservationStationing(
       { ...stay, key, id, guest },
       previousReservation,
@@ -1233,7 +1270,7 @@ async function writeReservation(payload) {
       now,
       JSON.stringify(stationingMutation.stay),
     );
-    bumpDatabaseSavedAt(now);
+    savedAt = bumpDatabaseSavedAt(now);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -1244,9 +1281,10 @@ async function writeReservation(payload) {
   clientDirectoryCache = null;
   void enqueueDatabaseBackup({ afterMutation: true });
   return {
-    savedAt: now,
+    savedAt,
     stay: stationingMutation.stay,
     stationing: stationingMutation.stationing,
+    stationingMutations: stationingMutation.stationingMutations,
   };
 }
 
@@ -1903,17 +1941,27 @@ function validatedBarReceiptTransactions(transactions) {
       throw new Error(`Rezultatul plății ${transaction.id} este invalid`);
     }
     if (transaction.type === "bar") {
-      if (result.type !== "bar" || !result.sale || typeof result.sale !== "object") {
-        throw new Error(`Rezultatul plății bar ${transaction.id} este incomplet`);
+      if (
+        result.type !== "bar" ||
+        !result.sale ||
+        typeof result.sale !== "object"
+      ) {
+        throw new Error(
+          `Rezultatul plății bar ${transaction.id} este incomplet`,
+        );
       }
       validateBarReceiptItems(result.sale.items, `Plata bar ${transaction.id}`);
     } else if (transaction.type === "stay") {
       if (result.type !== "stay" || !Array.isArray(result.stays)) {
-        throw new Error(`Rezultatul plății de cazare ${transaction.id} este incomplet`);
+        throw new Error(
+          `Rezultatul plății de cazare ${transaction.id} este incomplet`,
+        );
       }
       result.stays.forEach((stay, index) => {
         if (!stay || typeof stay !== "object" || Array.isArray(stay)) {
-          throw new Error(`Rezervarea din plata ${transaction.id}[${index}] este invalidă`);
+          throw new Error(
+            `Rezervarea din plata ${transaction.id}[${index}] este invalidă`,
+          );
         }
         if (stay.barItems !== undefined) {
           validateBarReceiptItems(
@@ -1964,10 +2012,7 @@ function backfillBarExportLedger() {
   try {
     validated = validatedBarReceiptTransactions(transactions);
   } catch (error) {
-    console.error(
-      "Bar receipt state reconstruction skipped:",
-      error.message,
-    );
+    console.error("Bar receipt state reconstruction skipped:", error.message);
     return { rebuilt: false, error: error.message };
   }
 
@@ -2004,10 +2049,7 @@ function backfillBarExportLedger() {
     return { rebuilt: true };
   } catch (error) {
     if (transactionStarted) db.exec("ROLLBACK");
-    console.error(
-      "Bar receipt state reconstruction skipped:",
-      error.message,
-    );
+    console.error("Bar receipt state reconstruction skipped:", error.message);
     return { rebuilt: false, error: error.message };
   }
 }
@@ -2503,7 +2545,7 @@ async function appendReceiptInfoLineOnce(line, paymentId) {
   return infoPath;
 }
 
-async function publishPaymentOutbox(paymentId) {
+async function publishPaymentOutboxNow(paymentId) {
   let row = paymentTransactionRow(paymentId);
   if (!row || row.status === "completed") return row;
   if (row.method === "voucher") {
@@ -2542,15 +2584,11 @@ async function publishPaymentOutbox(paymentId) {
   return paymentTransactionRow(paymentId);
 }
 
-async function retryPendingPaymentOutbox() {
-  const pending = db
-    .prepare(
-      "SELECT id FROM payment_transactions WHERE status <> 'completed' ORDER BY created_at ASC LIMIT 100",
-    )
-    .all();
-  for (const row of pending) {
-    await publishPaymentOutbox(row.id);
-  }
+function publishPaymentOutbox(paymentId) {
+  const run = () => publishPaymentOutboxNow(paymentId);
+  const publication = paymentPublicationQueue.then(run, run);
+  paymentPublicationQueue = publication.catch(() => {});
+  return publication;
 }
 
 function bumpDatabaseSavedAt(now) {
@@ -3328,13 +3366,15 @@ async function commitPayment(payload) {
         "Identificatorul plății a fost deja folosit pentru altă operațiune",
       );
     existing = await publishPaymentOutbox(paymentId);
+    const replayed = parsePaymentResult(existing);
     return {
       ok: true,
       committed: true,
       receiptPending: existing.status !== "completed",
       paymentId,
       status: existing.status,
-      ...parsePaymentResult(existing),
+      ...replayed,
+      savedAt: currentDatabaseSavedAt() || replayed.savedAt || "",
     };
   }
 
@@ -3345,13 +3385,17 @@ async function commitPayment(payload) {
   if (method !== "voucher") {
     config.receiptDirectory = await receiptDirectoryFor(config);
   }
-  const now = new Date().toISOString();
+  // Another identical request may have committed while the receipt directory
+  // was being validated. Resolve it through the normal idempotent replay path.
+  if (paymentTransactionRow(paymentId)) return commitPayment(payload);
   let mutation;
   let activityResult;
   db.exec("BEGIN IMMEDIATE");
   try {
     existing = paymentTransactionRow(paymentId);
     if (existing) throw requestError(409, "Plata este deja în curs");
+    const currentSavedAt = requireCurrentRevision(payload.baseSavedAt);
+    const now = nextDatabaseSavedAt(currentSavedAt);
     const context = { paymentId, method, config, now };
     mutation =
       type === "bar"
@@ -3408,7 +3452,7 @@ async function commitPayment(payload) {
       published.status === "completed"
         ? ""
         : published.last_error ||
-          "Bonul este în așteptare și va fi reîncercat automat",
+          "Bonul este în așteptare. Repetați plata pentru a-l rescrie",
     ...mutation.result,
   };
 }
@@ -3854,6 +3898,8 @@ function saveMarinaApiSettings(payload = {}) {
   if (baseUrlChanged) marinaOAuthMetadataCache = null;
   if (clientChanged || baseUrlChanged) void clearMarinaOAuthSession();
   marinaSourceCache.clear();
+  marinaSourceGeneration += 1;
+  inFlightMarinaRequests.clear();
   clientDirectoryCache = null;
   roomAvailabilityCache = null;
   return publicMarinaApiSettings();
@@ -4225,6 +4271,7 @@ async function handleMarinaOAuthCallback(callbackUrl) {
     await applyMarinaOAuthToken(payload);
     marinaOAuthLastError = "";
     marinaSourceCache.clear();
+    marinaSourceGeneration += 1;
     inFlightMarinaRequests.clear();
     clientDirectoryCache = null;
     roomAvailabilityCache = null;
@@ -4261,6 +4308,7 @@ async function disconnectMarinaOAuth() {
   } finally {
     await clearMarinaOAuthSession();
     marinaSourceCache.clear();
+    marinaSourceGeneration += 1;
     inFlightMarinaRequests.clear();
     clientDirectoryCache = null;
     roomAvailabilityCache = null;
@@ -4767,8 +4815,9 @@ function marinaSourceBooking(booking, resources, mode) {
 
 async function fetchMarinaWorkspaceBookings(
   mode,
-  { limit = 300, maxPages = 2, force = false } = {},
+  { limit = 300, maxPages = 2, force = false, complete = false } = {},
 ) {
+  const requestGeneration = marinaSourceGeneration;
   const settings = effectiveMarinaApiSettings();
   const workspaceId =
     mode === "camping"
@@ -4776,42 +4825,74 @@ async function fetchMarinaWorkspaceBookings(
       : settings.roomsWorkspaceId;
   const cacheKey = `${mode}:${workspaceId ?? "default"}`;
   const cached = marinaSourceCache.get(cacheKey);
-  if (!force && cached?.expiresAt > Date.now()) return cached.bookings;
+  const cachedIsFresh = !force && cached?.expiresAt > Date.now();
+  if (cachedIsFresh && (!complete || cached.complete)) {
+    return {
+      bookings: cached.bookings || [],
+      searchComplete: Boolean(cached.complete),
+      warnings: cached.warnings || [],
+    };
+  }
 
   if (inFlightMarinaRequests.has(cacheKey)) {
-    return inFlightMarinaRequests.get(cacheKey);
+    const shared = await inFlightMarinaRequests.get(cacheKey);
+    if (complete && !shared.searchComplete) {
+      return fetchMarinaWorkspaceBookings(mode, {
+        limit,
+        maxPages,
+        complete: true,
+      });
+    }
+    return shared;
   }
 
   const fetchPromise = (async () => {
     try {
       const batchLimit = Math.max(1, Math.min(200, Number(limit) || 200));
-      const firstParams = new URLSearchParams({ limit: String(batchLimit) });
-
       await marinaOAuthAccessTokenForApi();
-      const [resources, firstPayload] = await Promise.all([
-        fetchMarinaWorkspaceResources(mode),
-        marinaApiRequest(`/v1/bookings?${firstParams}`, { workspaceId }),
-      ]);
+      const resources = await fetchMarinaWorkspaceResources(mode);
+      let bookings = cachedIsFresh ? [...(cached.bookings || [])] : [];
+      let after = cachedIsFresh ? String(cached.nextCursor || "") : "";
+      let pageCount = cachedIsFresh ? Number(cached.pageCount || 0) : 0;
+      const warnings = cachedIsFresh ? [...(cached.warnings || [])] : [];
+      let firstPage = !cachedIsFresh;
 
-      const rows = [...marinaCollection(firstPayload, ["bookings"])];
-      let after = String(
-        firstPayload?.next_cursor ??
-          firstPayload?.pagination?.next_cursor ??
-          firstPayload?.meta?.next_cursor ??
-          "",
-      );
-      let pageCount = 1;
-
-      while (after && rows.length < limit && pageCount < maxPages) {
+      while (
+        firstPage ||
+        (after && (complete || bookings.length < limit) && pageCount < maxPages)
+      ) {
         const nextParams = new URLSearchParams({
           limit: String(batchLimit),
-          after,
         });
-        const nextPayload = await marinaApiRequest(
-          `/v1/bookings?${nextParams}`,
-          { workspaceId },
+        if (!firstPage) nextParams.set("after", after);
+        let nextPayload;
+        try {
+          nextPayload = await marinaApiRequest(`/v1/bookings?${nextParams}`, {
+            workspaceId,
+          });
+        } catch (error) {
+          if (firstPage && !bookings.length) throw error;
+          warnings.push(
+            String(error?.message || error || "Marina indisponibil"),
+          );
+          break;
+        }
+        const nextBookings = marinaCollection(nextPayload, ["bookings"])
+          .map((booking) => marinaSourceBooking(booking, resources, mode))
+          .filter(Boolean);
+        const existingIds = new Set(
+          bookings.map((booking) =>
+            String(booking.providerBookingId || booking.id),
+          ),
         );
-        rows.push(...marinaCollection(nextPayload, ["bookings"]));
+        for (const booking of nextBookings) {
+          const id = String(booking.providerBookingId || booking.id);
+          if (!existingIds.has(id)) {
+            bookings.push(booking);
+            existingIds.add(id);
+          }
+        }
+        const previousAfter = after;
         after = String(
           nextPayload?.next_cursor ??
             nextPayload?.pagination?.next_cursor ??
@@ -4819,18 +4900,36 @@ async function fetchMarinaWorkspaceBookings(
             "",
         );
         pageCount += 1;
+        firstPage = false;
+        if (after && after === previousAfter) {
+          warnings.push("API-ul Marina a repetat cursorul de paginare.");
+          break;
+        }
       }
 
-      const bookings = rows
-        .map((booking) => marinaSourceBooking(booking, resources, mode))
-        .filter(Boolean);
+      const searchComplete = !after;
+      if (complete && after && pageCount >= maxPages) {
+        warnings.push(
+          "Căutarea Marina a atins limita de siguranță de 100 pagini.",
+        );
+      }
+      if (requestGeneration !== marinaSourceGeneration) {
+        throw requestError(
+          409,
+          "Setările conexiunii Marina s-au modificat în timpul căutării.",
+        );
+      }
       marinaSourceCache.set(cacheKey, {
         ...marinaSourceCache.get(cacheKey),
         expiresAt: Date.now() + clientDirectoryCacheMs,
         bookings,
         resources,
+        nextCursor: after,
+        pageCount,
+        complete: searchComplete,
+        warnings,
       });
-      return bookings;
+      return { bookings, searchComplete, warnings };
     } finally {
       inFlightMarinaRequests.delete(cacheKey);
     }
@@ -4961,18 +5060,23 @@ async function fetchSourceBookings(mode, query = "", options = {}) {
       ...b,
       directorySource: "marina",
     }));
-    return filteredSourceBookings(normalized, query, limit);
+    const bookings = filteredSourceBookings(normalized, query, limit);
+    return options.withMetadata
+      ? { bookings, searchComplete: true, warnings: [] }
+      : bookings;
   }
   const maxPages = options.all ? 100 : Math.max(1, Math.ceil(limit / 200));
-  return filteredSourceBookings(
-    await fetchMarinaWorkspaceBookings(isCamping ? "camping" : "room", {
+  const result = await fetchMarinaWorkspaceBookings(
+    isCamping ? "camping" : "room",
+    {
       limit,
       maxPages,
       force: options.force === true,
-    }),
-    query,
-    limit,
+      complete: options.all === true,
+    },
   );
+  const bookings = filteredSourceBookings(result.bookings, query, limit);
+  return options.withMetadata ? { ...result, bookings } : bookings;
 }
 
 async function fetchClientDirectory(options = {}) {
@@ -5115,8 +5219,59 @@ function localHistoryBookingNote(client = {}, reservations = []) {
         String(first.end || first.start || ""),
       ) ||
       String(second.start || "").localeCompare(String(first.start || "")) ||
-      String(second.updatedAt || "").localeCompare(String(first.updatedAt || "")),
+      String(second.updatedAt || "").localeCompare(
+        String(first.updatedAt || ""),
+      ),
   )[0];
+  return String(source?.note || "").trim();
+}
+
+function reservationNoteCandidateCompare(first, second) {
+  return (
+    String(second?.end || second?.start || "").localeCompare(
+      String(first?.end || first?.start || ""),
+    ) ||
+    String(second?.start || "").localeCompare(String(first?.start || "")) ||
+    String(second?.updatedAt || "").localeCompare(
+      String(first?.updatedAt || ""),
+    )
+  );
+}
+
+function bestReservation(first, second) {
+  if (!first) return second;
+  if (!second) return first;
+  return reservationNoteCandidateCompare(first, second) <= 0 ? first : second;
+}
+
+function buildLocalReservationNoteIndex(reservations = []) {
+  const index = new Map();
+  for (const stay of reservations) {
+    const normalizedName =
+      stay?.guest === "Disponibil" ? "" : normalizeClientName(stay?.guest);
+    if (!normalizedName) continue;
+    let entry = index.get(normalizedName);
+    if (!entry) {
+      entry = { best: null, byRoom: new Map(), byPhone: new Map() };
+      index.set(normalizedName, entry);
+    }
+    entry.best = bestReservation(entry.best, stay);
+    const room = String(stay.id || "").trim();
+    const phone = transferPhoneDigits(stay.phone);
+    if (room)
+      entry.byRoom.set(room, bestReservation(entry.byRoom.get(room), stay));
+    if (phone)
+      entry.byPhone.set(phone, bestReservation(entry.byPhone.get(phone), stay));
+  }
+  return index;
+}
+
+function indexedLocalHistoryBookingNote(client = {}, index = new Map()) {
+  const entry = index.get(normalizeClientName(client.guest));
+  if (!entry) return "";
+  const roomMatch = entry.byRoom.get(String(client.room || "").trim());
+  const phoneMatch = entry.byPhone.get(transferPhoneDigits(client.phone));
+  const source = bestReservation(roomMatch, phoneMatch) || entry.best;
   return String(source?.note || "").trim();
 }
 
@@ -5126,13 +5281,18 @@ async function fetchFusedSourceBookings(mode, query = "") {
 
   let marinaBookings = [];
   let marinaAvailable = true;
+  let searchComplete = true;
   const warnings = [];
 
   try {
-    const rawBookings = await fetchSourceBookings(sourceMode, "", {
-      limit: 300,
+    const sourceResult = await fetchSourceBookings(sourceMode, "", {
+      limit: query ? 50000 : 300,
+      all: Boolean(query),
+      withMetadata: true,
     });
-    marinaBookings = rawBookings
+    searchComplete = !query || sourceResult.searchComplete;
+    warnings.push(...sourceResult.warnings);
+    marinaBookings = sourceResult.bookings
       .map((booking) => sourceBookingFromDirectoryClient(booking, mode))
       .filter((booking) =>
         isCamping
@@ -5155,12 +5315,17 @@ async function fetchFusedSourceBookings(mode, query = "") {
         })()
       : clientHistoryStore.clients();
   const localReservations = reservationRows();
+  const localReservationNoteIndex =
+    buildLocalReservationNoteIndex(localReservations);
   const localBookings = localClients
     .map((client) =>
       sourceBookingFromDirectoryClient(
         {
           ...client,
-          note: localHistoryBookingNote(client, localReservations),
+          note: indexedLocalHistoryBookingNote(
+            client,
+            localReservationNoteIndex,
+          ),
           directorySource: "local-history",
         },
         mode,
@@ -5185,6 +5350,7 @@ async function fetchFusedSourceBookings(mode, query = "") {
     ok: true,
     bookings: filteredBookings,
     marinaAvailable,
+    searchComplete,
     warnings,
     sources: {
       marina: filteredBookings.filter(
@@ -5679,7 +5845,11 @@ const server = http.createServer(async (request, response) => {
     send(
       response,
       error.statusCode || 500,
-      JSON.stringify({ ok: false, error: error.message }),
+      JSON.stringify({
+        ok: false,
+        error: error.message,
+        code: error.code || undefined,
+      }),
     );
   }
 });
@@ -5749,9 +5919,6 @@ async function startServer(options = {}) {
   for (const lanUrl of lanUrls) console.log(`Marina Park în rețea: ${lanUrl}`);
   console.log(`Database: ${databasePath}`);
   console.log(`Client history: ${clientHistoryDatabasePath}`);
-  retryPendingPaymentOutbox().catch((error) =>
-    console.error("Pending receipt retry failed:", error.message),
-  );
   enqueueDatabaseBackup({ reason: "startup" });
   backupInterval = setInterval(
     () => enqueueDatabaseBackup({ reason: "interval" }),
@@ -5778,8 +5945,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildLocalReservationNoteIndex,
   buildSagaBarSalesReportHtml,
   handleMarinaOAuthCallback,
+  indexedLocalHistoryBookingNote,
+  localHistoryBookingNote,
   setMarinaOAuthStorage,
   setLiveScreenCaptureProvider,
   setPdfRenderProvider,

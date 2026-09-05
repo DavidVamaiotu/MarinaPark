@@ -49,6 +49,14 @@ async function startTestServer() {
 }
 
 async function jsonRequest(url, pathname, options = {}) {
+  if (options.body && ["/api/data", "/api/reservation", "/api/payment"].includes(pathname)) {
+    const payload = JSON.parse(options.body);
+    if (!Object.hasOwn(payload, "baseSavedAt")) {
+      const current = await fetch(`${url}/api/data`).then((response) => response.json());
+      if (current.config?.savedAt) payload.baseSavedAt = current.config.savedAt;
+      options = { ...options, body: JSON.stringify(payload) };
+    }
+  }
   const response = await fetch(`${url}${pathname}`, {
     ...options,
     headers: options.body ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers

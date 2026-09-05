@@ -9,6 +9,14 @@ const test = require("node:test");
 const projectRoot = path.resolve(__dirname, "..");
 
 async function request(url, pathname, options = {}) {
+  if (options.body && ["/api/data", "/api/reservation", "/api/payment"].includes(pathname)) {
+    const payload = JSON.parse(options.body);
+    if (!Object.hasOwn(payload, "baseSavedAt")) {
+      const current = await fetch(`${url}/api/data`).then((response) => response.json());
+      if (current.config?.savedAt) payload.baseSavedAt = current.config.savedAt;
+      options = { ...options, body: JSON.stringify(payload) };
+    }
+  }
   const response = await fetch(`${url}${pathname}`, {
     ...options,
     headers: options.body

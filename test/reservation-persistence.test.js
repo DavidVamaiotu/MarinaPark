@@ -69,7 +69,7 @@ test("reservation upserts remain writable after the full-database revision chang
         const original = await request(base + "/api/data");
         const first = await request(base + "/api/reservation", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stay: stay("new-a", "Client A") })
+          body: JSON.stringify({ stay: stay("new-a", "Client A"), baseSavedAt: original.body.config.savedAt })
         });
         const stale = await request(base + "/api/data", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -82,7 +82,7 @@ test("reservation upserts remain writable after the full-database revision chang
         });
         const second = await request(base + "/api/reservation", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stay: stay("new-b", "Client B") })
+          body: JSON.stringify({ stay: stay("new-b", "Client B"), baseSavedAt: first.body.savedAt })
         });
         const finalState = await request(base + "/api/data");
         process.stdout.write("RESULT=" + JSON.stringify({

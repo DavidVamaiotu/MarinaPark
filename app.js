@@ -642,7 +642,11 @@ let editingUnitId = null;
 let editingFacilityKey = null;
 let saveToFilesTimer = null;
 let lastDatabaseSavedAt = null;
-let saveToFilesPromise = Promise.resolve();
+let mutationQueuePromise = Promise.resolve();
+let mutationQueueEpoch = 0;
+let localMutationSequence = 0;
+let mutationQueueBlocked = false;
+let conflictReloadPrompt = null;
 let unitPricingMonth = monthStart(today);
 let unitPricingDraft = {};
 let unitPricingSelectedDates = new Set([toISODate(today)]);
@@ -2783,7 +2787,7 @@ function loadSavedBarArticles() {
 async function loadFileBackedData() {
   try {
     const response = await fetch("/api/data", { cache: "no-store" });
-    if (!response.ok) return;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
     lastDatabaseSavedAt = data.config?.savedAt || null;
@@ -2896,8 +2900,14 @@ async function loadFileBackedData() {
       queueFileSave();
     }
     rebuildStaysByUnitIndex();
-  } catch {
-    // Static file mode keeps using localStorage.
+    return true;
+  } catch (error) {
+    showToast(
+      error?.message
+        ? `Datele locale nu au putut fi încărcate: ${error.message}`
+        : "Datele locale nu au putut fi încărcate.",
+    );
+    return false;
   }
 }
 
@@ -2914,12 +2924,12 @@ function ensureStayKeys() {
   });
 }
 
-function saveStays() {
+function saveStays(options = {}) {
   markPagesDirty();
   ensureStayKeys();
   cacheCurrentData();
   rebuildStaysByUnitIndex();
-  queueFileSave();
+  queueFileSave(options);
 }
 
 function cacheCurrentData() {
@@ -2932,30 +2942,125 @@ function cacheCurrentData() {
   }
 }
 
-async function saveBookingReservation(stay, previousStay = null) {
-  try {
-    const stationingDeduction =
-      stay?.stationingDeduction?.subtractDays === true
-        ? stay.stationingDeduction
-        : null;
-    const response = await fetch("/api/reservation", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        stay,
-        previousKey: previousStay?.key || stay.key,
-        previousStationingKey:
-          previousStay?.stationingDeduction?.recordKey || "",
-        stationingDeduction,
-      }),
+function mutationRequestError(response, result = {}) {
+  const error = new Error(result.error || `HTTP ${response.status}`);
+  error.status = response.status;
+  error.code = result.code || "";
+  error.result = result;
+  return error;
+}
+
+function enqueueMutation(operation, options = {}) {
+  const queuedEpoch = mutationQueueEpoch;
+  const queuedSequence = localMutationSequence;
+  const queuedBaseSavedAt = options.baseSavedAt ?? lastDatabaseSavedAt;
+  const run = async () => {
+    if (mutationQueueBlocked || queuedEpoch !== mutationQueueEpoch) {
+      const error = new Error(
+        "Salvarea a fost oprită până la reîncărcarea datelor.",
+      );
+      error.code = "MUTATION_QUEUE_STOPPED";
+      throw error;
+    }
+    try {
+      const effectiveBaseSavedAt =
+        options.allowLocalAdvance !== false &&
+        queuedSequence !== localMutationSequence
+          ? lastDatabaseSavedAt
+          : queuedBaseSavedAt;
+      const result = await operation(effectiveBaseSavedAt);
+      if (result?.savedAt && result.savedAt !== lastDatabaseSavedAt) {
+        lastDatabaseSavedAt = result.savedAt;
+        localMutationSequence += 1;
+      }
+      return result;
+    } catch (error) {
+      if (error?.code === "STALE_DATA" && !mutationQueueBlocked) {
+        mutationQueueBlocked = true;
+        mutationQueueEpoch += 1;
+      }
+      throw error;
+    }
+  };
+  const result = mutationQueuePromise.then(run, run);
+  mutationQueuePromise = result.catch(() => {});
+  return result;
+}
+
+function handleMutationFailure(error, fallbackMessage) {
+  if (error?.code === "MUTATION_QUEUE_STOPPED") return;
+  const message = error?.message || fallbackMessage;
+  showToast(message);
+  if (error?.code !== "STALE_DATA") return;
+  if (!mutationQueueBlocked) {
+    mutationQueueBlocked = true;
+    mutationQueueEpoch += 1;
+  }
+  if (conflictReloadPrompt) return;
+  conflictReloadPrompt = window.appDialog
+    .confirm(
+      "Datele au fost modificate. Modificările tale nesalvate au fost păstrate.",
+      {
+        title: "Date modificate",
+        confirmLabel: "Reîncarcă datele",
+        cancelLabel: "Continuă revizuirea",
+      },
+    )
+    .then(async (reload) => {
+      if (!reload) return;
+      const reloaded = await loadFileBackedData();
+      if (!reloaded) return;
+      mutationQueueBlocked = false;
+      renderAll({ force: true });
+    })
+    .catch(() => {})
+    .finally(() => {
+      conflictReloadPrompt = null;
     });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || result.ok === false)
-      throw new Error(result.error || `HTTP ${response.status}`);
+}
+
+async function saveBookingReservation(stay, previousStay = null) {
+  const baseSavedAt = lastDatabaseSavedAt;
+  const payload = {
+    stay: structuredClone(stay),
+    previousKey: previousStay?.key || stay.key,
+    previousStationingKey: previousStay?.stationingDeduction?.recordKey || "",
+    stationingDeduction:
+      stay?.stationingDeduction?.subtractDays === true
+        ? structuredClone(stay.stationingDeduction)
+        : null,
+    baseSavedAt,
+  };
+  try {
+    const result = await enqueueMutation(
+      async (effectiveBaseSavedAt) => {
+        const response = await fetch("/api/reservation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...payload,
+            baseSavedAt: effectiveBaseSavedAt,
+          }),
+        });
+        const responseResult = await response.json().catch(() => ({}));
+        if (!response.ok || responseResult.ok === false)
+          throw mutationRequestError(response, responseResult);
+        return responseResult;
+      },
+      {
+        baseSavedAt: bookingEditSession?.baseSavedAt ?? baseSavedAt,
+        allowLocalAdvance: !bookingEditSession,
+      },
+    );
     lastDatabaseSavedAt = result.savedAt || lastDatabaseSavedAt;
     if (result.stay?.key === stay.key) Object.assign(stay, result.stay);
-    if (result.stationing?.key) {
-      const normalizedRecord = normalizeStationingRecord(result.stationing);
+    const stationingMutations = Array.isArray(result.stationingMutations)
+      ? result.stationingMutations
+      : result.stationing
+        ? [result.stationing]
+        : [];
+    for (const stationingMutation of stationingMutations) {
+      const normalizedRecord = normalizeStationingRecord(stationingMutation);
       const stationingIndex = stationing.findIndex(
         (record) => record.key === normalizedRecord.key,
       );
@@ -2970,10 +3075,7 @@ async function saveBookingReservation(stay, previousStay = null) {
     rebuildStaysByUnitIndex();
     return result;
   } catch (error) {
-    await loadFileBackedData();
-    rebuildStaysByUnitIndex();
-    renderAll();
-    showToast(error.message || "Rezervarea nu a putut fi salvată");
+    handleMutationFailure(error, "Rezervarea nu a putut fi salvată");
     return false;
   }
 }
@@ -2998,45 +3100,53 @@ function configSnapshot() {
 }
 
 async function saveStaysToFiles(options = {}) {
-  const runSave = async () => {
+  const payload = structuredClone({
+    stays,
+    units,
+    stationing,
+    barArticles,
+    config: configSnapshot(),
+    baseSavedAt: options.baseSavedAt ?? lastDatabaseSavedAt,
+    allowEmptyCollections: options.allowEmptyCollections,
+  });
+  const runSave = async (effectiveBaseSavedAt) => {
     try {
-      const config = configSnapshot();
       const response = await fetch("/api/data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          stays,
-          units,
-          stationing,
-          barArticles,
-          config,
-          baseSavedAt: lastDatabaseSavedAt,
+          ...payload,
+          baseSavedAt: effectiveBaseSavedAt,
         }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || result.ok === false)
-        throw new Error(result.error || `HTTP ${response.status}`);
-      lastDatabaseSavedAt = result.savedAt || config.savedAt;
+        throw mutationRequestError(response, result);
+      if (result.savedAt && result.savedAt !== lastDatabaseSavedAt) {
+        lastDatabaseSavedAt = result.savedAt;
+        localMutationSequence += 1;
+      }
       if (options.showMessage) {
         showToast("Baza de date locală a fost actualizată");
       }
       return true;
     } catch (error) {
-      const message = String(error.message || "");
-      if (message.includes("altă fereastră") || options.showMessage) {
-        showToast(message || "Nu am putut salva baza de date locală");
-      }
+      handleMutationFailure(error, "Nu am putut salva baza de date locală");
       return false;
     }
   };
-  const savePromise = saveToFilesPromise.then(runSave, runSave);
-  saveToFilesPromise = savePromise.catch(() => false);
-  return savePromise;
+  return enqueueMutation(runSave, {
+    baseSavedAt: payload.baseSavedAt,
+    allowLocalAdvance: options.allowLocalAdvance !== false,
+  }).catch((error) => {
+    handleMutationFailure(error, "Nu am putut salva baza de date locală");
+    return false;
+  });
 }
 
-function queueFileSave() {
+function queueFileSave(options = {}) {
   window.clearTimeout(saveToFilesTimer);
-  saveToFilesTimer = window.setTimeout(saveStaysToFiles, 250);
+  saveToFilesTimer = window.setTimeout(() => saveStaysToFiles(options), 250);
 }
 
 function marinaWorkspaceInputValue(value) {
@@ -3703,19 +3813,27 @@ function createPaymentRequestId(prefix) {
 }
 
 async function postPayment(payload) {
-  const response = await fetch("/api/payment", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+  const requestPayload = structuredClone({
+    ...payload,
+    baseSavedAt: lastDatabaseSavedAt,
   });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok || !result.ok) {
-    const error = new Error(result.error || `HTTP ${response.status}`);
-    error.status = response.status;
-    error.result = result;
-    throw error;
-  }
-  return result;
+  return enqueueMutation(
+    async (effectiveBaseSavedAt) => {
+      const response = await fetch("/api/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...requestPayload,
+          baseSavedAt: effectiveBaseSavedAt,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok)
+        throw mutationRequestError(response, result);
+      return result;
+    },
+    { baseSavedAt: requestPayload.baseSavedAt },
+  );
 }
 
 function applyCommittedPaymentResult(result = {}) {
@@ -4228,9 +4346,20 @@ async function deleteUnit(unitId) {
   if (!confirmed) return;
 
   const deletedUnit = units.find((unit) => unit.id === unitId);
+  const previousUnits = units;
   units = units.filter((unit) => unit.id !== unitId);
   markPagesDirty("calendar", "clients", "settings", "statistics");
-  queueFileSave();
+  cacheCurrentData();
+  const saved = await saveStaysToFiles({
+    allowEmptyCollections: units.length ? undefined : ["units"],
+  });
+  if (!saved) {
+    units = previousUnits;
+    cacheCurrentData();
+    renderAll();
+    renderUnitList();
+    return false;
+  }
   renderAll();
   renderUnitList();
   logActivity({
@@ -4242,6 +4371,7 @@ async function deleteUnit(unitId) {
     data: { unit: deletedUnit },
   });
   showToast(`Unitate ștearsă: ${unitId}`);
+  return true;
 }
 
 function stationingDeductionEntryForStay(stay, _record) {
@@ -4501,7 +4631,7 @@ async function generateCommittedReceipt(stayKey, method) {
     }
     showToast(
       result.receiptPending
-        ? "Plata a fost salvată; bonul este în așteptare și va fi reîncercat automat."
+        ? "Plata a fost salvată; bonul este în așteptare. Repetați plata pentru a-l rescrie."
         : isVoucher
           ? "Plata cu voucher a fost salvată."
           : "Plata și bonul au fost salvate.",
@@ -4509,7 +4639,7 @@ async function generateCommittedReceipt(stayKey, method) {
     return true;
   } catch (error) {
     if (error.status && error.status < 500) receiptPaymentRequestId = null;
-    showToast(error.message || "Nu am putut finaliza plata");
+    handleMutationFailure(error, "Nu am putut finaliza plata");
     return false;
   } finally {
     setReceiptPaymentBusy(false);
@@ -6334,9 +6464,23 @@ async function deleteBarArticle() {
   );
   if (!confirmed) return false;
 
+  const previousBarArticles = barArticles;
+  const previousBarCart = barCart;
   barArticles = barArticles.filter((item) => item.key !== article.key);
   barCart = barCart.filter((item) => item.key !== article.key);
-  saveStays();
+  markPagesDirty();
+  cacheCurrentData();
+  const saved = await saveStaysToFiles({
+    allowEmptyCollections: barArticles.length ? undefined : ["barArticles"],
+  });
+  if (!saved) {
+    barArticles = previousBarArticles;
+    barCart = previousBarCart;
+    cacheCurrentData();
+    renderBarPage();
+    refreshIcons();
+    return false;
+  }
   renderBarPage();
   refreshIcons();
   logActivity({
@@ -6639,7 +6783,7 @@ async function generateCommittedBarReceipt(method) {
     refreshIcons();
     showToast(
       result.receiptPending
-        ? "Vânzarea a fost salvată; bonul este în așteptare și va fi reîncercat automat."
+        ? "Vânzarea a fost salvată; bonul este în așteptare. Repetați vânzarea pentru a-l rescrie."
         : isVoucher
           ? "Plata cu voucher a fost salvată la bar."
           : "Vânzarea, stocul și bonul au fost salvate.",
@@ -6647,12 +6791,7 @@ async function generateCommittedBarReceipt(method) {
     return true;
   } catch (error) {
     if (error.status && error.status < 500) barPaymentRequestId = null;
-    if (error.status === 409) {
-      await loadFileBackedData();
-      renderBarPage();
-      refreshIcons();
-    }
-    showToast(error.message || "Nu am putut finaliza plata de bar");
+    handleMutationFailure(error, "Nu am putut finaliza plata de bar");
     return false;
   } finally {
     setBarPaymentBusy(false);
@@ -7142,6 +7281,7 @@ function openStationingModal(recordKey = null, defaults = {}) {
     ? {
         key: editingStationingKey,
         openedAt: new Date().toISOString(),
+        baseSavedAt: lastDatabaseSavedAt,
         owner: record.owner,
         initialTotalPrice: Number(record.totalPrice || 0),
         initialPaidAmount: Number(record.paidAmount || 0),
@@ -7220,7 +7360,10 @@ function saveStationingRecord(record) {
     stationing.unshift(normalized);
   }
 
-  saveStays();
+  saveStays({
+    baseSavedAt: stationingEditSession?.baseSavedAt ?? lastDatabaseSavedAt,
+    allowLocalAdvance: !stationingEditSession,
+  });
   renderStationing();
   refreshIcons();
   const changes = previousRecord
@@ -7257,8 +7400,20 @@ async function deleteStationing(recordKey) {
   );
   if (!confirmed) return false;
 
+  const previousStationing = stationing;
   stationing = stationing.filter((item) => item.key !== recordKey);
-  saveStays();
+  markPagesDirty();
+  cacheCurrentData();
+  const saved = await saveStaysToFiles({
+    allowEmptyCollections: stationing.length ? undefined : ["stationing"],
+  });
+  if (!saved) {
+    stationing = previousStationing;
+    cacheCurrentData();
+    renderStationing();
+    refreshIcons();
+    return false;
+  }
   closeStationingModal();
   renderStationing();
   refreshIcons();
@@ -7804,6 +7959,7 @@ function openBookingModal(defaults = {}) {
     ? {
         key: editingStayKey,
         openedAt: new Date().toISOString(),
+        baseSavedAt: lastDatabaseSavedAt,
         guest: defaults.guest || "",
         initialPrice: Number(defaults.price || 0),
         initialBalance: Number(defaults.balance || 0),
@@ -9186,10 +9342,16 @@ async function loadSourceBookings(
     const todayCount = sourceTodayArrivalCount();
     const localCount = Number(result.sources?.local || 0);
     const localText = localCount ? ` · ${localCount} din istoricul local` : "";
+    const incompleteSearch =
+      Boolean(normalizedQuery) && result.searchComplete === false;
     sourceRecordStatus.textContent = normalizedQuery
-      ? sourceBookings.length
-        ? `${sourceBookings.length} potriviri găsite pentru „${normalizedQuery}”${localText}.`
-        : `Nu am găsit clienți cu un nume asemănător cu „${normalizedQuery}”.`
+      ? incompleteSearch
+        ? sourceBookings.length
+          ? `Atenție: căutarea Marina este incompletă. Am găsit ${sourceBookings.length} potriviri pentru „${normalizedQuery}”${localText}; încearcă din nou.`
+          : `Atenție: căutarea Marina este incompletă și nu poate confirma că nu există rezultate pentru „${normalizedQuery}”. Încearcă din nou.`
+        : sourceBookings.length
+          ? `${sourceBookings.length} potriviri găsite pentru „${normalizedQuery}”${localText}.`
+          : `Nu am găsit clienți cu un nume asemănător cu „${normalizedQuery}”.`
       : sourceBookings.length
         ? `${sourceBookings.length} rezervări/clienți încărcați${localText}. ${todayCount} rezervări pentru azi, apoi restul după dată.`
         : "Nu am găsit rezervări valide pentru modul curent.";

@@ -145,13 +145,21 @@ async function startFakeMarinaApi() {
           }],
           next_cursor: "rooms-page-2"
         }));
-      } else {
+      } else if (url.searchParams.get("after") === "rooms-page-2") {
         response.end(JSON.stringify({ data: [{
           id: 502,
           resource_id: 15,
           status: "cancelled",
           periods: [{ start_date: "2026-09-20", end_date: "2026-09-20" }],
           customer: { first_name: "Rezervare", last_name: "Anulată" }
+        }], next_cursor: "rooms-page-3" }));
+      } else {
+        response.end(JSON.stringify({ data: [{
+          id: 511,
+          resource_id: 15,
+          status: "approved",
+          periods: [{ start_date: "2026-09-25", end_date: "2026-09-25" }],
+          customer: { first_name: "Pagina", last_name: "Trei Exact" }
         }] }));
       }
       return;
@@ -281,6 +289,19 @@ test("Marina settings stay server-side and drive paginated workspace booking imp
   assert.equal(notesOnly?.note, "Sosire după ora 18\n\nCost total 150 RON, Depozit = 50 RON, Rest - 100 RON");
   assert.equal(roomSources.body.bookings.find((booking) => booking.guest === "Notes Preferred")?.price, 80);
   assert.equal(roomSources.body.bookings.some((booking) => booking.guest === "Rezervare Anulată"), false);
+  assert.equal(roomSources.body.bookings.some((booking) => booking.guest === "Pagina Trei Exact"), false);
+
+  const pageThreeSearch = await jsonRequest(
+    app.url,
+    "/api/source-bookings?mode=room&query=Pagina%20Trei%20Exact",
+  );
+  assert.equal(pageThreeSearch.status, 200);
+  assert.equal(pageThreeSearch.body.searchComplete, true);
+  assert.ok(
+    pageThreeSearch.body.bookings.some(
+      (booking) => booking.guest === "Pagina Trei Exact",
+    ),
+  );
 
   const fetchedDetails = await jsonRequest(app.url, "/api/source-booking-details?mode=room&id=508");
   assert.equal(fetchedDetails.status, 200);

@@ -10,11 +10,17 @@ function localDateISO(date = new Date()) {
 }
 
 async function startTestServer() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "parkline-payment-test-"));
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "parkline-payment-test-"),
+  );
   const dataDir = path.join(root, "data");
   const runtimeDir = path.join(root, "runtime");
   const receiptDir = path.join(root, "receipts");
-  await Promise.all([dataDir, runtimeDir, receiptDir].map((directory) => fs.mkdir(directory, { recursive: true })));
+  await Promise.all(
+    [dataDir, runtimeDir, receiptDir].map((directory) =>
+      fs.mkdir(directory, { recursive: true }),
+    ),
+  );
 
   const child = spawn(process.execPath, ["--no-warnings", "server.js"], {
     cwd: path.resolve(__dirname, ".."),
@@ -22,13 +28,16 @@ async function startTestServer() {
       ...process.env,
       PORT: "0",
       MARINA_DATA_DIR: dataDir,
-      MARINA_RUNTIME_DIR: runtimeDir
+      MARINA_RUNTIME_DIR: runtimeDir,
     },
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: ["ignore", "pipe", "pipe"],
   });
   const url = await new Promise((resolve, reject) => {
     let output = "";
-    const timer = setTimeout(() => reject(new Error(`Server startup timed out: ${output}`)), 10000);
+    const timer = setTimeout(
+      () => reject(new Error(`Server startup timed out: ${output}`)),
+      10000,
+    );
     child.stdout.on("data", (chunk) => {
       output += chunk;
       const match = output.match(/Marina Park app: (http:\/\/[^\s]+)/);
@@ -54,14 +63,29 @@ async function startTestServer() {
       child.kill("SIGTERM");
       await new Promise((resolve) => child.once("exit", resolve));
       await fs.rm(root, { recursive: true, force: true });
-    }
+    },
   };
 }
 
 async function request(url, pathname, options = {}) {
+  if (
+    options.body &&
+    ["/api/data", "/api/reservation", "/api/payment"].includes(pathname)
+  ) {
+    const payload = JSON.parse(options.body);
+    if (!Object.hasOwn(payload, "baseSavedAt")) {
+      const current = await fetch(`${url}/api/data`).then((response) =>
+        response.json(),
+      );
+      if (current.config?.savedAt) payload.baseSavedAt = current.config.savedAt;
+      options = { ...options, body: JSON.stringify(payload) };
+    }
+  }
   const response = await fetch(`${url}${pathname}`, {
     ...options,
-    headers: options.body ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers
+    headers: options.body
+      ? { "Content-Type": "application/json", ...(options.headers || {}) }
+      : options.headers,
   });
   return { status: response.status, body: await response.json() };
 }
@@ -73,18 +97,94 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
     receiptDirectory: server.receiptDir,
     receiptVat: "11",
     cardPaymentCode: "1",
-    cashPaymentCode: "0"
+    cashPaymentCode: "0",
   };
   const seed = {
     stays: [
-      { key: "stay-a", id: "D-1", guest: "Linked", personId: "person-1", group: "room", kind: "Room", price: 100, balance: 100 },
-      { key: "stay-b", id: "D-2", guest: "Linked", personId: "person-1", group: "room", kind: "Room", price: 900, balance: 900 },
-      { key: "stay-c", id: "D-3", guest: "Rounding", personId: "person-2", group: "room", kind: "Room", price: 1, balance: 1 },
-      { key: "stay-d", id: "D-4", guest: "Rounding", personId: "person-2", group: "room", kind: "Room", price: 1, balance: 1 },
-      { key: "stay-e", id: "D-5", guest: "Rounding", personId: "person-2", group: "room", kind: "Room", price: 1, balance: 0, paid: true, settledPrice: 1, actualPaidAmount: 1 },
-      { key: "stay-zero", id: "D-6", guest: "Complimentary", personId: "person-3", group: "room", kind: "Room", price: 0, balance: 0, paid: false },
-      { key: "stay-edit", id: "D-7", guest: "Edited Price", personId: "person-4", group: "room", kind: "Room", price: 100, balance: 100 },
-      { key: "stay-over", id: "D-11", guest: "Overpaid", personId: "person-8", group: "room", kind: "Room", price: 100, balance: 100 },
+      {
+        key: "stay-a",
+        id: "D-1",
+        guest: "Linked",
+        personId: "person-1",
+        group: "room",
+        kind: "Room",
+        price: 100,
+        balance: 100,
+      },
+      {
+        key: "stay-b",
+        id: "D-2",
+        guest: "Linked",
+        personId: "person-1",
+        group: "room",
+        kind: "Room",
+        price: 900,
+        balance: 900,
+      },
+      {
+        key: "stay-c",
+        id: "D-3",
+        guest: "Rounding",
+        personId: "person-2",
+        group: "room",
+        kind: "Room",
+        price: 1,
+        balance: 1,
+      },
+      {
+        key: "stay-d",
+        id: "D-4",
+        guest: "Rounding",
+        personId: "person-2",
+        group: "room",
+        kind: "Room",
+        price: 1,
+        balance: 1,
+      },
+      {
+        key: "stay-e",
+        id: "D-5",
+        guest: "Rounding",
+        personId: "person-2",
+        group: "room",
+        kind: "Room",
+        price: 1,
+        balance: 0,
+        paid: true,
+        settledPrice: 1,
+        actualPaidAmount: 1,
+      },
+      {
+        key: "stay-zero",
+        id: "D-6",
+        guest: "Complimentary",
+        personId: "person-3",
+        group: "room",
+        kind: "Room",
+        price: 0,
+        balance: 0,
+        paid: false,
+      },
+      {
+        key: "stay-edit",
+        id: "D-7",
+        guest: "Edited Price",
+        personId: "person-4",
+        group: "room",
+        kind: "Room",
+        price: 100,
+        balance: 100,
+      },
+      {
+        key: "stay-over",
+        id: "D-11",
+        guest: "Overpaid",
+        personId: "person-8",
+        group: "room",
+        kind: "Room",
+        price: 100,
+        balance: 100,
+      },
       {
         key: "stay-bar-combined",
         id: "D-8",
@@ -94,7 +194,20 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
         kind: "Room",
         price: 111,
         balance: 111,
-        barItems: [{ id: "attached-water-combined", articleKey: "water", name: "Water", price: 5, quantity: 2, vatRate: 11, hasSgr: true, subtotal: 10, sgrTotal: 1, lineTotal: 11 }]
+        barItems: [
+          {
+            id: "attached-water-combined",
+            articleKey: "water",
+            name: "Water",
+            price: 5,
+            quantity: 2,
+            vatRate: 11,
+            hasSgr: true,
+            subtotal: 10,
+            sgrTotal: 1,
+            lineTotal: 11,
+          },
+        ],
       },
       {
         key: "stay-bar-separate",
@@ -105,7 +218,20 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
         kind: "Room",
         price: 111,
         balance: 111,
-        barItems: [{ id: "attached-water-separate", articleKey: "water", name: "Water", price: 5, quantity: 2, vatRate: 11, hasSgr: true, subtotal: 10, sgrTotal: 1, lineTotal: 11 }]
+        barItems: [
+          {
+            id: "attached-water-separate",
+            articleKey: "water",
+            name: "Water",
+            price: 5,
+            quantity: 2,
+            vatRate: 11,
+            hasSgr: true,
+            subtotal: 10,
+            sgrTotal: 1,
+            lineTotal: 11,
+          },
+        ],
       },
       {
         key: "stay-bar-partial",
@@ -116,13 +242,49 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
         kind: "Room",
         price: 111,
         balance: 111,
-        barItems: [{ id: "attached-water-partial", articleKey: "water", name: "Water", price: 5, quantity: 2, vatRate: 11, hasSgr: true, subtotal: 10, sgrTotal: 1, lineTotal: 11 }]
-      }
+        barItems: [
+          {
+            id: "attached-water-partial",
+            articleKey: "water",
+            name: "Water",
+            price: 5,
+            quantity: 2,
+            vatRate: 11,
+            hasSgr: true,
+            subtotal: 10,
+            sgrTotal: 1,
+            lineTotal: 11,
+          },
+        ],
+      },
     ],
-    units: [{ id: "D-1", group: "room", kind: "Room" }, { id: "D-2", group: "room", kind: "Room" }],
+    units: [
+      { id: "D-1", group: "room", kind: "Room" },
+      { id: "D-2", group: "room", kind: "Room" },
+    ],
     stationing: [
-      { key: "station-a", owner: "Owner", caravan: "RV", startDate: "2026-07-01", prepaidNights: 10, nightlyPrice: 10, totalPrice: 100, paidAmount: 0, balance: 100 },
-      { key: "station-open", schemaVersion: 2, owner: "Open Owner", caravan: "RV Open", startDate: localDateISO(), endDate: "", openEnded: true, pricePerDayCents: 1000, paymentTransactions: [] },
+      {
+        key: "station-a",
+        owner: "Owner",
+        caravan: "RV",
+        startDate: "2026-07-01",
+        prepaidNights: 10,
+        nightlyPrice: 10,
+        totalPrice: 100,
+        paidAmount: 0,
+        balance: 100,
+      },
+      {
+        key: "station-open",
+        schemaVersion: 2,
+        owner: "Open Owner",
+        caravan: "RV Open",
+        startDate: localDateISO(),
+        endDate: "",
+        openEnded: true,
+        pricePerDayCents: 1000,
+        paymentTransactions: [],
+      },
       {
         key: "station-deducted",
         owner: "Linked Nights",
@@ -133,53 +295,130 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
         totalPrice: 100,
         paidAmount: 0,
         balance: 100,
-        deductions: [{ key: "deduction-a", stayKey: "stay-a", guest: "Linked", unitId: "RV-1", start: "2026-08-01", end: "2026-08-03", nights: 2, amount: 0, appliedAt: "2026-07-01T00:00:00.000Z" }]
-      }
+        deductions: [
+          {
+            key: "deduction-a",
+            stayKey: "stay-a",
+            guest: "Linked",
+            unitId: "RV-1",
+            start: "2026-08-01",
+            end: "2026-08-03",
+            nights: 2,
+            amount: 0,
+            appliedAt: "2026-07-01T00:00:00.000Z",
+          },
+        ],
+      },
     ],
-    barArticles: [{ key: "water", name: "Water", price: 5, stock: 5, vatRate: 11, hasSgr: true }],
-    config: { savedAt: "seed", roomUnitCatalogSeeded: true }
+    barArticles: [
+      {
+        key: "water",
+        name: "Water",
+        price: 5,
+        stock: 5,
+        vatRate: 11,
+        hasSgr: true,
+      },
+    ],
+    config: { savedAt: "seed", roomUnitCatalogSeeded: true },
   };
-  const seeded = await request(server.url, "/api/data", { method: "POST", body: JSON.stringify(seed) });
+  const seeded = await request(server.url, "/api/data", {
+    method: "POST",
+    body: JSON.stringify(seed),
+  });
   assert.equal(seeded.status, 200);
 
   const forged = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "bar-forged-test", type: "bar", method: "card", amount: 1, items: [{ key: "water", quantity: 2, price: 0.01 }], receiptConfig })
+    body: JSON.stringify({
+      paymentId: "bar-forged-test",
+      type: "bar",
+      method: "card",
+      amount: 1,
+      items: [{ key: "water", quantity: 2, price: 0.01 }],
+      receiptConfig,
+    }),
   });
   assert.equal(forged.status, 409);
 
-  const barPayload = { paymentId: "bar-valid-test", type: "bar", method: "card", amount: 11, items: [{ key: "water", quantity: 2 }], receiptConfig };
-  const firstBar = await request(server.url, "/api/payment", { method: "POST", body: JSON.stringify(barPayload) });
-  const retriedBar = await request(server.url, "/api/payment", { method: "POST", body: JSON.stringify(barPayload) });
+  const barPayload = {
+    paymentId: "bar-valid-test",
+    type: "bar",
+    method: "card",
+    amount: 11,
+    items: [{ key: "water", quantity: 2 }],
+    receiptConfig,
+  };
+  const firstBar = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify(barPayload),
+  });
+  const retriedBar = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify(barPayload),
+  });
   assert.equal(firstBar.status, 200);
   assert.equal(firstBar.body.sale.total, 11);
   assert.equal(firstBar.body.barArticles[0].stock, 3);
   assert.equal(retriedBar.body.barArticles[0].stock, 3);
-  const receipt = await fs.readFile(path.join(server.receiptDir, "bon.inp"), "utf8");
+  const receipt = await fs.readFile(
+    path.join(server.receiptDir, "bon.inp"),
+    "utf8",
+  );
   assert.match(receipt, /Water;5\.00;2\.000/);
   assert.match(receipt, /AMBALAJ SGR;0\.50;2\.000/);
 
   const rounded = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "linked-rounding-test", type: "stay", method: "voucher", amount: 0.01, linkedKeys: ["stay-c", "stay-d", "stay-e"] })
+    body: JSON.stringify({
+      paymentId: "linked-rounding-test",
+      type: "stay",
+      method: "voucher",
+      amount: 0.01,
+      linkedKeys: ["stay-c", "stay-d", "stay-e"],
+    }),
   });
   assert.equal(rounded.status, 200);
-  assert.deepEqual(rounded.body.allocations.map((item) => item.allocatedAmount), [0.01, 0, 0]);
+  assert.deepEqual(
+    rounded.body.allocations.map((item) => item.allocatedAmount),
+    [0.01, 0, 0],
+  );
 
   const linked = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "linked-valid-test", type: "stay", method: "voucher", amount: 500, stayKey: "stay-a", linkedKeys: ["stay-a", "stay-b"] })
+    body: JSON.stringify({
+      paymentId: "linked-valid-test",
+      type: "stay",
+      method: "voucher",
+      amount: 500,
+      stayKey: "stay-a",
+      linkedKeys: ["stay-a", "stay-b"],
+    }),
   });
   assert.equal(linked.status, 200);
-  assert.deepEqual(linked.body.allocations.map((item) => item.allocatedAmount), [50, 450]);
+  assert.deepEqual(
+    linked.body.allocations.map((item) => item.allocatedAmount),
+    [50, 450],
+  );
   const activity = await request(server.url, "/api/log?limit=20");
-  const linkedLog = activity.body.entries.find((entry) => entry.id === "payment-linked-valid-test");
-  assert.equal(linkedLog.message, "Linked a plătit în total 500.00 lei pentru 2 rezervări prin voucher.");
+  const linkedLog = activity.body.entries.find(
+    (entry) => entry.id === "payment-linked-valid-test",
+  );
+  assert.equal(
+    linkedLog.message,
+    "Linked a plătit în total 500.00 lei pentru 2 rezervări prin voucher.",
+  );
   assert.equal(linkedLog.data.personId, "person-1");
 
   const zeroPrice = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "stay-zero-price-test", type: "stay", method: "voucher", amount: 0, stayKey: "stay-zero" })
+    body: JSON.stringify({
+      paymentId: "stay-zero-price-test",
+      type: "stay",
+      method: "voucher",
+      amount: 0,
+      stayKey: "stay-zero",
+    }),
   });
   assert.equal(zeroPrice.status, 200);
   assert.equal(zeroPrice.body.stays[0].paid, true);
@@ -195,32 +434,60 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
       amount: 120,
       stayKey: "stay-edit",
       initialEditPrice: 90,
-      draftStay: { price: 120, balance: 120 }
-    })
+      draftStay: { price: 120, balance: 120 },
+    }),
   });
   assert.equal(editedPrice.status, 200);
   const editedPriceActivity = await request(server.url, "/api/log?limit=20");
-  const editedPriceLog = editedPriceActivity.body.entries.find((entry) => entry.id === "payment-stay-edited-price-test");
-  assert.match(editedPriceLog.message, /Preț inițial client: 90\.00 lei; plătit efectiv: 120\.00 lei\./);
+  const editedPriceLog = editedPriceActivity.body.entries.find(
+    (entry) => entry.id === "payment-stay-edited-price-test",
+  );
+  assert.match(
+    editedPriceLog.message,
+    /Preț inițial client: 90\.00 lei; plătit efectiv: 120\.00 lei\./,
+  );
   assert.equal(editedPriceLog.data.originalCustomerPrice, 90);
   assert.equal(editedPriceLog.data.initialEditPrice, 90);
   assert.equal(editedPriceLog.data.customerPriceAtPayment, 120);
 
   const combinedAttachedBar = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "stay-bar-combined-test", type: "stay", method: "card", amount: 111, stayKey: "stay-bar-combined", receiptBarMode: "combined", receiptConfig })
+    body: JSON.stringify({
+      paymentId: "stay-bar-combined-test",
+      type: "stay",
+      method: "card",
+      amount: 111,
+      stayKey: "stay-bar-combined",
+      receiptBarMode: "combined",
+      receiptConfig,
+    }),
   });
   assert.equal(combinedAttachedBar.status, 200);
-  const combinedReceipt = await fs.readFile(path.join(server.receiptDir, "bon.inp"), "utf8");
+  const combinedReceipt = await fs.readFile(
+    path.join(server.receiptDir, "bon.inp"),
+    "utf8",
+  );
   assert.match(combinedReceipt, /CAZARE;111\.00;1\.000/);
   assert.doesNotMatch(combinedReceipt, /Water;5\.00;2\.000/);
 
   const separateAttachedBar = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "stay-bar-separate-test", type: "stay", method: "card", amount: 111, stayKey: "stay-bar-separate", receiptBarMode: "separate", receiptAccommodationAmount: 100, receiptConfig })
+    body: JSON.stringify({
+      paymentId: "stay-bar-separate-test",
+      type: "stay",
+      method: "card",
+      amount: 111,
+      stayKey: "stay-bar-separate",
+      receiptBarMode: "separate",
+      receiptAccommodationAmount: 100,
+      receiptConfig,
+    }),
   });
   assert.equal(separateAttachedBar.status, 200);
-  const separateReceipt = await fs.readFile(path.join(server.receiptDir, "bon.inp"), "utf8");
+  const separateReceipt = await fs.readFile(
+    path.join(server.receiptDir, "bon.inp"),
+    "utf8",
+  );
   assert.match(separateReceipt, /CAZARE;100\.00;1\.000/);
   assert.match(separateReceipt, /Water;5\.00;2\.000/);
   assert.match(separateReceipt, /AMBALAJ SGR;0\.50;2\.000/);
@@ -228,10 +495,22 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
 
   const partialSeparateBar = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "stay-bar-partial-test", type: "stay", method: "card", amount: 61, stayKey: "stay-bar-partial", receiptBarMode: "separate", receiptAccommodationAmount: 50, receiptConfig })
+    body: JSON.stringify({
+      paymentId: "stay-bar-partial-test",
+      type: "stay",
+      method: "card",
+      amount: 61,
+      stayKey: "stay-bar-partial",
+      receiptBarMode: "separate",
+      receiptAccommodationAmount: 50,
+      receiptConfig,
+    }),
   });
   assert.equal(partialSeparateBar.status, 200);
-  const partialReceipt = await fs.readFile(path.join(server.receiptDir, "bon.inp"), "utf8");
+  const partialReceipt = await fs.readFile(
+    path.join(server.receiptDir, "bon.inp"),
+    "utf8",
+  );
   assert.match(partialReceipt, /CAZARE;50\.00;1\.000/);
   assert.match(partialReceipt, /Water;5\.00;2\.000/);
   assert.match(partialReceipt, /AMBALAJ SGR;0\.50;2\.000/);
@@ -239,7 +518,13 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
 
   const repeated = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "stay-repeat-test", type: "stay", method: "voucher", amount: 1, stayKey: "stay-e" })
+    body: JSON.stringify({
+      paymentId: "stay-repeat-test",
+      type: "stay",
+      method: "voucher",
+      amount: 1,
+      stayKey: "stay-e",
+    }),
   });
   assert.equal(repeated.status, 200);
   assert.equal(repeated.body.stays[0].paid, true);
@@ -249,13 +534,25 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
   assert.equal(repeated.body.allocations[0].allocatedAmount, 1);
   const repeatedRetry = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "stay-repeat-test", type: "stay", method: "voucher", amount: 1, stayKey: "stay-e" })
+    body: JSON.stringify({
+      paymentId: "stay-repeat-test",
+      type: "stay",
+      method: "voucher",
+      amount: 1,
+      stayKey: "stay-e",
+    }),
   });
   assert.equal(repeatedRetry.body.stays[0].actualPaidAmount, 2);
 
   const repeatedOverpayment = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "stay-repeat-over-test", type: "stay", method: "voucher", amount: 1.01, stayKey: "stay-e" })
+    body: JSON.stringify({
+      paymentId: "stay-repeat-over-test",
+      type: "stay",
+      method: "voucher",
+      amount: 1.01,
+      stayKey: "stay-e",
+    }),
   });
   assert.equal(repeatedOverpayment.status, 200);
   assert.equal(repeatedOverpayment.body.stays[0].actualPaidAmount, 3.01);
@@ -263,7 +560,13 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
 
   const reservationOverpayment = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "stay-over-test", type: "stay", method: "voucher", amount: 150, stayKey: "stay-over" })
+    body: JSON.stringify({
+      paymentId: "stay-over-test",
+      type: "stay",
+      method: "voucher",
+      amount: 150,
+      stayKey: "stay-over",
+    }),
   });
   assert.equal(reservationOverpayment.status, 200);
   assert.equal(reservationOverpayment.body.stays[0].actualPaidAmount, 150);
@@ -273,13 +576,25 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
 
   const overpayment = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "station-over-test", type: "stationing", method: "voucher", amount: 150, stationingKey: "station-a" })
+    body: JSON.stringify({
+      paymentId: "station-over-test",
+      type: "stationing",
+      method: "voucher",
+      amount: 150,
+      stationingKey: "station-a",
+    }),
   });
   assert.equal(overpayment.status, 400);
 
   const openCredit = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "station-open-credit-test", type: "stationing", method: "voucher", amount: 150, stationingKey: "station-open" })
+    body: JSON.stringify({
+      paymentId: "station-open-credit-test",
+      type: "stationing",
+      method: "voucher",
+      amount: 150,
+      stationingKey: "station-open",
+    }),
   });
   assert.equal(openCredit.status, 200);
   assert.equal(openCredit.body.stationing.paidAmount, 150);
@@ -287,39 +602,93 @@ test("payments are authoritative, idempotent, and proportionally allocated", asy
 
   const stationingWithLinkedNights = await request(server.url, "/api/payment", {
     method: "POST",
-    body: JSON.stringify({ paymentId: "station-linked-nights-test", type: "stationing", method: "voucher", amount: 100, stationingKey: "station-deducted" })
+    body: JSON.stringify({
+      paymentId: "station-linked-nights-test",
+      type: "stationing",
+      method: "voucher",
+      amount: 100,
+      stationingKey: "station-deducted",
+    }),
   });
   assert.equal(stationingWithLinkedNights.status, 200);
   assert.equal(stationingWithLinkedNights.body.stationing.totalPrice, 100);
   assert.equal(stationingWithLinkedNights.body.stationing.paidAmount, 100);
   assert.equal(stationingWithLinkedNights.body.stationing.balance, 0);
-  assert.equal(stationingWithLinkedNights.body.stationing.deductions[0].amount, 0);
+  assert.equal(
+    stationingWithLinkedNights.body.stationing.deductions[0].amount,
+    0,
+  );
 
   const data = await request(server.url, "/api/data");
   assert.equal(data.body.barArticles[0].stock, 3);
-  assert.deepEqual(data.body.stays.filter((stay) => ["stay-a", "stay-b"].includes(stay.key)).map((stay) => stay.actualPaidAmount), [50, 450]);
-  assert.deepEqual(data.body.stays.filter((stay) => ["stay-a", "stay-b"].includes(stay.key)).map((stay) => stay.lastPaidAmount), [50, 450]);
-  assert.equal(data.body.stays.find((stay) => stay.key === "stay-zero").paid, true);
-  assert.equal(data.body.stationing.find((record) => record.key === "station-a").paidAmount, 0);
-  assert.equal(data.body.stationing.find((record) => record.key === "station-deducted").balance, 0);
+  assert.deepEqual(
+    data.body.stays
+      .filter((stay) => ["stay-a", "stay-b"].includes(stay.key))
+      .map((stay) => stay.actualPaidAmount),
+    [50, 450],
+  );
+  assert.deepEqual(
+    data.body.stays
+      .filter((stay) => ["stay-a", "stay-b"].includes(stay.key))
+      .map((stay) => stay.lastPaidAmount),
+    [50, 450],
+  );
+  assert.equal(
+    data.body.stays.find((stay) => stay.key === "stay-zero").paid,
+    true,
+  );
+  assert.equal(
+    data.body.stationing.find((record) => record.key === "station-a")
+      .paidAmount,
+    0,
+  );
+  assert.equal(
+    data.body.stationing.find((record) => record.key === "station-deducted")
+      .balance,
+    0,
+  );
 
-  const retiredEndpoint = await request(server.url, "/api/receipt", { method: "POST", body: "{}" });
+  const retiredEndpoint = await request(server.url, "/api/receipt", {
+    method: "POST",
+    body: "{}",
+  });
   assert.equal(retiredEndpoint.status, 410);
 });
 
-test("a receipt output failure is retryable without applying the payment twice", async (t) => {
+test("a receipt output failure is retryable via an idempotent replay without applying the payment twice", async (t) => {
   const server = await startTestServer();
   t.after(server.stop);
-  await fs.writeFile(path.join(server.runtimeDir, "bin"), "blocks the info directory", "utf8");
+  await fs.writeFile(
+    path.join(server.runtimeDir, "bin"),
+    "blocks the info directory",
+    "utf8",
+  );
 
   const seed = {
     stays: [],
     units: [],
     stationing: [],
-    barArticles: [{ key: "juice", name: "Juice", price: 8, stock: 2, vatRate: 11, hasSgr: false }],
-    config: { savedAt: "seed", roomUnitCatalogSeeded: true }
+    barArticles: [
+      {
+        key: "juice",
+        name: "Juice",
+        price: 8,
+        stock: 2,
+        vatRate: 11,
+        hasSgr: false,
+      },
+    ],
+    config: { savedAt: "seed", roomUnitCatalogSeeded: true },
   };
-  assert.equal((await request(server.url, "/api/data", { method: "POST", body: JSON.stringify(seed) })).status, 200);
+  assert.equal(
+    (
+      await request(server.url, "/api/data", {
+        method: "POST",
+        body: JSON.stringify(seed),
+      })
+    ).status,
+    200,
+  );
 
   const payload = {
     paymentId: "bar-outbox-retry-test",
@@ -327,18 +696,137 @@ test("a receipt output failure is retryable without applying the payment twice",
     method: "card",
     amount: 8,
     items: [{ key: "juice", quantity: 1 }],
-    receiptConfig: { receiptDirectory: server.receiptDir, receiptVat: "11", cardPaymentCode: "1" }
+    receiptConfig: {
+      receiptDirectory: server.receiptDir,
+      receiptVat: "11",
+      cardPaymentCode: "1",
+    },
   };
-  const first = await request(server.url, "/api/payment", { method: "POST", body: JSON.stringify(payload) });
+  const first = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
   assert.equal(first.status, 200);
   assert.equal(first.body.receiptPending, true);
   assert.equal(first.body.barArticles[0].stock, 1);
-  assert.match(await fs.readFile(path.join(server.receiptDir, "bon.inp"), "utf8"), /Juice;8\.00;1\.000/);
+  assert.match(
+    await fs.readFile(path.join(server.receiptDir, "bon.inp"), "utf8"),
+    /Juice;8\.00;1\.000/,
+  );
 
   await fs.rm(path.join(server.runtimeDir, "bin"));
-  const retried = await request(server.url, "/api/payment", { method: "POST", body: JSON.stringify(payload) });
+  const infoPath = path.join(server.runtimeDir, "bin", "info.txt");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await assert.rejects(() => fs.readFile(infoPath, "utf8"));
+
+  const retried = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
   assert.equal(retried.status, 200);
   assert.equal(retried.body.receiptPending, false);
   assert.equal(retried.body.barArticles[0].stock, 1);
-  assert.match(await fs.readFile(path.join(server.runtimeDir, "bin", "info.txt"), "utf8"), /\[payment:bar-outbox-retry-test\]/);
+  assert.equal(
+    (await fs.readFile(infoPath, "utf8")).match(
+      /\[payment:bar-outbox-retry-test\]/g,
+    ).length,
+    1,
+  );
+});
+
+test("stale edits cannot undo payments and idempotent replays return the latest revision", async (t) => {
+  const server = await startTestServer();
+  t.after(server.stop);
+  const seed = await request(server.url, "/api/data", {
+    method: "POST",
+    body: JSON.stringify({
+      stays: [
+        {
+          key: "revision-stay",
+          id: "D-1",
+          guest: "Revision Client",
+          group: "room",
+          kind: "Room",
+          price: 100,
+          balance: 100,
+        },
+      ],
+      units: [{ id: "D-1", group: "room", kind: "Room" }],
+      stationing: [],
+      barArticles: [],
+      config: { savedAt: "client-forged-revision" },
+      allowEmptyCollections: true,
+    }),
+  });
+  assert.equal(seed.status, 200);
+  assert.notEqual(seed.body.savedAt, "client-forged-revision");
+
+  const missingBaseResponse = await fetch(`${server.url}/api/reservation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      stay: {
+        key: "missing-base",
+        id: "D-1",
+        guest: "Missing Base",
+        group: "room",
+        kind: "Room",
+      },
+    }),
+  });
+  const missingBase = await missingBaseResponse.json();
+  assert.equal(missingBaseResponse.status, 409);
+  assert.equal(missingBase.code, "STALE_DATA");
+
+  const staleSnapshot = await request(server.url, "/api/data");
+  const paymentPayload = {
+    paymentId: "revision-payment-test",
+    type: "stay",
+    method: "voucher",
+    amount: 100,
+    stayKey: "revision-stay",
+    baseSavedAt: staleSnapshot.body.config.savedAt,
+  };
+  const paid = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify(paymentPayload),
+  });
+  assert.equal(paid.status, 200);
+  assert.ok(
+    Date.parse(paid.body.savedAt) >
+      Date.parse(staleSnapshot.body.config.savedAt),
+  );
+
+  const staleWrite = await request(server.url, "/api/data", {
+    method: "POST",
+    body: JSON.stringify({
+      ...staleSnapshot.body,
+      baseSavedAt: staleSnapshot.body.config.savedAt,
+      allowEmptyCollections: true,
+    }),
+  });
+  assert.equal(staleWrite.status, 409);
+  assert.equal(staleWrite.body.code, "STALE_DATA");
+
+  const afterPayment = await request(server.url, "/api/data");
+  assert.equal(afterPayment.body.stays[0].paid, true);
+  const laterMutation = await request(server.url, "/api/reservation", {
+    method: "POST",
+    body: JSON.stringify({
+      stay: { ...afterPayment.body.stays[0], note: "later change" },
+      baseSavedAt: afterPayment.body.config.savedAt,
+    }),
+  });
+  assert.equal(laterMutation.status, 200);
+  assert.ok(
+    Date.parse(laterMutation.body.savedAt) > Date.parse(paid.body.savedAt),
+  );
+
+  const replay = await request(server.url, "/api/payment", {
+    method: "POST",
+    body: JSON.stringify(paymentPayload),
+  });
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.savedAt, laterMutation.body.savedAt);
+  assert.equal(replay.body.stays[0].paid, true);
 });
